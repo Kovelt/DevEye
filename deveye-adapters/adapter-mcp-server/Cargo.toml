@@ -1,0 +1,22 @@
+[package]
+name = "adapter-mcp-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Adapter DevEye : expose les ports en serveur MCP (stdio) pour Claude."
+
+# Métadonnées figées localement — cf. deveye-core/Cargo.toml.
+
+[dependencies]
+deveye-core = { path = "../../deveye-core" }
+deveye-ports = { path = "../../deveye-ports" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std"] }
+base64 = "0.22"
+rmcp = { version = "1.7", default-features = false, features = ["server", "macros", "transport-io"] }
+schemars = "1"

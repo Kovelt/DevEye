@@ -1,0 +1,17 @@
+[package]
+name = "deveye-ports"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Ports DevEye : traits Renderer, AppInspector, InteractionSink, LogSource, CommandRouter."
+
+# Métadonnées figées localement — cf. deveye-core/Cargo.toml.
+
+[dependencies]
+deveye-core = { path = "../deveye-core" }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

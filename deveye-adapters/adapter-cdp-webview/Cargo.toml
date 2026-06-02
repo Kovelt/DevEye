@@ -1,0 +1,27 @@
+[package]
+name = "adapter-cdp-webview"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Adapter DevEye pilotant un webview via Chrome DevTools Protocol (WebView2, Chromium, Edge)."
+
+# Métadonnées figées localement — cf. deveye-core/Cargo.toml.
+
+[dependencies]
+deveye-core = { path = "../../deveye-core" }
+deveye-ports = { path = "../../deveye-ports" }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "net", "time", "rt"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+base64 = "0.22"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

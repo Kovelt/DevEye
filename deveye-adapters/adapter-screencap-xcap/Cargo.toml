@@ -1,0 +1,19 @@
+[package]
+name = "adapter-screencap-xcap"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Adapter DevEye fallback : capture d'une fenetre OS via la crate xcap (universel, sans webview)."
+
+# Métadonnées figées localement — cf. deveye-core/Cargo.toml.
+
+[dependencies]
+deveye-core = { path = "../../deveye-core" }
+deveye-ports = { path = "../../deveye-ports" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt"] }
+xcap = "0.0.14"
+image = { version = "0.25", default-features = false, features = ["png"] }

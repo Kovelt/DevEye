@@ -1,0 +1,28 @@
+[package]
+name = "deveye-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Binaire DevEye : compose les adapters et expose un serveur MCP a Claude."
+
+# Métadonnées figées localement — cf. deveye-core/Cargo.toml.
+
+[[bin]]
+name = "deveye-server"
+path = "src/main.rs"
+
+[dependencies]
+deveye-core = { path = "../deveye-core" }
+deveye-ports = { path = "../deveye-ports" }
+adapter-cdp-webview = { path = "../deveye-adapters/adapter-cdp-webview" }
+adapter-screencap-xcap = { path = "../deveye-adapters/adapter-screencap-xcap" }
+adapter-dioxus-signals = { path = "../deveye-adapters/adapter-dioxus-signals" }
+adapter-logs-tracing = { path = "../deveye-adapters/adapter-logs-tracing" }
+adapter-mcp-server = { path = "../deveye-adapters/adapter-mcp-server" }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"

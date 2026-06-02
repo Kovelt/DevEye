@@ -1,0 +1,19 @@
+[package]
+name = "adapter-dioxus-signals"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Adapter DevEye : AppInspector::state_snapshot via le SDK opt-in (HTTP local)."
+
+# Métadonnées figées localement — cf. deveye-core/Cargo.toml.
+
+[dependencies]
+deveye-core = { path = "../../deveye-core" }
+deveye-ports = { path = "../../deveye-ports" }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
