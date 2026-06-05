@@ -118,13 +118,16 @@ impl DeveyeMcpServer {
         Ok(())
     }
 
-    #[tool(
-        description = "Capture un screenshot PNG du viewport de l'app cible (renvoyé en base64)."
-    )]
+    #[tool(description = "Capture un screenshot PNG du viewport de l'app cible (image MCP).")]
     async fn screenshot(&self) -> Result<CallToolResult, McpError> {
         let shot = self.renderer.screenshot().await.map_err(internal)?;
         let b64 = B64.encode(&shot.bytes);
-        Ok(CallToolResult::success(vec![Content::text(b64)]))
+        // Contenu `image` (et non `text`) : le client MCP affiche le PNG —
+        // c'est ce qui rend l'outil utilisable comme « yeux ».
+        Ok(CallToolResult::success(vec![Content::image(
+            b64,
+            "image/png",
+        )]))
     }
 
     #[tool(
