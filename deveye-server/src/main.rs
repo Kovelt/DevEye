@@ -15,12 +15,16 @@ use async_trait::async_trait;
 use clap::Parser;
 
 use adapter_cdp_webview::CdpClient;
-use adapter_dioxus_signals::DioxusSignalsInspector;
+use adapter_dioxus_signals::{
+    DioxusSignalsInspector, EvalDomInspector, JsInteraction, SdkEvaluator,
+};
 use adapter_logs_tracing::SdkTracingLogSource;
 use adapter_mcp_server::DeveyeMcpServer;
 use adapter_screencap_xcap::XcapRenderer;
-use deveye_core::{DomTree, StateDump};
-use deveye_ports::{AppInspector, InteractionSink, JsEvaluator, LogSource, PortResult, Renderer};
+use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump};
+use deveye_ports::{
+    AppInspector, InteractionSink, JsEvaluator, LogSource, PortError, PortResult, Renderer,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -36,52 +40,105 @@ struct Args {
     #[arg(long, default_value = "http://localhost:31337")]
     sdk_url: String,
 
-    /// Si CDP est indisponible, capturer cette fenetre via xcap a la place.
-    /// (Vision passive : pas d'interactivite cote screencap.)
+    /// Titre (sous-chaine, insensible a la casse) de la fenetre native a
+    /// capturer via xcap quand les yeux ne passent pas par CDP (cible `sdk`,
+    /// ou repli du mode `auto`). Defaut : « chronos ».
     #[arg(long)]
     screencap_window: Option<String>,
+
+    /// Cible des yeux et des mains :
+    /// - `auto` : CDP d'abord, repli SDK + xcap des que le CDP est injoignable ;
+    /// - `cdp`  : CDP uniquement (webview Chromium — `just ui-eyes`) ;
+    /// - `sdk`  : pont natif uniquement (app desktop via `deveye-sdk`).
+    #[arg(long, value_enum, default_value_t = TargetMode::Auto)]
+    target: TargetMode,
 
     /// Servir le MCP server sur stdio (mode normal d'usage avec Claude).
     #[arg(long)]
     serve_mcp: bool,
 }
 
+/// Où vont les yeux et les mains (le state et les logs viennent toujours du SDK).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetMode {
+    Auto,
+    Cdp,
+    Sdk,
+}
+
+/// Le quatuor pilotant : yeux, mains, DOM, évaluateur JS.
+type Pilotage = (
+    Arc<dyn Renderer>,
+    Arc<dyn InteractionSink>,
+    Arc<dyn AppInspector>,
+    Arc<dyn JsEvaluator>,
+);
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Renderer + InteractionSink + DOM inspector via CDP, avec fallback
-    // screencap pour le renderer si l'attache CDP echoue.
-    let cdp = match CdpClient::connect(&args.cdp_url).await {
-        Ok(client) => Some(Arc::new(client)),
-        Err(e) => {
-            eprintln!("deveye-server : connexion CDP echouee ({e}). Fallback screencap si fenetre fournie.");
-            None
+    // Pièces du pont natif (SDK) : évaluateur JS via la pompe de l'app,
+    // interaction en événements JS, DOM par outerHTML, yeux par xcap.
+    let sdk_eval: Arc<dyn JsEvaluator> = Arc::new(SdkEvaluator::new(args.sdk_url.clone()));
+    let xcap_title = args
+        .screencap_window
+        .clone()
+        .unwrap_or_else(|| "chronos".to_string());
+
+    // CDP : connexion PARESSEUSE — un navigateur absent au démarrage (ou
+    // fermé en cours de session) n'est pas fatal, chaque appel d'outil
+    // (re)tente l'attache. L'essai immédiat ne sert qu'à loguer.
+    let initial = if args.target == TargetMode::Sdk {
+        None
+    } else {
+        match CdpClient::connect(&args.cdp_url).await {
+            Ok(client) => Some(Arc::new(client)),
+            Err(e) => {
+                eprintln!(
+                    "deveye-server : CDP injoignable au demarrage ({e}) — \
+                     reconnexion automatique au premier appel d'outil."
+                );
+                None
+            }
         }
     };
 
-    let (renderer, interaction, dom_inspector, evaluator) =
-        match (cdp.clone(), &args.screencap_window) {
-            (Some(cdp), _) => {
-                let r: Arc<dyn Renderer> = cdp.clone();
-                let i: Arc<dyn InteractionSink> = cdp.clone();
-                let d: Arc<dyn AppInspector> = cdp.clone();
-                let e: Arc<dyn JsEvaluator> = cdp;
-                (r, i, d, e)
-            }
-            (None, Some(window_title)) => {
-                let r: Arc<dyn Renderer> = Arc::new(XcapRenderer::new(window_title.clone()));
-                let i: Arc<dyn InteractionSink> = Arc::new(NoopInteraction);
-                let d: Arc<dyn AppInspector> = Arc::new(NoopInspector);
-                let e: Arc<dyn JsEvaluator> = Arc::new(NoopEvaluator);
-                (r, i, d, e)
-            }
-            (None, None) => {
-                anyhow::bail!(
-                    "ni connexion CDP ni --screencap-window : impossible de servir un renderer"
-                );
-            }
-        };
+    let (renderer, interaction, dom_inspector, evaluator): Pilotage = match args.target {
+        TargetMode::Cdp => {
+            let lazy = Arc::new(LazyCdp::new(args.cdp_url.clone(), initial));
+            (lazy.clone(), lazy.clone(), lazy.clone(), lazy)
+        }
+        TargetMode::Sdk => (
+            Arc::new(XcapRenderer::new(xcap_title)),
+            Arc::new(JsInteraction::new(sdk_eval.clone())),
+            Arc::new(EvalDomInspector::new(sdk_eval.clone())),
+            sdk_eval.clone(),
+        ),
+        // Auto : CDP en premier ; toute erreur de LIAISON (PortError::Network
+        // — navigateur absent/fermé) bascule l'appel sur le pont natif.
+        TargetMode::Auto => {
+            let lazy = Arc::new(LazyCdp::new(args.cdp_url.clone(), initial));
+            (
+                Arc::new(FallbackRenderer {
+                    primary: lazy.clone(),
+                    fallback: Arc::new(XcapRenderer::new(xcap_title)),
+                }),
+                Arc::new(FallbackInteraction {
+                    primary: lazy.clone(),
+                    fallback: Arc::new(JsInteraction::new(sdk_eval.clone())),
+                }),
+                Arc::new(FallbackDom {
+                    primary: lazy.clone(),
+                    fallback: Arc::new(EvalDomInspector::new(sdk_eval.clone())),
+                }),
+                Arc::new(FallbackEvaluator {
+                    primary: lazy,
+                    fallback: sdk_eval.clone(),
+                }),
+            )
+        }
+    };
 
     // State inspector + logs via le SDK opt-in cote app cible.
     let state_inspector: Arc<dyn AppInspector> =
@@ -108,6 +165,168 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Façade paresseuse sur le CDP : (re)connecte **à la demande** au lieu
+/// d'exiger le navigateur au démarrage. Survit aussi à sa fermeture en cours
+/// de session (relance de `just ui-eyes`) : un client dont le WebSocket est
+/// mort (`is_closed`) est jeté et remplacé au prochain appel d'outil.
+struct LazyCdp {
+    url: String,
+    slot: tokio::sync::Mutex<Option<Arc<CdpClient>>>,
+}
+
+impl LazyCdp {
+    fn new(url: String, initial: Option<Arc<CdpClient>>) -> Self {
+        Self {
+            url,
+            slot: tokio::sync::Mutex::new(initial),
+        }
+    }
+
+    /// Le client courant s'il est vivant, sinon une (re)connexion. L'échec
+    /// est une erreur d'outil ordinaire — jamais la mort du serveur MCP.
+    async fn client(&self) -> PortResult<Arc<CdpClient>> {
+        let mut slot = self.slot.lock().await;
+        if let Some(client) = slot.as_ref() {
+            if !client.is_closed() {
+                return Ok(client.clone());
+            }
+        }
+        match CdpClient::connect(&self.url).await {
+            Ok(client) => {
+                let client = Arc::new(client);
+                *slot = Some(client.clone());
+                Ok(client)
+            }
+            Err(e) => Err(PortError::Network(format!(
+                "CDP injoignable sur {} ({e}) — lancer le navigateur cible \
+                 (`just ui-eyes`) puis rappeler l'outil",
+                self.url
+            ))),
+        }
+    }
+}
+
+#[async_trait]
+impl Renderer for LazyCdp {
+    async fn screenshot(&self) -> PortResult<Screenshot> {
+        self.client().await?.screenshot().await
+    }
+
+    async fn viewport_size(&self) -> PortResult<Size> {
+        self.client().await?.viewport_size().await
+    }
+}
+
+#[async_trait]
+impl InteractionSink for LazyCdp {
+    async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
+        self.client().await?.dispatch(command).await
+    }
+}
+
+#[async_trait]
+impl AppInspector for LazyCdp {
+    async fn dom_snapshot(&self) -> PortResult<DomTree> {
+        self.client().await?.dom_snapshot().await
+    }
+
+    async fn state_snapshot(&self) -> PortResult<StateDump> {
+        self.client().await?.state_snapshot().await
+    }
+}
+
+#[async_trait]
+impl JsEvaluator for LazyCdp {
+    async fn evaluate(&self, expression: &str) -> PortResult<serde_json::Value> {
+        self.client().await?.evaluate(expression).await
+    }
+}
+
+/// Vrai si l'erreur signale un problème de **liaison** (cible injoignable)
+/// plutôt qu'un échec de l'opération elle-même — le seul cas où le mode
+/// `auto` bascule sur le pont natif.
+fn is_liaison_error(e: &PortError) -> bool {
+    matches!(e, PortError::Network(_))
+}
+
+/// Repli par appel pour les yeux : CDP d'abord, xcap si la liaison manque.
+struct FallbackRenderer {
+    primary: Arc<dyn Renderer>,
+    fallback: Arc<dyn Renderer>,
+}
+
+#[async_trait]
+impl Renderer for FallbackRenderer {
+    async fn screenshot(&self) -> PortResult<Screenshot> {
+        match self.primary.screenshot().await {
+            Err(e) if is_liaison_error(&e) => self.fallback.screenshot().await,
+            other => other,
+        }
+    }
+
+    async fn viewport_size(&self) -> PortResult<Size> {
+        match self.primary.viewport_size().await {
+            Err(e) if is_liaison_error(&e) => self.fallback.viewport_size().await,
+            other => other,
+        }
+    }
+}
+
+/// Repli par appel pour les mains : CDP d'abord, événements JS via le SDK.
+struct FallbackInteraction {
+    primary: Arc<dyn InteractionSink>,
+    fallback: Arc<dyn InteractionSink>,
+}
+
+#[async_trait]
+impl InteractionSink for FallbackInteraction {
+    async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
+        match self.primary.dispatch(command.clone()).await {
+            Err(e) if is_liaison_error(&e) => self.fallback.dispatch(command).await,
+            other => other,
+        }
+    }
+}
+
+/// Repli par appel pour le DOM : CDP d'abord, `outerHTML` via le SDK.
+struct FallbackDom {
+    primary: Arc<dyn AppInspector>,
+    fallback: Arc<dyn AppInspector>,
+}
+
+#[async_trait]
+impl AppInspector for FallbackDom {
+    async fn dom_snapshot(&self) -> PortResult<DomTree> {
+        match self.primary.dom_snapshot().await {
+            Err(e) if is_liaison_error(&e) => self.fallback.dom_snapshot().await,
+            other => other,
+        }
+    }
+
+    async fn state_snapshot(&self) -> PortResult<StateDump> {
+        match self.primary.state_snapshot().await {
+            Err(e) if is_liaison_error(&e) => self.fallback.state_snapshot().await,
+            other => other,
+        }
+    }
+}
+
+/// Repli par appel pour l'évaluateur JS : CDP d'abord, pompe SDK sinon.
+struct FallbackEvaluator {
+    primary: Arc<dyn JsEvaluator>,
+    fallback: Arc<dyn JsEvaluator>,
+}
+
+#[async_trait]
+impl JsEvaluator for FallbackEvaluator {
+    async fn evaluate(&self, expression: &str) -> PortResult<serde_json::Value> {
+        match self.primary.evaluate(expression).await {
+            Err(e) if is_liaison_error(&e) => self.fallback.evaluate(expression).await,
+            other => other,
+        }
+    }
+}
+
 /// Compose un inspector DOM (typiquement CDP) avec un inspector state
 /// (typiquement le SDK opt-in). Permet de tirer le DOM d'une source et le
 /// state d'une autre derriere un meme port `AppInspector`.
@@ -124,44 +343,5 @@ impl AppInspector for CompositeInspector {
 
     async fn state_snapshot(&self) -> PortResult<StateDump> {
         self.state.state_snapshot().await
-    }
-}
-
-/// `InteractionSink` qui retourne une erreur sur toute commande — utilise
-/// quand on attache uniquement en mode screencap (vision passive).
-struct NoopInteraction;
-
-#[async_trait]
-impl InteractionSink for NoopInteraction {
-    async fn dispatch(&self, _command: deveye_core::InteractionCommand) -> PortResult<()> {
-        Err(deveye_ports::PortError::Unsupported(
-            "mode screencap : pas d'interactivite (clic/saisie indisponibles)".into(),
-        ))
-    }
-}
-
-/// `AppInspector` neutre pour le mode screencap.
-struct NoopInspector;
-
-#[async_trait]
-impl AppInspector for NoopInspector {
-    async fn dom_snapshot(&self) -> PortResult<DomTree> {
-        Ok(DomTree::new(serde_json::Value::Null))
-    }
-
-    async fn state_snapshot(&self) -> PortResult<StateDump> {
-        Ok(StateDump::empty())
-    }
-}
-
-/// `JsEvaluator` neutre pour le mode screencap (pas d'accès JS sans CDP).
-struct NoopEvaluator;
-
-#[async_trait]
-impl JsEvaluator for NoopEvaluator {
-    async fn evaluate(&self, _expression: &str) -> PortResult<serde_json::Value> {
-        Err(deveye_ports::PortError::Unsupported(
-            "mode screencap : pas d'evaluation JS (CDP indisponible)".into(),
-        ))
     }
 }

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -56,6 +56,10 @@ struct CdpInner {
     pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value, CdpError>>>>,
     session: Mutex<Option<SessionInfo>>,
     attached: Notify,
+    /// Vrai quand le WebSocket browser-level est mort (navigateur fermé).
+    /// Permet à l'appelant de jeter ce client et d'en reconnecter un autre
+    /// — la session page se ré-attache toute seule, pas le WS navigateur.
+    closed: AtomicBool,
 }
 
 #[derive(Clone, Debug)]
@@ -141,6 +145,7 @@ impl CdpClient {
             pending: Mutex::new(HashMap::new()),
             session: Mutex::new(None),
             attached: Notify::new(),
+            closed: AtomicBool::new(false),
         });
 
         spawn_writer(sink, cmd_rx);
@@ -220,6 +225,12 @@ impl CdpClient {
         }
     }
 
+    /// Vrai si le WebSocket browser-level est fermé : ce client est mort
+    /// pour de bon (il faut en reconnecter un via [`CdpClient::connect`]).
+    pub fn is_closed(&self) -> bool {
+        self.inner.closed.load(Ordering::SeqCst)
+    }
+
     async fn wait_attached(&self) -> Result<SessionInfo, CdpError> {
         if let Some(s) = self.inner.session.lock().await.clone() {
             return Ok(s);
@@ -275,7 +286,8 @@ fn spawn_reader(mut stream: WsRead, inner: Arc<CdpInner>) {
                 handle_event(&inner, method, params).await;
             }
         }
-        // Le flux est fermé : drop les pending pour libérer les awaiters.
+        // Le flux est fermé : marque le client mort puis libère les awaiters.
+        inner.closed.store(true, Ordering::SeqCst);
         let mut pending = inner.pending.lock().await;
         for (_, tx) in pending.drain() {
             let _ = tx.send(Err(CdpError::Receive("flux WebSocket fermé".into())));

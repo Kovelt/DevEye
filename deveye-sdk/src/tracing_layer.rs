@@ -25,6 +25,20 @@ pub fn install_tracing_layer() {
     let _ = tracing::subscriber::set_global_default(subscriber);
 }
 
+/// Niveau minimal capturé. INFO par défaut : sans filtre, le buffer se noie
+/// dans le TRACE interne de Dioxus (diff de nœuds, signaux — vécu le 11 juin
+/// 2026 : 500+ événements de bruit au boot, zéro log applicatif visible).
+/// Surchargeable par `DEVEYE_LOG_LEVEL` (`trace`…`error`).
+fn min_level() -> Level {
+    static LVL: once_cell::sync::Lazy<Level> = once_cell::sync::Lazy::new(|| {
+        std::env::var("DEVEYE_LOG_LEVEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(Level::INFO)
+    });
+    *LVL
+}
+
 struct DeveyeLayer;
 
 impl<S> Layer<S> for DeveyeLayer
@@ -32,6 +46,11 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        // Dans `tracing`, TRACE > DEBUG > INFO > WARN > ERROR : on garde les
+        // événements au plus aussi verbeux que le seuil.
+        if *event.metadata().level() > min_level() {
+            return;
+        }
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
 
@@ -43,7 +62,7 @@ where
         .with_fields(visitor.fields.unwrap_or(serde_json::Value::Null));
 
         let registry = REGISTRY.clone();
-        tokio::spawn(async move {
+        crate::runtime().spawn(async move {
             let mut guard = registry.logs.lock().await;
             if guard.len() >= LOG_BUFFER_CAPACITY {
                 guard.pop_front();

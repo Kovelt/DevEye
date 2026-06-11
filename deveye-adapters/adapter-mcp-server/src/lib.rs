@@ -7,15 +7,21 @@
 //! - `click` : clic à `(x, y)` (bouton gauche)
 //! - `hover` : déplace le pointeur à `(x, y)` sans presser (déclenche
 //!   `mouseover`/`mouseenter`)
-//! - `click_selector` : clique sur le premier élément matchant un sélecteur CSS
-//! - `click_text` : clique sur le premier élément cliquable dont le texte
-//!   correspond exactement
+//! - `click_selector` : clique sur le premier élément matchant un sélecteur
+//!   CSS — repéré en JS, cliqué par **vrais événements souris CDP** (le
+//!   focus clavier suit, comme pour un humain)
+//! - `click_text` : pareil, par texte exact (boutons, liens, labels, rôles
+//!   interactifs)
 //! - `eval_js` : évalue une expression JS dans la page cible, retourne la
 //!   valeur sérialisée
 //! - `type_text` : saisit du texte au focus courant
 //! - `dom` : sérialise le DOM de l'app cible
 //! - `state` : sérialise le state opt-in poussé par le SDK
 //! - `logs_tail` : draine et renvoie le buffer de logs accumulé
+//!
+//! Les appels d'outils sont **sérialisés** (un seul à la fois, mutex) : des
+//! interactions concurrentes pendant un re-render Dioxus touchaient le
+//! mauvais nœud (leçon du 5 juin 2026).
 //!
 //! Voir [`deveye.md`](../../../../../../docs/architecture/deveye.md) côté
 //! Chronos pour le contexte global.
@@ -51,6 +57,10 @@ pub struct DeveyeMcpServer {
     inspector: Arc<dyn AppInspector>,
     log_source: Arc<dyn LogSource>,
     evaluator: Arc<dyn JsEvaluator>,
+    /// Sérialise les appels d'outils : rmcp les traite en concurrence, mais
+    /// deux interactions entrelacées pendant un re-render visent le mauvais
+    /// nœud. Un seul outil à la fois, dans l'ordre d'arrivée.
+    gate: Arc<tokio::sync::Mutex<()>>,
     /// Le routeur d'outils généré par `#[tool_router]` est utilisé par le
     /// macro `#[tool_handler]` via metaprogramming — clippy ne voit pas
     /// l'accès et le déclare unread.
@@ -80,6 +90,24 @@ struct EvalParams {
     expression: String,
 }
 
+/// Fragment JS commun aux deux clics ciblés : `el` étant l'élément trouvé
+/// (ou `undefined`), le faire défiler au centre puis renvoyer le **centre de
+/// son rect** en pixels CSS viewport — les mêmes unités que
+/// `Input.dispatchMouseEvent`. Le clic lui-même part ensuite en vrais
+/// événements souris CDP (focus clavier compris), jamais en `el.click()`.
+const LOCATE_CENTER: &str = "if (!el) return { ok: false, reason: 'not_found' }; \
+     el.scrollIntoView({ block: 'center', behavior: 'instant' }); \
+     const r = el.getBoundingClientRect(); \
+     if (r.width === 0 || r.height === 0) return { ok: false, reason: 'not_visible' }; \
+     return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };";
+
+/// Sélecteur des éléments « cliquables par texte » : éléments nativement
+/// interactifs (dont les `<label>` — leçon du 5 juin 2026 : ils manquaient),
+/// rôles ARIA interactifs, et l'échappatoire `data-deveye-click`.
+const CLICKABLES: &str = "'button, a, label, summary, [role=button], [role=tab], \
+     [role=menuitem], [role=menuitemradio], [role=option], [role=switch], \
+     [role=checkbox], [data-deveye-click]'";
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ClickSelectorParams {
     /// Sélecteur CSS du premier élément à cliquer (ex. `button.btn-primary`).
@@ -107,6 +135,7 @@ impl DeveyeMcpServer {
             inspector,
             log_source,
             evaluator,
+            gate: Arc::new(tokio::sync::Mutex::new(())),
             tool_router: Self::tool_router(),
         }
     }
@@ -120,6 +149,7 @@ impl DeveyeMcpServer {
 
     #[tool(description = "Capture un screenshot PNG du viewport de l'app cible (image MCP).")]
     async fn screenshot(&self) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
         let shot = self.renderer.screenshot().await.map_err(internal)?;
         let b64 = B64.encode(&shot.bytes);
         // Contenu `image` (et non `text`) : le client MCP affiche le PNG —
@@ -137,6 +167,7 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<ClickParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
         let cmd = InteractionCommand::click(Position::new(p.x, p.y));
         self.interaction.dispatch(cmd).await.map_err(internal)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
@@ -147,6 +178,7 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<TypeParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
         self.interaction
             .dispatch(InteractionCommand::type_text(p.text))
             .await
@@ -161,6 +193,7 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<ClickParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
         self.interaction
             .dispatch(InteractionCommand::hover(Position::new(p.x, p.y)))
             .await
@@ -175,6 +208,7 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<EvalParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
         let value = self
             .evaluator
             .evaluate(&p.expression)
@@ -185,49 +219,61 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Clique sur le premier élément matchant un sélecteur CSS. Robuste aux déplacements de coordonnées et aux animations."
+        description = "Clique sur le premier élément matchant un sélecteur CSS, par vrais événements souris CDP (hover + press au centre de l'élément — le focus clavier suit). Robuste aux déplacements de coordonnées et aux animations."
     )]
     async fn click_selector(
         &self,
         Parameters(p): Parameters<ClickSelectorParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
         let snippet = format!(
-            "(function(){{ const el = document.querySelector({selector}); \
-             if (!el) return {{ ok: false, reason: 'not_found' }}; \
-             el.scrollIntoView({{ block: 'center', behavior: 'instant' }}); \
-             el.click(); \
-             return {{ ok: true }}; }})()",
+            "(function(){{ const el = document.querySelector({selector}); {LOCATE_CENTER} }})()",
             selector = serde_json::to_string(&p.selector).expect("string serialise"),
         );
-        let value = self.evaluator.evaluate(&snippet).await.map_err(internal)?;
-        let json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        self.click_located(&snippet).await
     }
 
     #[tool(
-        description = "Clique sur le premier élément cliquable (button, a, [role=button]) dont le texte (après trim) correspond exactement."
+        description = "Clique sur le premier élément interactif (button, a, label, summary, role=button/tab/menuitem/option/switch/checkbox) dont le texte (après trim) correspond exactement — par vrais événements souris CDP (le focus clavier suit)."
     )]
     async fn click_text(
         &self,
         Parameters(p): Parameters<ClickTextParams>,
     ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
         let snippet = format!(
             "(function(){{ const target = {text}; \
-             const els = Array.from(document.querySelectorAll('button, a, [role=button], [data-deveye-click]')); \
-             const m = els.find(e => (e.innerText || e.textContent || '').trim() === target); \
-             if (!m) return {{ ok: false, reason: 'not_found' }}; \
-             m.scrollIntoView({{ block: 'center', behavior: 'instant' }}); \
-             m.click(); \
-             return {{ ok: true }}; }})()",
+             const els = Array.from(document.querySelectorAll({CLICKABLES})); \
+             const el = els.find(e => (e.innerText || e.textContent || '').trim() === target); \
+             {LOCATE_CENTER} }})()",
             text = serde_json::to_string(&p.text).expect("string serialise"),
         );
-        let value = self.evaluator.evaluate(&snippet).await.map_err(internal)?;
-        let json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        self.click_located(&snippet).await
+    }
+
+    /// Évalue un snippet « localisateur » (contrat : renvoie `{{ok, x, y}}`
+    /// ou `{{ok: false, reason}}`) puis clique au centre trouvé par vrais
+    /// événements souris CDP — mêmes événements qu'un humain, focus compris.
+    async fn click_located(&self, snippet: &str) -> Result<CallToolResult, McpError> {
+        let value = self.evaluator.evaluate(snippet).await.map_err(internal)?;
+        let found = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+        if !found {
+            let json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+            return Ok(CallToolResult::success(vec![Content::text(json)]));
+        }
+        let x = value.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        let y = value.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        self.interaction
+            .dispatch(InteractionCommand::click(Position::new(x, y)))
+            .await
+            .map_err(internal)?;
+        let json = serde_json::json!({ "ok": true, "x": x, "y": y }).to_string();
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
 
     #[tool(description = "Récupère le DOM courant de l'app cible (JSON sérialisé).")]
     async fn dom(&self) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
         let tree = self.inspector.dom_snapshot().await.map_err(internal)?;
         let json = serde_json::to_string(&tree.tree).unwrap_or_else(|_| "null".to_string());
         Ok(CallToolResult::success(vec![Content::text(json)]))
@@ -235,6 +281,7 @@ impl DeveyeMcpServer {
 
     #[tool(description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé).")]
     async fn state(&self) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
         let dump = self.inspector.state_snapshot().await.map_err(internal)?;
         let json = serde_json::to_string(&dump.entries).unwrap_or_else(|_| "{}".to_string());
         Ok(CallToolResult::success(vec![Content::text(json)]))
@@ -244,6 +291,7 @@ impl DeveyeMcpServer {
         description = "Draine et renvoie les événements `tracing` accumulés depuis le dernier appel."
     )]
     async fn logs_tail(&self) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
         let events = self.log_source.poll().await.map_err(internal)?;
         let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
         Ok(CallToolResult::success(vec![Content::text(json)]))

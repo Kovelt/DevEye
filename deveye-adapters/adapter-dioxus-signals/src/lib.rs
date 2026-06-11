@@ -1,10 +1,18 @@
 //! Adapter DevEye consommant le SDK opt-in `deveye-sdk` côté app cible.
 //!
-//! Implémente uniquement `AppInspector::state_snapshot` — pour le DOM, on
-//! compose avec `adapter-cdp-webview` côté binaire orchestrateur.
+//! - [`DioxusSignalsInspector`] : `AppInspector::state_snapshot` (le state
+//!   exposé par l'app). Pour le DOM, composer avec `adapter-cdp-webview` —
+//!   ou avec le **pont natif** ci-dessous quand le webview n'a pas de CDP.
+//! - Module [`bridge`] : yeux et mains via le SDK (`SdkEvaluator`,
+//!   `JsInteraction`, `EvalDomInspector`) pour piloter l'app desktop
+//!   WebKitGTK sans CDP.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
+
+mod bridge;
+
+pub use bridge::{EvalDomInspector, JsInteraction, SdkEvaluator};
 
 use async_trait::async_trait;
 use serde::Deserialize;
