@@ -3,7 +3,7 @@ name = "adapter-screencap-xcap"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.81"
-license = "Proprietary"
+license = "LicenseRef-Proprietary"
 authors = ["NuvoraCode <contact@nuvoracode.fr>"]
 description = "Adapter DevEye fallback : capture d'une fenetre OS via la crate xcap (universel, sans webview)."
 

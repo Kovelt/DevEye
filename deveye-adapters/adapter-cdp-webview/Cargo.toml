@@ -3,7 +3,7 @@ name = "adapter-cdp-webview"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.81"
-license = "Proprietary"
+license = "LicenseRef-Proprietary"
 authors = ["NuvoraCode <contact@nuvoracode.fr>"]
 description = "Adapter DevEye pilotant un webview via Chrome DevTools Protocol (WebView2, Chromium, Edge)."
 
