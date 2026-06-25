@@ -197,7 +197,7 @@ impl CdpClient {
     }
 
     /// Envoie une commande CDP browser-level (sans `sessionId`).
-    async fn send_browser<R, P>(&self, method: &str, params: P) -> Result<R, CdpError>
+    pub(crate) async fn send_browser<R, P>(&self, method: &str, params: P) -> Result<R, CdpError>
     where
         P: Serialize,
         R: DeserializeOwned,

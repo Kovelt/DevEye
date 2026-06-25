@@ -2,7 +2,7 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Treize outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Dix-neuf outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `click` : clic à `(x, y)` (bouton gauche)
 //! - `right_click` : clic droit à `(x, y)` (ouvre les menus contextuels)
@@ -22,6 +22,15 @@
 //! - `invoke_command` : invoque une commande logique exposée par l'app
 //!   (route déclarée via `deveye_sdk::expose_route`)
 //! - `list_commands` : liste les commandes logiques exposées par l'app
+//! - `wait_for_selector` : attend qu'un sélecteur CSS soit présent/visible
+//!   (sans sleep arbitraire)
+//! - `find_element` : inspecte un élément (tag, texte, rect, visible, disabled,
+//!   attributs)
+//! - `assert_selector` : compte les éléments d'un sélecteur (`{ ok, count }`)
+//! - `drag_drop` : glisser-déposer de (from) vers (to)
+//! - `collect_console_errors` : draine les erreurs JS de la page (onerror,
+//!   unhandledrejection, console.error)
+//! - `list_windows` : liste les fenêtres/onglets de la cible (CDP ; vide en SDK)
 //!
 //! Les appels d'outils sont **sérialisés** (un seul à la fois, mutex) : des
 //! interactions concurrentes pendant un re-render Dioxus touchaient le
@@ -34,6 +43,7 @@
 #![deny(rust_2018_idioms)]
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use rmcp::{
@@ -49,7 +59,7 @@ use serde::Deserialize;
 
 use deveye_core::{InteractionCommand, MouseButton, Position};
 use deveye_ports::{
-    AppInspector, CommandRouter, InteractionSink, JsEvaluator, LogSource, Renderer,
+    AppInspector, CommandRouter, InteractionSink, JsEvaluator, LogSource, Renderer, WindowLister,
 };
 
 /// Serveur MCP DevEye.
@@ -64,6 +74,7 @@ pub struct DeveyeMcpServer {
     log_source: Arc<dyn LogSource>,
     evaluator: Arc<dyn JsEvaluator>,
     command_router: Arc<dyn CommandRouter>,
+    window_lister: Arc<dyn WindowLister>,
     /// Sérialise les appels d'outils : rmcp les traite en concurrence, mais
     /// deux interactions entrelacées pendant un re-render visent le mauvais
     /// nœud. Un seul outil à la fois, dans l'ordre d'arrivée.
@@ -115,6 +126,32 @@ const CLICKABLES: &str = "'button, a, label, summary, [role=button], [role=tab],
      [role=menuitem], [role=menuitemradio], [role=option], [role=switch], \
      [role=checkbox], [data-deveye-click]'";
 
+/// Collecteur d'erreurs JS injecté une seule fois (`__deveye_console_init__`),
+/// puis drainé (`splice(0)`) à chaque appel de `collect_console_errors`.
+/// Couvre les exceptions non capturées, les promesses rejetées et
+/// `console.error`. Pur JS → fonctionne en CDP comme via la pompe SDK.
+const CONSOLE_ERRORS_SNIPPET: &str = r#"(function(){
+  if (!window.__deveye_console_init__) {
+    window.__deveye_console_errors__ = [];
+    var push = function(e){ try { window.__deveye_console_errors__.push(e); } catch (_) {} };
+    window.addEventListener('error', function(e){
+      push({ source: 'js-exception', message: String((e && (e.message || e.error)) || 'error'),
+             url: (e && e.filename) || null, line: (e && e.lineno) || null });
+    });
+    window.addEventListener('unhandledrejection', function(e){
+      push({ source: 'unhandled-rejection', message: String(e && e.reason), url: null, line: null });
+    });
+    var orig = console.error;
+    console.error = function(){
+      push({ source: 'console-error',
+             message: Array.prototype.map.call(arguments, String).join(' '), url: null, line: null });
+      if (orig) { orig.apply(console, arguments); }
+    };
+    window.__deveye_console_init__ = true;
+  }
+  return window.__deveye_console_errors__.splice(0);
+})()"#;
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ClickSelectorParams {
     /// Sélecteur CSS du premier élément à cliquer (ex. `button.btn-primary`).
@@ -138,6 +175,36 @@ struct InvokeCommandParams {
     args: serde_json::Value,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SelectorParams {
+    /// Sélecteur CSS de l'élément (ex. `button.btn-primary`).
+    selector: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WaitForSelectorParams {
+    /// Sélecteur CSS à attendre (ex. `#save-btn:not([disabled])`).
+    selector: String,
+    /// Timeout en millisecondes (défaut 5000, plafond 30000).
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    /// Si true, attend aussi que l'élément soit *visible* (rect non vide).
+    #[serde(default)]
+    visible: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DragDropParams {
+    /// Abscisse de départ (pixels logiques viewport).
+    from_x: i32,
+    /// Ordonnée de départ.
+    from_y: i32,
+    /// Abscisse d'arrivée.
+    to_x: i32,
+    /// Ordonnée d'arrivée.
+    to_y: i32,
+}
+
 #[tool_router]
 impl DeveyeMcpServer {
     pub fn new(
@@ -147,6 +214,7 @@ impl DeveyeMcpServer {
         log_source: Arc<dyn LogSource>,
         evaluator: Arc<dyn JsEvaluator>,
         command_router: Arc<dyn CommandRouter>,
+        window_lister: Arc<dyn WindowLister>,
     ) -> Self {
         Self {
             renderer,
@@ -155,6 +223,7 @@ impl DeveyeMcpServer {
             log_source,
             evaluator,
             command_router,
+            window_lister,
             gate: Arc::new(tokio::sync::Mutex::new(())),
             tool_router: Self::tool_router(),
         }
@@ -359,6 +428,128 @@ impl DeveyeMcpServer {
         let json = serde_json::to_string(&descriptors).unwrap_or_else(|_| "[]".to_string());
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    #[tool(
+        description = "Attend qu'un sélecteur CSS soit présent (et optionnellement visible) dans le DOM. Renvoie `{ found, elapsed_ms }`. Évite tout sleep arbitraire après une action asynchrone. Défaut 5000 ms, plafond 30000."
+    )]
+    async fn wait_for_selector(
+        &self,
+        Parameters(p): Parameters<WaitForSelectorParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(30_000));
+        let deadline = Instant::now() + budget;
+        let start = Instant::now();
+        let sel = serde_json::to_string(&p.selector).unwrap_or_default();
+        let snippet = if p.visible.unwrap_or(false) {
+            format!(
+                "(function(){{ const el = document.querySelector({sel}); if (!el) return false; \
+                 const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }})()"
+            )
+        } else {
+            format!("!!document.querySelector({sel})")
+        };
+        loop {
+            let present = self
+                .evaluator
+                .evaluate(&snippet)
+                .await
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if present {
+                let json = serde_json::json!({ "found": true, "elapsed_ms": start.elapsed().as_millis() as u64 }).to_string();
+                return Ok(CallToolResult::success(vec![Content::text(json)]));
+            }
+            if Instant::now() >= deadline {
+                let json = serde_json::json!({ "found": false, "elapsed_ms": start.elapsed().as_millis() as u64 }).to_string();
+                return Ok(CallToolResult::success(vec![Content::text(json)]));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    #[tool(
+        description = "Inspecte le premier élément matchant un sélecteur CSS : `{ found, tag, text, rect{x,y,width,height}, visible, disabled, attributes }`. Réponse compacte au lieu de tout le DOM."
+    )]
+    async fn find_element(
+        &self,
+        Parameters(p): Parameters<SelectorParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let sel = serde_json::to_string(&p.selector).unwrap_or_default();
+        let snippet = format!(
+            "(function(){{ const el = document.querySelector({sel}); \
+             if (!el) return {{ found: false }}; \
+             const r = el.getBoundingClientRect(); const attrs = {{}}; \
+             for (const a of el.attributes) {{ attrs[a.name] = a.value; }} \
+             return {{ found: true, tag: el.tagName.toLowerCase(), \
+               text: (el.innerText || el.textContent || '').trim().slice(0, 200), \
+               rect: {{ x: r.left, y: r.top, width: r.width, height: r.height }}, \
+               visible: r.width > 0 && r.height > 0, \
+               disabled: el.disabled === true || el.hasAttribute('disabled'), \
+               attributes: attrs }}; }})()"
+        );
+        let value = self.evaluator.evaluate(&snippet).await.map_err(internal)?;
+        let json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(
+        description = "Assertion : compte les éléments matchant un sélecteur CSS. Renvoie `{ ok, count }` (ok = count >= 1). Pour valider qu'un parcours a bien produit l'élément attendu."
+    )]
+    async fn assert_selector(
+        &self,
+        Parameters(p): Parameters<SelectorParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let sel = serde_json::to_string(&p.selector).unwrap_or_default();
+        let snippet = format!("document.querySelectorAll({sel}).length");
+        let value = self.evaluator.evaluate(&snippet).await.map_err(internal)?;
+        let count = value.as_u64().unwrap_or(0);
+        let json = serde_json::json!({ "ok": count >= 1, "count": count }).to_string();
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(
+        description = "Glisse-dépose de (from_x, from_y) vers (to_x, to_y). En CDP : séquence souris native (press/déplacements/release) ; via le pont SDK : PointerEvent JS (support selon le framework de l'app). Renvoie \"ok\"."
+    )]
+    async fn drag_drop(
+        &self,
+        Parameters(p): Parameters<DragDropParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let cmd = InteractionCommand::drag_drop(
+            Position::new(p.from_x, p.from_y),
+            Position::new(p.to_x, p.to_y),
+        );
+        self.interaction.dispatch(cmd).await.map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(
+        description = "Draine les erreurs JS de la page collectées depuis le dernier appel : exceptions non capturées (window.onerror), promesses rejetées (unhandledrejection) et console.error. Renvoie un tableau `[{ source, message, url, line }]`. Le collecteur s'injecte une seule fois — un crash JS de la page devient visible à l'agent."
+    )]
+    async fn collect_console_errors(&self) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let value = self
+            .evaluator
+            .evaluate(CONSOLE_ERRORS_SNIPPET)
+            .await
+            .map_err(internal)?;
+        let json = serde_json::to_string(&value).unwrap_or_else(|_| "[]".to_string());
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(
+        description = "Liste les fenêtres/onglets de la cible : `[{ id, title, url, kind }]` (type=page). En CDP via Target.getTargets ; via le pont SDK : liste vide (pas de visibilité inter-fenêtres)."
+    )]
+    async fn list_windows(&self) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let windows = self.window_lister.list_windows().await.map_err(internal)?;
+        let json = serde_json::to_string(&windows).unwrap_or_else(|_| "[]".to_string());
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
 }
 
 #[tool_handler]
@@ -372,7 +563,8 @@ impl ServerHandler for DeveyeMcpServer {
             "DevEye MCP — observe et pilote une app vivante en dev. \
              Outils : screenshot, click, right_click, hover, click_selector, \
              click_text, eval_js, type_text, dom, state, logs_tail, \
-             invoke_command, list_commands."
+             invoke_command, list_commands, wait_for_selector, find_element, \
+             assert_selector, drag_drop, collect_console_errors, list_windows."
                 .to_string(),
         );
         info

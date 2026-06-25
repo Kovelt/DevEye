@@ -193,6 +193,27 @@ fn keypress_snippet(key: &str) -> String {
     )
 }
 
+/// Glisser-déposer en événements pointer/souris synthétiques (fallback SDK,
+/// sans CDP). Moins fidèle que la séquence souris native CDP — un widget qui
+/// n'écoute que le drag-drop HTML5 natif (`dragstart`/`drop`) ne réagira pas.
+fn dragdrop_snippet(from: Position, to: Position) -> String {
+    let (fx, fy, tx, ty) = (from.x, from.y, to.x, to.y);
+    format!(
+        "(function(){{ const src = document.elementFromPoint({fx}, {fy}); \
+         if (!src) return {{ ok: false, reason: 'aucun élément source à ({fx}, {fy})' }}; \
+         const o = (x, y) => ({{ bubbles: true, cancelable: true, composed: true, view: window, \
+                                 clientX: x, clientY: y, pointerId: 1, isPrimary: true, button: 0, buttons: 1 }}); \
+         src.dispatchEvent(new PointerEvent('pointerdown', o({fx}, {fy}))); \
+         src.dispatchEvent(new MouseEvent('mousedown', o({fx}, {fy}))); \
+         const dst = document.elementFromPoint({tx}, {ty}) || src; \
+         dst.dispatchEvent(new PointerEvent('pointermove', o({tx}, {ty}))); \
+         dst.dispatchEvent(new MouseEvent('mousemove', o({tx}, {ty}))); \
+         dst.dispatchEvent(new PointerEvent('pointerup', o({tx}, {ty}))); \
+         dst.dispatchEvent(new MouseEvent('mouseup', o({tx}, {ty}))); \
+         return {{ ok: true }}; }})()"
+    )
+}
+
 #[async_trait]
 impl InteractionSink for JsInteraction {
     async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
@@ -214,6 +235,7 @@ impl InteractionSink for JsInteraction {
                 );
                 self.run(snippet).await
             }
+            InteractionCommand::DragDrop { from, to } => self.run(dragdrop_snippet(from, to)).await,
         }
     }
 }
@@ -269,5 +291,14 @@ mod tests {
     fn type_snippet_echappe_le_texte() {
         let js = type_snippet("l'apostrophe \"double\"");
         assert!(js.contains(r#""l'apostrophe \"double\"""#));
+    }
+
+    #[test]
+    fn dragdrop_snippet_source_et_cible() {
+        let js = dragdrop_snippet(Position::new(10, 20), Position::new(100, 200));
+        assert!(js.contains("elementFromPoint(10, 20)"));
+        assert!(js.contains("elementFromPoint(100, 200)"));
+        assert!(js.contains("pointerdown"));
+        assert!(js.contains("pointerup"));
     }
 }

@@ -67,6 +67,22 @@ impl InteractionSink for CdpClient {
                     .await
                     .map_err(Into::<deveye_ports::PortError>::into)?;
             }
+            InteractionCommand::DragDrop { from, to } => {
+                // Séquence souris native : hover -> press -> déplacements
+                // intermédiaires (certains frameworks exigent ≥1 mousemove
+                // pendant le drag) -> release. Petits délais pour laisser le
+                // framework réagir entre chaque étape.
+                mouse_event(self, "mouseMoved", from, "left").await?;
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                mouse_event(self, "mousePressed", from, "left").await?;
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                let mid = Position::new((from.x + to.x) / 2, (from.y + to.y) / 2);
+                mouse_event(self, "mouseMoved", mid, "left").await?;
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                mouse_event(self, "mouseMoved", to, "left").await?;
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                mouse_event(self, "mouseReleased", to, "left").await?;
+            }
         }
         Ok(())
     }

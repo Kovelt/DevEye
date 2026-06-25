@@ -23,10 +23,10 @@ use adapter_logs_tracing::SdkTracingLogSource;
 use adapter_mcp_server::DeveyeMcpServer;
 use adapter_screencap_kwin::KwinRenderer;
 use adapter_screencap_xcap::XcapRenderer;
-use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump};
+use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump, WindowInfo};
 use deveye_ports::{
     AppInspector, CommandRouter, InteractionSink, JsEvaluator, LogSource, PortError, PortResult,
-    Renderer,
+    Renderer, WindowLister,
 };
 
 #[derive(Parser, Debug)]
@@ -134,12 +134,13 @@ fn build_os_renderer(title: &str, backend: ScreencapBackend) -> Arc<dyn Renderer
     }
 }
 
-/// Le quatuor pilotant : yeux, mains, DOM, évaluateur JS.
+/// Le quintet pilotant : yeux, mains, DOM, évaluateur JS, liste des fenêtres.
 type Pilotage = (
     Arc<dyn Renderer>,
     Arc<dyn InteractionSink>,
     Arc<dyn AppInspector>,
     Arc<dyn JsEvaluator>,
+    Arc<dyn WindowLister>,
 );
 
 #[tokio::main]
@@ -188,16 +189,18 @@ async fn main() -> Result<()> {
         }
     };
 
-    let (renderer, interaction, dom_inspector, evaluator): Pilotage = match args.target {
+    let (renderer, interaction, dom_inspector, evaluator, window_lister): Pilotage =
+        match args.target {
         TargetMode::Cdp => {
             let lazy = Arc::new(LazyCdp::new(args.cdp_url.clone(), cdp_filter.clone(), initial));
-            (lazy.clone(), lazy.clone(), lazy.clone(), lazy)
+            (lazy.clone(), lazy.clone(), lazy.clone(), lazy.clone(), lazy)
         }
         TargetMode::Sdk => (
             build_os_renderer(&xcap_title, args.screencap_backend),
             Arc::new(JsInteraction::new(sdk_eval.clone())),
             Arc::new(EvalDomInspector::new(sdk_eval.clone())),
             sdk_eval.clone(),
+            Arc::new(EmptyWindowLister),
         ),
         // Auto : CDP en premier ; toute erreur de LIAISON (PortError::Network
         // — navigateur absent/fermé) bascule l'appel sur le pont natif.
@@ -217,9 +220,10 @@ async fn main() -> Result<()> {
                     fallback: Arc::new(EvalDomInspector::new(sdk_eval.clone())),
                 }),
                 Arc::new(FallbackEvaluator {
-                    primary: lazy,
+                    primary: lazy.clone(),
                     fallback: sdk_eval.clone(),
                 }),
+                lazy,
             )
         }
     };
@@ -244,6 +248,7 @@ async fn main() -> Result<()> {
         log_source,
         evaluator,
         command_router,
+        window_lister,
     );
 
     if args.serve_mcp {
@@ -335,6 +340,24 @@ impl AppInspector for LazyCdp {
 impl JsEvaluator for LazyCdp {
     async fn evaluate(&self, expression: &str) -> PortResult<serde_json::Value> {
         self.client().await?.evaluate(expression).await
+    }
+}
+
+#[async_trait]
+impl WindowLister for LazyCdp {
+    async fn list_windows(&self) -> PortResult<Vec<WindowInfo>> {
+        self.client().await?.list_windows().await
+    }
+}
+
+/// `WindowLister` du pont natif (cible `sdk`) : aucune visibilité
+/// inter-fenêtres — renvoie une liste vide plutôt qu'une erreur.
+struct EmptyWindowLister;
+
+#[async_trait]
+impl WindowLister for EmptyWindowLister {
+    async fn list_windows(&self) -> PortResult<Vec<WindowInfo>> {
+        Ok(Vec::new())
     }
 }
 
