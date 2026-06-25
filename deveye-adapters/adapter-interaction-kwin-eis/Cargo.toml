@@ -1,0 +1,31 @@
+[package]
+name = "adapter-interaction-kwin-eis"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "LicenseRef-Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Adapter DevEye : mains OS-level sous Wayland natif via KWin EIS (connectToEIS + reis/libei)."
+
+# Metadonnees figees localement — cf. deveye-core/Cargo.toml.
+
+[dependencies]
+deveye-core = { path = "../../deveye-core" }
+deveye-ports = { path = "../../deveye-ports" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
+zbus = { workspace = true }
+# Implementation pure-Rust du protocole EI/EIS (libei) — pas de FFI, pas d'unsafe
+# au niveau du crate (xkbcommon isole le seul unsafe : new_from_fd).
+reis = { version = "0.7", features = ["tokio"] }
+futures-util = "0.3"
+# Resolution keysym/Unicode -> keycode depuis le keymap fourni par KWin.
+xkbcommon = "0.9"
+# Horloge CLOCK_MONOTONIC en microsecondes pour les timestamps de frame EIS.
+rustix = { version = "1", features = ["time"] }
+
+[dev-dependencies]
+deveye-core = { path = "../../deveye-core" }
+deveye-ports = { path = "../../deveye-ports" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

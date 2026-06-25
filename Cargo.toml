@@ -22,6 +22,7 @@ members = [
     "deveye-adapters/adapter-logs-tracing",
     "deveye-adapters/adapter-commands-http",
     "deveye-adapters/adapter-screencap-kwin",
+    "deveye-adapters/adapter-interaction-kwin-eis",
     "deveye-adapters/adapter-mcp-server",
 ]
 
