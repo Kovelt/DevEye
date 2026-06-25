@@ -14,6 +14,7 @@ pub mod interaction;
 pub mod js_evaluator;
 pub mod log_source;
 pub mod renderer;
+pub mod window_lister;
 
 pub use command_router::CommandRouter;
 pub use errors::{PortError, PortResult};
@@ -22,3 +23,4 @@ pub use interaction::InteractionSink;
 pub use js_evaluator::JsEvaluator;
 pub use log_source::LogSource;
 pub use renderer::Renderer;
+pub use window_lister::WindowLister;

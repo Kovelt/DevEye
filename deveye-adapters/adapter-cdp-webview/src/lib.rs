@@ -23,6 +23,7 @@ mod inspector;
 mod interaction;
 mod js_evaluator;
 mod renderer;
+mod window_lister;
 
 pub use client::{CdpClient, CdpTarget, TargetFilter, DEFAULT_HTTP_URL};
 pub use error::CdpError;

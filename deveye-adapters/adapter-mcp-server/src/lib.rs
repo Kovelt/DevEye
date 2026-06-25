@@ -2,7 +2,7 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Dix-huit outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Dix-neuf outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `click` : clic à `(x, y)` (bouton gauche)
 //! - `right_click` : clic droit à `(x, y)` (ouvre les menus contextuels)
@@ -30,6 +30,7 @@
 //! - `drag_drop` : glisser-déposer de (from) vers (to)
 //! - `collect_console_errors` : draine les erreurs JS de la page (onerror,
 //!   unhandledrejection, console.error)
+//! - `list_windows` : liste les fenêtres/onglets de la cible (CDP ; vide en SDK)
 //!
 //! Les appels d'outils sont **sérialisés** (un seul à la fois, mutex) : des
 //! interactions concurrentes pendant un re-render Dioxus touchaient le
@@ -58,7 +59,7 @@ use serde::Deserialize;
 
 use deveye_core::{InteractionCommand, MouseButton, Position};
 use deveye_ports::{
-    AppInspector, CommandRouter, InteractionSink, JsEvaluator, LogSource, Renderer,
+    AppInspector, CommandRouter, InteractionSink, JsEvaluator, LogSource, Renderer, WindowLister,
 };
 
 /// Serveur MCP DevEye.
@@ -73,6 +74,7 @@ pub struct DeveyeMcpServer {
     log_source: Arc<dyn LogSource>,
     evaluator: Arc<dyn JsEvaluator>,
     command_router: Arc<dyn CommandRouter>,
+    window_lister: Arc<dyn WindowLister>,
     /// Sérialise les appels d'outils : rmcp les traite en concurrence, mais
     /// deux interactions entrelacées pendant un re-render visent le mauvais
     /// nœud. Un seul outil à la fois, dans l'ordre d'arrivée.
@@ -212,6 +214,7 @@ impl DeveyeMcpServer {
         log_source: Arc<dyn LogSource>,
         evaluator: Arc<dyn JsEvaluator>,
         command_router: Arc<dyn CommandRouter>,
+        window_lister: Arc<dyn WindowLister>,
     ) -> Self {
         Self {
             renderer,
@@ -220,6 +223,7 @@ impl DeveyeMcpServer {
             log_source,
             evaluator,
             command_router,
+            window_lister,
             gate: Arc::new(tokio::sync::Mutex::new(())),
             tool_router: Self::tool_router(),
         }
@@ -536,6 +540,16 @@ impl DeveyeMcpServer {
         let json = serde_json::to_string(&value).unwrap_or_else(|_| "[]".to_string());
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    #[tool(
+        description = "Liste les fenêtres/onglets de la cible : `[{ id, title, url, kind }]` (type=page). En CDP via Target.getTargets ; via le pont SDK : liste vide (pas de visibilité inter-fenêtres)."
+    )]
+    async fn list_windows(&self) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let windows = self.window_lister.list_windows().await.map_err(internal)?;
+        let json = serde_json::to_string(&windows).unwrap_or_else(|_| "[]".to_string());
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
 }
 
 #[tool_handler]
@@ -550,7 +564,7 @@ impl ServerHandler for DeveyeMcpServer {
              Outils : screenshot, click, right_click, hover, click_selector, \
              click_text, eval_js, type_text, dom, state, logs_tail, \
              invoke_command, list_commands, wait_for_selector, find_element, \
-             assert_selector, drag_drop, collect_console_errors."
+             assert_selector, drag_drop, collect_console_errors, list_windows."
                 .to_string(),
         );
         info
