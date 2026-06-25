@@ -21,6 +21,7 @@ use adapter_dioxus_signals::{
 };
 use adapter_logs_tracing::SdkTracingLogSource;
 use adapter_mcp_server::DeveyeMcpServer;
+use adapter_interaction_kwin_eis::KwinEisInteraction;
 use adapter_screencap_kwin::KwinRenderer;
 use adapter_screencap_xcap::XcapRenderer;
 use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump, WindowInfo};
@@ -91,6 +92,9 @@ enum TargetMode {
     Auto,
     Cdp,
     Sdk,
+    /// Mains OS-level via KWin EIS (Wayland natif) ; yeux par screencap (M1).
+    /// Pour les cibles sans WebView ni SDK (atlas Uno desktop / Skia).
+    KwinEis,
 }
 
 /// Backend de capture OS-level (indépendant du backend CDP).
@@ -174,7 +178,7 @@ async fn main() -> Result<()> {
     // CDP : connexion PARESSEUSE — un navigateur absent au démarrage (ou
     // fermé en cours de session) n'est pas fatal, chaque appel d'outil
     // (re)tente l'attache. L'essai immédiat ne sert qu'à loguer.
-    let initial = if args.target == TargetMode::Sdk {
+    let initial = if matches!(args.target, TargetMode::Sdk | TargetMode::KwinEis) {
         None
     } else {
         match CdpClient::connect(&args.cdp_url, cdp_filter.clone()).await {
@@ -226,6 +230,15 @@ async fn main() -> Result<()> {
                 lazy,
             )
         }
+        // Mains OS-level EIS ; yeux par screencap (M1) ; DOM/JS indisponibles
+        // (rendu natif). Le state/les logs restent servis par le SDK plus bas.
+        TargetMode::KwinEis => (
+            build_os_renderer(&xcap_title, args.screencap_backend),
+            Arc::new(KwinEisInteraction::new((0, 0))),
+            Arc::new(UnsupportedInspector),
+            Arc::new(UnsupportedEvaluator),
+            Arc::new(EmptyWindowLister),
+        ),
     };
 
     // State inspector + logs + commandes logiques via le SDK opt-in cote app
@@ -358,6 +371,36 @@ struct EmptyWindowLister;
 impl WindowLister for EmptyWindowLister {
     async fn list_windows(&self) -> PortResult<Vec<WindowInfo>> {
         Ok(Vec::new())
+    }
+}
+
+/// Inspecteur DOM indisponible (cible `kwin-eis` : rendu natif, sans WebView).
+/// Le state applicatif continue d'arriver par le SDK (state_inspector dédié).
+struct UnsupportedInspector;
+
+#[async_trait]
+impl AppInspector for UnsupportedInspector {
+    async fn dom_snapshot(&self) -> PortResult<DomTree> {
+        Err(PortError::Unsupported(
+            "DOM indisponible en mode kwin-eis (rendu natif, pas de WebView)".to_string(),
+        ))
+    }
+    async fn state_snapshot(&self) -> PortResult<StateDump> {
+        Err(PortError::Unsupported(
+            "state DOM indisponible en mode kwin-eis".to_string(),
+        ))
+    }
+}
+
+/// Évaluateur JS indisponible (cible `kwin-eis` : pas de WebView à piloter).
+struct UnsupportedEvaluator;
+
+#[async_trait]
+impl JsEvaluator for UnsupportedEvaluator {
+    async fn evaluate(&self, _expression: &str) -> PortResult<serde_json::Value> {
+        Err(PortError::Unsupported(
+            "eval JS indisponible en mode kwin-eis (rendu natif, pas de WebView)".to_string(),
+        ))
     }
 }
 
