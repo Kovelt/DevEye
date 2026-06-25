@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 
+use deveye_core::CommandDescriptor;
+
 use crate::errors::PortResult;
 
 /// Invocation d'une route logique côté app cible — au-delà des simples
@@ -17,9 +19,15 @@ use crate::errors::PortResult;
 /// sera appelée par cet `invoke`.
 #[async_trait]
 pub trait CommandRouter: Send + Sync {
+    /// Invoque la commande nommée `route` avec son `payload`, et retourne la
+    /// valeur JSON produite par le handler côté app.
     async fn invoke(
         &self,
         route: &str,
         payload: serde_json::Value,
     ) -> PortResult<serde_json::Value>;
+
+    /// Liste les commandes exposées par l'app cible (découverte), triées par
+    /// `name`. Liste vide si l'app n'a enregistré aucune route.
+    async fn list(&self) -> PortResult<Vec<CommandDescriptor>>;
 }

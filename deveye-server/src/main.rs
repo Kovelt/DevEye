@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use clap::Parser;
 
 use adapter_cdp_webview::CdpClient;
+use adapter_commands_http::SdkCommandRouter;
 use adapter_dioxus_signals::{
     DioxusSignalsInspector, EvalDomInspector, JsInteraction, SdkEvaluator,
 };
@@ -23,7 +24,8 @@ use adapter_mcp_server::DeveyeMcpServer;
 use adapter_screencap_xcap::XcapRenderer;
 use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump};
 use deveye_ports::{
-    AppInspector, InteractionSink, JsEvaluator, LogSource, PortError, PortResult, Renderer,
+    AppInspector, CommandRouter, InteractionSink, JsEvaluator, LogSource, PortError, PortResult,
+    Renderer,
 };
 
 #[derive(Parser, Debug)]
@@ -140,17 +142,27 @@ async fn main() -> Result<()> {
         }
     };
 
-    // State inspector + logs via le SDK opt-in cote app cible.
+    // State inspector + logs + commandes logiques via le SDK opt-in cote app
+    // cible (toujours servis par le SDK, quelle que soit la cible des yeux).
     let state_inspector: Arc<dyn AppInspector> =
         Arc::new(DioxusSignalsInspector::new(args.sdk_url.clone()));
     let log_source: Arc<dyn LogSource> = Arc::new(SdkTracingLogSource::new(args.sdk_url.clone()));
+    let command_router: Arc<dyn CommandRouter> =
+        Arc::new(SdkCommandRouter::new(args.sdk_url.clone()));
 
     let inspector: Arc<dyn AppInspector> = Arc::new(CompositeInspector {
         dom: dom_inspector,
         state: state_inspector,
     });
 
-    let mcp = DeveyeMcpServer::new(renderer, interaction, inspector, log_source, evaluator);
+    let mcp = DeveyeMcpServer::new(
+        renderer,
+        interaction,
+        inspector,
+        log_source,
+        evaluator,
+        command_router,
+    );
 
     if args.serve_mcp {
         mcp.serve_stdio()

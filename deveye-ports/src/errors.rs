@@ -25,6 +25,9 @@ pub enum PortError {
     #[error("réseau : {0}")]
     Network(String),
 
+    #[error("délai dépassé : {0}")]
+    Timeout(String),
+
     #[error("indisponible sur cette plateforme : {0}")]
     Unsupported(String),
 }

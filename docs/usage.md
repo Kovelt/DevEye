@@ -85,25 +85,25 @@ dx serve --platform desktop --features deveye
 claude
 ```
 
-Une fois dans le client, les 17 outils MCP sont disponibles sous le préfixe `mcp__deveye__` :
+Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **12 sont implémentés à ce jour** ; les 5 marqués _(à venir)_ relèvent de jalons ultérieurs (M4/M6) et ne sont **pas encore exposés** — ne pas les invoquer :
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|
 | `screenshot` | aucun | image PNG (contenu image natif MCP, affichée par le client) | « prends un screenshot » |
 | `click` | `{x, y}` | `"ok"` | « clique sur 50, 200 » (envoie `mouseMoved` + sleep 60 ms + press/release) |
 | `hover` | `{x, y}` | `"ok"` | « hover sur 10, 375 » (ouvre une zone rétractable sans cliquer) |
-| `scroll` | `{dx?, dy?, x?, y?}` | `"ok"` | « scrolle vers le bas de 600px » (`dy` positif = bas ; ancrage par défaut au centre) |
-| `resize` | `{width, height}` | `"ok"` | « passe en 375x812 » (émule le rendu responsive, pas la fenêtre OS) |
+| `scroll` _(à venir)_ | `{dx?, dy?, x?, y?}` | `"ok"` | « scrolle vers le bas de 600px » (`dy` positif = bas ; ancrage par défaut au centre) |
+| `resize` _(à venir)_ | `{width, height}` | `"ok"` | « passe en 375x812 » (émule le rendu responsive, pas la fenêtre OS) |
 | `click_selector` | `{selector}` | JSON `{ok, reason?}` | « clique sur `button.btn-primary` » (robuste aux décalages de coords) |
 | `click_text` | `{text}` | JSON `{ok, reason?}` | « clique sur le bouton "Valider" » (matche `button/a/[role=button]` par `innerText` exact) |
 | `eval_js` | `{expression}` | JSON sérialisé | « renvoie `document.querySelectorAll('button').length` » (Promise awaitée) |
 | `type_text` | `{text}` | `"ok"` | « tape "Bonjour" dans le champ focus » |
-| `press_key` | `{key}` | `"ok"` | « appuie sur Entrée » (`Enter`, `Tab`, `Escape`, `ArrowDown`… au format DevTools) |
-| `navigate` | `{route}` | `"ok"` | « va sur l'écran Agenda » (route logique via le routeur du SDK opt-in) |
+| `press_key` _(à venir)_ | `{key}` | `"ok"` | « appuie sur Entrée » (`Enter`, `Tab`, `Escape`, `ArrowDown`… au format DevTools) |
+| `navigate` _(à venir)_ | `{route}` | `"ok"` | « va sur l'écran Agenda » (route logique via le routeur du SDK opt-in) |
 | `dom` | aucun | JSON du DOM courant | « renvoie le DOM courant » |
 | `state` | aucun | JSON `{ ... }` | « quel est l'état applicatif courant ? » |
 | `logs_tail` | aucun | JSON `[{ level, target, message, ... }]` | « affiche les derniers logs » |
-| `logs_wait` | `{timeout_ms?, min_level?}` | JSON `{events, timed_out}` | « clique Valider puis attends une erreur (max 10s) » (long-poll bloquant) |
+| `logs_wait` _(à venir)_ | `{timeout_ms?, min_level?}` | JSON `{events, timed_out}` | « clique Valider puis attends une erreur (max 10s) » (long-poll bloquant) |
 | `invoke_command` | `{name, args?}` | JSON (résultat de la commande) | « invoque `set-page` avec `{page:"Agenda"}` » (route exposée par l'app) |
 | `list_commands` | aucun | JSON `[{name, description}]` | « quelles commandes l'app expose-t-elle ? » |
 
@@ -152,12 +152,20 @@ Le client doit appeler `mcp__deveye__screenshot` (et afficher l'image) puis `mcp
 
 ## Étape 6 — Sécurité : vérifier qu'aucune ligne DevEye ne fuite en prod
 
-```powershell
+```bash
 # Le binaire release de l'app cible sans la feature deveye ne doit linker aucun crate DevEye
+#   Linux / macOS :
+cargo tree -p <votre-app> | grep deveye
+#   Windows :
 cargo tree -p <votre-app> | findstr deveye
 # (doit ne rien retourner)
 
 # Le SDK opt-in bind strict localhost
+#   Linux :
+ss -tlnp | grep 31337
+#   macOS :
+lsof -nP -iTCP:31337 -sTCP:LISTEN
+#   Windows :
 netstat -an | findstr 31337
 # (adresse doit etre 127.0.0.1:31337, jamais 0.0.0.0)
 ```

@@ -20,6 +20,7 @@ members = [
     "deveye-adapters/adapter-screencap-xcap",
     "deveye-adapters/adapter-dioxus-signals",
     "deveye-adapters/adapter-logs-tracing",
+    "deveye-adapters/adapter-commands-http",
     "deveye-adapters/adapter-mcp-server",
 ]
 

@@ -15,7 +15,7 @@ pub mod log_event;
 pub mod session;
 pub mod snapshot;
 
-pub use command::{InteractionCommand, MouseButton};
+pub use command::{CommandDescriptor, InteractionCommand, MouseButton};
 pub use log_event::{LogEvent, LogLevel};
 pub use session::{AppKind, AppSession};
 pub use snapshot::{DomTree, Position, Screenshot, Size, StateDump};
