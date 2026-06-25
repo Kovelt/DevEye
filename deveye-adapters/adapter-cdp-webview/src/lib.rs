@@ -24,5 +24,5 @@ mod interaction;
 mod js_evaluator;
 mod renderer;
 
-pub use client::{CdpClient, CdpTarget, DEFAULT_HTTP_URL};
+pub use client::{CdpClient, CdpTarget, TargetFilter, DEFAULT_HTTP_URL};
 pub use error::CdpError;

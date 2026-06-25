@@ -227,7 +227,7 @@ L'attachement direct à un *target page* s'est révélé fragile : à chaque rec
 1. Bootstrap : `GET /json/version` → récupère le `webSocketDebuggerUrl` racine (browser-wide).
 2. Connexion WebSocket unique vers ce endpoint, persistante sur toute la durée du process `deveye-server`.
 3. `Target.setDiscoverTargets { discover: true, filter: [{ type: "page" }] }` au boot → CDP émet un event pour chaque page existante et chaque nouvelle page.
-4. Filtre target heuristique (`target_matches`) : `type=page` ET (URL/titre évoque `dioxus`, OU `about:blank` transitoire).
+4. Filtre target **configurable** (`TargetFilter`) : `type=page` ET (URL contient `url_contains`, OU titre contient `title_contains`, OU `about:blank` si `accept_blank`), insensible à la casse. Par défaut : sous-chaîne `dioxus` + `about:blank` (rétro-compatible Dioxus desktop). Surchargeable depuis la CLI via `--cdp-target-filter-url` / `--cdp-target-filter-title` (ex. viser une tête WASM sur `localhost:5000`) — aucun nom d'app codé en dur.
 5. Pour chaque target qui matche : `Target.attachToTarget { targetId, flatten: true }` → un `sessionId` actif.
 6. Les commandes (`Page.captureScreenshot`, `Input.dispatchMouseEvent`, `DOM.getDocument`, `Runtime.evaluate`…) sont envoyées avec `sessionId` au top-level (flatten mode).
 7. Sur `Target.detachedFromTarget` / `Target.targetDestroyed`, le `sessionId` est effacé ; le prochain `Target.targetCreated` qui matche ré-attache automatiquement (`call()` attend une session active, timeout 10 s).

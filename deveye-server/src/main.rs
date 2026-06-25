@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use clap::Parser;
 
-use adapter_cdp_webview::CdpClient;
+use adapter_cdp_webview::{CdpClient, TargetFilter};
 use adapter_commands_http::SdkCommandRouter;
 use adapter_dioxus_signals::{
     DioxusSignalsInspector, EvalDomInspector, JsInteraction, SdkEvaluator,
@@ -60,6 +60,25 @@ struct Args {
     /// - `sdk`  : pont natif uniquement (app desktop via `deveye-sdk`).
     #[arg(long, value_enum, default_value_t = TargetMode::Auto)]
     target: TargetMode,
+
+    /// Sous-chaine (insensible a la casse) que doit contenir l'URL de la page
+    /// CDP cible. Sans ce flag ni --cdp-target-filter-title, le filtre par
+    /// defaut "dioxus" (comportement historique) s'applique. Sert a viser une
+    /// tete WASM tierce (ex. `localhost:5000`) sans toucher l'app cible.
+    #[arg(long)]
+    cdp_target_filter_url: Option<String>,
+
+    /// Sous-chaine (insensible a la casse) que doit contenir le titre de la
+    /// page CDP cible (relation OU avec --cdp-target-filter-url).
+    #[arg(long)]
+    cdp_target_filter_title: Option<String>,
+
+    /// Accepte la page "about:blank" comme cible CDP (transitoire wry au boot).
+    /// Force a true avec le filtre par defaut Dioxus ; sinon false (un filtre
+    /// explicite ne veut pas s'attacher au about:blank d'une tete WASM), sauf
+    /// si ce flag est passe.
+    #[arg(long, default_value_t = false)]
+    cdp_accept_blank: bool,
 
     /// Servir le MCP server sur stdio (mode normal d'usage avec Claude).
     #[arg(long)]
@@ -127,6 +146,22 @@ type Pilotage = (
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Filtre de selection de la page CDP cible. Sans flag explicite : defaut
+    // Dioxus (retro-compatible). Des qu'un filtre est fourni, `accept_blank`
+    // suit --cdp-accept-blank (false par defaut) pour ne pas s'attacher a la
+    // page about:blank transitoire d'une tete WASM avant son chargement.
+    let cdp_filter = if args.cdp_target_filter_url.is_none()
+        && args.cdp_target_filter_title.is_none()
+    {
+        TargetFilter::default()
+    } else {
+        TargetFilter {
+            url_contains: args.cdp_target_filter_url.clone(),
+            title_contains: args.cdp_target_filter_title.clone(),
+            accept_blank: args.cdp_accept_blank,
+        }
+    };
+
     // Pièces du pont natif (SDK) : évaluateur JS via la pompe de l'app,
     // interaction en événements JS, DOM par outerHTML, yeux par xcap.
     let sdk_eval: Arc<dyn JsEvaluator> = Arc::new(SdkEvaluator::new(args.sdk_url.clone()));
@@ -141,7 +176,7 @@ async fn main() -> Result<()> {
     let initial = if args.target == TargetMode::Sdk {
         None
     } else {
-        match CdpClient::connect(&args.cdp_url).await {
+        match CdpClient::connect(&args.cdp_url, cdp_filter.clone()).await {
             Ok(client) => Some(Arc::new(client)),
             Err(e) => {
                 eprintln!(
@@ -155,7 +190,7 @@ async fn main() -> Result<()> {
 
     let (renderer, interaction, dom_inspector, evaluator): Pilotage = match args.target {
         TargetMode::Cdp => {
-            let lazy = Arc::new(LazyCdp::new(args.cdp_url.clone(), initial));
+            let lazy = Arc::new(LazyCdp::new(args.cdp_url.clone(), cdp_filter.clone(), initial));
             (lazy.clone(), lazy.clone(), lazy.clone(), lazy)
         }
         TargetMode::Sdk => (
@@ -167,7 +202,7 @@ async fn main() -> Result<()> {
         // Auto : CDP en premier ; toute erreur de LIAISON (PortError::Network
         // — navigateur absent/fermé) bascule l'appel sur le pont natif.
         TargetMode::Auto => {
-            let lazy = Arc::new(LazyCdp::new(args.cdp_url.clone(), initial));
+            let lazy = Arc::new(LazyCdp::new(args.cdp_url.clone(), cdp_filter.clone(), initial));
             (
                 Arc::new(FallbackRenderer {
                     primary: lazy.clone(),
@@ -230,13 +265,15 @@ async fn main() -> Result<()> {
 /// mort (`is_closed`) est jeté et remplacé au prochain appel d'outil.
 struct LazyCdp {
     url: String,
+    filter: TargetFilter,
     slot: tokio::sync::Mutex<Option<Arc<CdpClient>>>,
 }
 
 impl LazyCdp {
-    fn new(url: String, initial: Option<Arc<CdpClient>>) -> Self {
+    fn new(url: String, filter: TargetFilter, initial: Option<Arc<CdpClient>>) -> Self {
         Self {
             url,
+            filter,
             slot: tokio::sync::Mutex::new(initial),
         }
     }
@@ -250,7 +287,7 @@ impl LazyCdp {
                 return Ok(client.clone());
             }
         }
-        match CdpClient::connect(&self.url).await {
+        match CdpClient::connect(&self.url, self.filter.clone()).await {
             Ok(client) => {
                 let client = Arc::new(client);
                 *slot = Some(client.clone());
