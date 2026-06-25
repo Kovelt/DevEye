@@ -25,6 +25,9 @@ pub enum PortError {
     #[error("réseau : {0}")]
     Network(String),
 
+    #[error("console webview : {0}")]
+    Console(String),
+
     #[error("délai dépassé : {0}")]
     Timeout(String),
 

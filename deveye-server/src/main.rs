@@ -9,6 +9,7 @@
 //! Chronos pour le contexte global et le mode d'emploi.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -24,10 +25,13 @@ use adapter_mcp_server::DeveyeMcpServer;
 use adapter_interaction_kwin_eis::KwinEisInteraction;
 use adapter_screencap_kwin::KwinRenderer;
 use adapter_screencap_xcap::XcapRenderer;
-use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump, WindowInfo};
+use deveye_core::{
+    ConsoleError, DomTree, InteractionCommand, Screenshot, Size, StateDump, WaitOutcome,
+    WaitPredicate, WindowInfo,
+};
 use deveye_ports::{
-    AppInspector, CommandRouter, InteractionSink, JsEvaluator, LogSource, PortError, PortResult,
-    Renderer, WindowLister,
+    AppInspector, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator, LogSource,
+    PortError, PortResult, Renderer, WaitCondition, WindowLister,
 };
 
 #[derive(Parser, Debug)]
@@ -254,6 +258,17 @@ async fn main() -> Result<()> {
         state: state_inspector,
     });
 
+    // Ports d'orchestration (M6), composés sur les ports déjà construits :
+    // erreurs console par injection JS, attente conditionnelle multi-prédicats.
+    let console_errors: Arc<dyn ConsoleErrorSource> = Arc::new(JsConsoleErrorSource {
+        evaluator: evaluator.clone(),
+    });
+    let wait_condition: Arc<dyn WaitCondition> = Arc::new(CompositeWaitCondition {
+        evaluator: evaluator.clone(),
+        inspector: inspector.clone(),
+        renderer: renderer.clone(),
+    });
+
     let mcp = DeveyeMcpServer::new(
         renderer,
         interaction,
@@ -262,6 +277,8 @@ async fn main() -> Result<()> {
         evaluator,
         command_router,
         window_lister,
+        console_errors,
+        wait_condition,
     );
 
     if args.serve_mcp {
@@ -401,6 +418,109 @@ impl JsEvaluator for UnsupportedEvaluator {
         Err(PortError::Unsupported(
             "eval JS indisponible en mode kwin-eis (rendu natif, pas de WebView)".to_string(),
         ))
+    }
+}
+
+/// Collecteur d'erreurs console JS, injecté une fois puis drainé. Pur JS →
+/// fonctionne via CDP comme via la pompe SDK. Renvoie des entrées typées
+/// (level/text/url/line/timestamp) directement désérialisables en `ConsoleError`.
+const CONSOLE_ERRORS_SNIPPET: &str = r#"(function(){
+  if (!window.__deveye_console_init__) {
+    window.__deveye_console_errors__ = [];
+    var push = function(level, text, url, line){
+      try { window.__deveye_console_errors__.push({ level: level, text: text, url: url, line: line, timestamp: new Date().toISOString() }); } catch (_) {}
+    };
+    window.addEventListener('error', function(e){
+      push('error', String((e && (e.message || e.error)) || 'error'), (e && e.filename) || null, (e && e.lineno) || null);
+    });
+    window.addEventListener('unhandledrejection', function(e){
+      push('error', String(e && e.reason), null, null);
+    });
+    var origErr = console.error;
+    console.error = function(){ push('error', Array.prototype.map.call(arguments, String).join(' '), null, null); if (origErr) { origErr.apply(console, arguments); } };
+    var origWarn = console.warn;
+    console.warn = function(){ push('warning', Array.prototype.map.call(arguments, String).join(' '), null, null); if (origWarn) { origWarn.apply(console, arguments); } };
+    window.__deveye_console_init__ = true;
+  }
+  return window.__deveye_console_errors__.splice(0);
+})()"#;
+
+/// `ConsoleErrorSource` générique : injecte un collecteur JS via l'évaluateur
+/// (CDP ou pompe SDK) et draine les erreurs typées. La capture CDP-native
+/// (`Runtime.consoleAPICalled`) reste un raffinement futur derrière ce même port.
+struct JsConsoleErrorSource {
+    evaluator: Arc<dyn JsEvaluator>,
+}
+
+#[async_trait]
+impl ConsoleErrorSource for JsConsoleErrorSource {
+    async fn drain_console_errors(&self) -> PortResult<Vec<ConsoleError>> {
+        let value = self.evaluator.evaluate(CONSOLE_ERRORS_SNIPPET).await?;
+        Ok(serde_json::from_value(value).unwrap_or_default())
+    }
+}
+
+/// `WaitCondition` composite : boucle de polling sur les ports déjà composés
+/// (évaluateur pour `DomSelector`, inspecteur pour `StateKey`, renderer pour
+/// `ScreenshotStable`). Marche pour toutes les cibles sans impl par adapter.
+struct CompositeWaitCondition {
+    evaluator: Arc<dyn JsEvaluator>,
+    inspector: Arc<dyn AppInspector>,
+    renderer: Arc<dyn Renderer>,
+}
+
+impl CompositeWaitCondition {
+    async fn check(&self, predicate: &WaitPredicate) -> PortResult<bool> {
+        match predicate {
+            WaitPredicate::DomSelector { selector } => {
+                let sel = serde_json::to_string(selector).unwrap_or_default();
+                let value = self
+                    .evaluator
+                    .evaluate(&format!("!!document.querySelector({sel})"))
+                    .await?;
+                Ok(value.as_bool().unwrap_or(false))
+            }
+            WaitPredicate::StateKey { key, expected } => {
+                let dump = self.inspector.state_snapshot().await?;
+                Ok(dump.entries.get(key) == Some(expected))
+            }
+            WaitPredicate::ScreenshotStable { threshold_ms } => {
+                let first = self.renderer.screenshot().await?;
+                tokio::time::sleep(Duration::from_millis(*threshold_ms)).await;
+                let second = self.renderer.screenshot().await?;
+                Ok(first.bytes == second.bytes)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl WaitCondition for CompositeWaitCondition {
+    async fn wait_until(
+        &self,
+        predicate: WaitPredicate,
+        timeout: Duration,
+    ) -> PortResult<WaitOutcome> {
+        const POLL: Duration = Duration::from_millis(200);
+        let start = Instant::now();
+        let deadline = start + timeout;
+        loop {
+            if self.check(&predicate).await? {
+                return Ok(WaitOutcome {
+                    satisfied: true,
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                    detail: "prédicat satisfait".to_string(),
+                });
+            }
+            if Instant::now() >= deadline {
+                return Ok(WaitOutcome {
+                    satisfied: false,
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                    detail: format!("timeout après {} ms", timeout.as_millis()),
+                });
+            }
+            tokio::time::sleep(POLL).await;
+        }
     }
 }
 

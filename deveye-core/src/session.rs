@@ -5,12 +5,15 @@ use serde::{Deserialize, Serialize};
 ///
 /// `id` est arbitraire et choisi par le binaire orchestrateur — typiquement
 /// le nom du projet (`"chronos"`). `kind` aide les couches supérieures (UI,
-/// MCP) à présenter les bonnes interactions selon la cible.
+/// MCP) à présenter les bonnes interactions selon la cible. `ended_at` reste
+/// `None` tant que la session est active ; l'orchestrateur le pose à la clôture.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSession {
     pub id: String,
     pub kind: AppKind,
     pub started_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<DateTime<Utc>>,
 }
 
 /// Catégorie d'app cible.
@@ -29,6 +32,9 @@ pub enum AppKind {
     Tauri,
     /// Toute autre app embarquant un webview Chromium-based (Electron…).
     GenericWebview,
+    /// atlas (.NET 10 / Uno Platform) en tête desktop Skia — pilotée OS-level
+    /// (KWin EIS) car ni WebView ni SDK Rust embarquable.
+    UnoDesktop,
     /// Process opaque pour DevEye — utile pour le mode screencap pur.
     #[default]
     Unknown,
@@ -40,7 +46,18 @@ impl AppSession {
             id: id.into(),
             kind,
             started_at: Utc::now(),
+            ended_at: None,
         }
+    }
+
+    /// Marque la session comme close (pose `ended_at` au temps courant).
+    pub fn close(&mut self) {
+        self.ended_at = Some(Utc::now());
+    }
+
+    /// Vrai tant que la session n'a pas été close.
+    pub fn is_active(&self) -> bool {
+        self.ended_at.is_none()
     }
 }
 
@@ -55,13 +72,26 @@ mod tests {
         let after = Utc::now();
         assert_eq!(session.id, "chronos");
         assert_eq!(session.kind, AppKind::DioxusDesktop);
+        assert!(session.ended_at.is_none());
+        assert!(session.is_active());
         assert!(session.started_at >= before && session.started_at <= after);
+    }
+
+    #[test]
+    fn close_sets_ended_at_and_clears_active() {
+        let mut session = AppSession::new("atlas", AppKind::UnoDesktop);
+        assert!(session.is_active());
+        session.close();
+        assert!(session.ended_at.is_some());
+        assert!(!session.is_active());
     }
 
     #[test]
     fn kind_serializes_in_kebab_case() {
         let json = serde_json::to_string(&AppKind::DioxusDesktop).unwrap();
         assert_eq!(json, "\"dioxus-desktop\"");
+        let json = serde_json::to_string(&AppKind::UnoDesktop).unwrap();
+        assert_eq!(json, "\"uno-desktop\"");
         let parsed: AppKind = serde_json::from_str("\"generic-webview\"").unwrap();
         assert_eq!(parsed, AppKind::GenericWebview);
     }
