@@ -56,8 +56,8 @@ impl EisSession {
     /// device pointeur resumed (le clavier est capturé au passage s'il arrive).
     pub(crate) async fn connect(fd: OwnedFd, dbus: zbus::Connection) -> Result<Self, EisError> {
         let stream = UnixStream::from(fd);
-        let context =
-            ei::Context::new(stream).map_err(|e| EisError::Eis(format!("ei::Context::new : {e}")))?;
+        let context = ei::Context::new(stream)
+            .map_err(|e| EisError::Eis(format!("ei::Context::new : {e}")))?;
         let (connection, mut events) = context
             .handshake_tokio("deveye", ei::handshake::ContextType::Sender)
             .await
@@ -214,11 +214,7 @@ impl EisSession {
 
     /// Glisser-déposer : press en `from`, déplacements intermédiaires, release
     /// en `to` (bouton gauche maintenu).
-    pub(crate) async fn drag(
-        &mut self,
-        from: (f64, f64),
-        to: (f64, f64),
-    ) -> Result<(), EisError> {
+    pub(crate) async fn drag(&mut self, from: (f64, f64), to: (f64, f64)) -> Result<(), EisError> {
         self.pump();
         let serial = self.connection.serial();
         let seq = self.next_seq();
@@ -351,7 +347,10 @@ fn char_to_evdev(keymap: &xkb::Keymap, ch: char) -> Option<(u32, bool)> {
     for xkb_code in keymap.min_keycode().raw()..=keymap.max_keycode().raw() {
         let keycode = xkb::Keycode::new(xkb_code);
         for level in 0_u32..=1 {
-            if keymap.key_get_syms_by_level(keycode, 0, level).contains(&target) {
+            if keymap
+                .key_get_syms_by_level(keycode, 0, level)
+                .contains(&target)
+            {
                 return Some((xkb_code - 8, level == 1)); // XKB -> evdev
             }
         }
@@ -368,7 +367,10 @@ fn xkb_name_to_evdev(keymap: &xkb::Keymap, name: &str) -> Option<u32> {
     for xkb_code in keymap.min_keycode().raw()..=keymap.max_keycode().raw() {
         let keycode = xkb::Keycode::new(xkb_code);
         for level in 0_u32..=1 {
-            if keymap.key_get_syms_by_level(keycode, 0, level).contains(&target) {
+            if keymap
+                .key_get_syms_by_level(keycode, 0, level)
+                .contains(&target)
+            {
                 return Some(xkb_code - 8);
             }
         }

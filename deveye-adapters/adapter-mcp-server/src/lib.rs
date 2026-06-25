@@ -522,7 +522,10 @@ impl DeveyeMcpServer {
         );
         let value = self.evaluator.evaluate(&snippet).await.map_err(internal)?;
         let actual_count = value.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-        let actual_text = value.get("text").and_then(|v| v.as_str()).map(str::to_owned);
+        let actual_text = value
+            .get("text")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
         let mut ok = actual_count >= 1;
         if let Some(expected) = &p.expected_text {
             ok = ok && actual_text.as_deref() == Some(expected.as_str());

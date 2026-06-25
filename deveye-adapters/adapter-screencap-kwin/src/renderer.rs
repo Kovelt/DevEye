@@ -95,10 +95,7 @@ impl KwinRenderer {
 
         // Nettoyage best-effort (ne pas masquer l'erreur principale).
         let _ = std::fs::remove_file(&path);
-        let _ = conn
-            .object_server()
-            .remove::<Bridge, _>(BRIDGE_PATH)
-            .await;
+        let _ = conn.object_server().remove::<Bridge, _>(BRIDGE_PATH).await;
 
         let (uuid, geometry) = result?;
         if uuid.is_empty() {
@@ -134,7 +131,9 @@ impl KwinRenderer {
         let _ = scripting.unload_script(plugin).await;
 
         received
-            .map_err(|_| KwinScreencapError::Unavailable("script KWin sans reponse apres 4 s".into()))?
+            .map_err(|_| {
+                KwinScreencapError::Unavailable("script KWin sans reponse apres 4 s".into())
+            })?
             .map_err(|_| KwinScreencapError::Unavailable("canal de resolution ferme".into()))
     }
 }

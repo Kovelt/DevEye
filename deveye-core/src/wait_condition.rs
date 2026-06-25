@@ -55,7 +55,10 @@ mod tests {
             expected: json!(3),
         };
         let v = serde_json::to_value(&p).unwrap();
-        assert_eq!(v, json!({ "kind": "state-key", "key": "count", "expected": 3 }));
+        assert_eq!(
+            v,
+            json!({ "kind": "state-key", "key": "count", "expected": 3 })
+        );
         let back: WaitPredicate = serde_json::from_value(v).unwrap();
         assert_eq!(back, p);
     }

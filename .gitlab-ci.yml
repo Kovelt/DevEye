@@ -1,0 +1,43 @@
+# CI DevEye — GitLab (git.kovelt.fr). Jobs : fmt, clippy, tests unitaires.
+#
+# NB : le repo est sur GitLab, pas GitHub — d'ou ce `.gitlab-ci.yml` (et non
+# un workflow GitHub Actions). Necessite un runner Docker sur l'instance.
+stages:
+  - check
+
+variables:
+  CARGO_TERM_COLOR: "always"
+  RUST_BACKTRACE: "1"
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+
+default:
+  image: rust:latest
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - .cargo/
+      - target/
+  before_script:
+    # Dependances systeme des adapters Linux :
+    #   xcap (screenshot)  -> libxcb, libxrandr
+    #   zbus (KWin D-Bus)  -> libdbus
+    #   xkbcommon (EIS)    -> libxkbcommon ; reis est pur Rust (pas de libei)
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends
+        libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev
+    - rustup component add rustfmt clippy
+
+fmt:
+  stage: check
+  script:
+    - cargo fmt --all --check
+
+clippy:
+  stage: check
+  script:
+    - cargo clippy --workspace --all-targets -- -D warnings
+
+test:
+  stage: check
+  script:
+    - cargo test --workspace
