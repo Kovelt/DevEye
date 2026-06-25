@@ -71,7 +71,7 @@ DevEye/
 ├── deveye-core/                ← DOMAINE PUR (aucune dépendance technique)
 │   └── src/
 │       ├── snapshot.rs         # Snapshot { visual, dom, state, timestamp }
-│       ├── command.rs          # InteractionCommand (Click, Hover, Type, KeyPress, Navigate, Scroll, Resize)
+│       ├── command.rs          # InteractionCommand (Click, Hover, Type, KeyPress, Navigate ; Scroll/Resize prévus)
 │       └── log_event.rs        # LogEvent, niveaux, fields
 │
 ├── deveye-ports/               ← INTERFACES (traits uniquement)
@@ -86,8 +86,9 @@ DevEye/
 ├── deveye-adapters/            ← IMPLÉMENTATIONS (un crate par adapter)
 │   ├── adapter-cdp-webview/    # Renderer + InteractionSink + AppInspector + JsEvaluator via CDP
 │   ├── adapter-screencap-xcap/ # Renderer fallback OS-level (any app)
-│   ├── adapter-dioxus-signals/ # AppInspector pour apps Dioxus (via SDK opt-in)
+│   ├── adapter-dioxus-signals/ # AppInspector + pont natif (JsEvaluator/InteractionSink) via SDK
 │   ├── adapter-logs-tracing/   # LogSource via le buffer tracing du SDK opt-in
+│   ├── adapter-commands-http/  # CommandRouter via POST /devtools/command + GET /devtools/commands
 │   └── adapter-mcp-server/     # consomme les ports, expose au Model Context Protocol
 │
 ├── deveye-sdk/                 ← micro-lib opt-in à intégrer dans l'app cible (cfg debug)
@@ -146,8 +147,8 @@ Variantes de `InteractionCommand` :
 - `Type { text }` — `Input.insertText`.
 - `KeyPress { key }` — `Input.dispatchKeyEvent` (keyDown + keyUp).
 - `Navigate { route }` — `Runtime.evaluate` sur un routeur exposé côté JS par l'app cible (nécessite le support dans le SDK opt-in).
-- `Scroll { position, delta_x, delta_y }` — `Input.dispatchMouseEvent` type `mouseWheel` ancré à `position` (`delta_y` positif = vers le bas).
-- `Resize { width, height }` — `Emulation.setDeviceMetricsOverride`. Émule les métriques de rendu (responsive), ne redimensionne pas la fenêtre OS réelle.
+- `Scroll { position, delta_x, delta_y }` *(prévu — pas encore dans `InteractionCommand`)* — `Input.dispatchMouseEvent` type `mouseWheel` ancré à `position` (`delta_y` positif = vers le bas).
+- `Resize { width, height }` *(prévu — pas encore dans `InteractionCommand`)* — `Emulation.setDeviceMetricsOverride`. Émule les métriques de rendu (responsive), ne redimensionne pas la fenêtre OS réelle.
 
 Adapter : `adapter-cdp-webview` (CDP `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent` / `Runtime.evaluate`).
 
@@ -171,9 +172,12 @@ Adapter : `adapter-cdp-webview`.
 ```rust
 #[async_trait]
 pub trait LogSource: Send + Sync {
-    fn stream(&self) -> BoxStream<'static, LogEvent>;
+    async fn poll(&self) -> PortResult<Vec<LogEvent>>;
 }
 ```
+
+Contrat volontairement minimal : `poll` draine les événements accumulés depuis
+le dernier appel (pas de `Stream`, pas de dépendance `futures` dans le domaine).
 
 - `adapter-logs-tracing` (via SDK opt-in qui pose un subscriber `tracing`)
 
@@ -230,7 +234,9 @@ L'attachement direct à un *target page* s'est révélé fragile : à chaque rec
 
 Conséquence : un hot-reload ne nécessite plus de reconnexion manuelle du MCP. Le binaire `deveye-server` reste vivant et bascule tout seul sur la nouvelle page dès qu'elle apparaît.
 
-**Hors périmètre** : le crash complet du process webview (et donc du endpoint `/json/version`) tue le WebSocket browser ; aucun reconnect côté `deveye-server`. Cas rare, réglé par un reconnect du MCP côté client. Reconnect automatique du WS browser à prévoir si le besoin se présente.
+**Reconnexion paresseuse (`LazyCdp`, `--target`)** : `deveye-server` n'exige plus le navigateur au démarrage. La façade `LazyCdp` (re)connecte **à la demande** : chaque appel d'outil dont le WebSocket est mort retente l'attache via `/json/version`. Un navigateur absent au boot ou fermé en cours de session n'est donc pas fatal — l'outil renvoie une erreur actionnable tant que le CDP manque, puis repart seul. Le drapeau `--target {auto|cdp|sdk}` choisit la source des yeux/mains : `auto` tente CDP puis bascule **appel par appel** sur le pont natif du SDK (Linux/WebKitGTK), `cdp` et `sdk` forcent l'un ou l'autre. Détails opérationnels : [`usage.md`](./usage.md).
+
+**Hors périmètre** : le pont natif ne couvre pas le `resize` de viewport (métriques moteur, exige CDP). La capture pixel en Wayland natif passe encore par XWayland (`adapter-screencap-kwin` à venir).
 
 ---
 
@@ -246,19 +252,22 @@ Pour que DevEye reste un outil générique réutilisable par n'importe quelle ap
 
 ## Sécurité
 
-Tout DevEye est **dev-only**. Quatre garde-fous :
+Tout DevEye est **dev-only**. Cinq garde-fous :
 
-1. **SDK strictement `cfg(debug_assertions)`** — le binaire release de l'app cible n'embarque aucune ligne DevEye.
+1. **SDK strictement `cfg(debug_assertions)`** — le binaire release de l'app cible n'embarque aucune ligne DevEye. Filet de sécurité en plus de la garde côté appelant : `deveye_sdk::init` est un **no-op en build release**, donc le serveur de debug ne peut pas fuiter en production même si l'intégrateur oublie son `#[cfg(debug_assertions)]`.
 2. **Bind localhost uniquement** — le mini serveur SDK écoute sur `127.0.0.1`, jamais `0.0.0.0`.
-3. **Port configurable** — par défaut `31337`, surchargable par `DEVEYE_PORT`.
-4. **Pas de secret exposé** — l'inspecteur de signaux ne traverse pas les types annotés `#[deveye(secret)]` (à implémenter dans le SDK).
+3. **Garde Host anti DNS-rebinding** — le middleware `guard_local_host` rejette en `403` toute requête dont le header `Host` n'est pas `localhost`/`127.0.0.1`/`[::1]`, **avant** la route. Le bind loopback seul ne suffit pas : une page malveillante peut résoudre un domaine sous son contrôle vers `127.0.0.1`. Chaque réponse porte aussi `X-DevEye-Protocol-Version` (détection d'incompatibilité de version).
+4. **Port configurable** — par défaut `31337`, surchargable par `DEVEYE_PORT`.
+5. **Pas de secret exposé** — l'inspecteur de signaux ne traverse pas les types annotés `#[deveye(secret)]` (à implémenter dans le SDK).
+
+Le contrat complet des routes HTTP du SDK (codes de statut, formes des corps, garde Host) est figé dans [`wire-protocol.md`](./wire-protocol.md).
 
 ---
 
 ## Hors périmètre actuel
 
 - Adapter macOS (alternative à CDP sur WKWebView)
-- Adapter Linux (WebKitGTK inspector)
+- Adapter Linux pixel natif Wayland (`adapter-screencap-kwin`, KWin `ScreenShot2`) — l'intérim XWayland (`GDK_BACKEND=x11`) couvre déjà la capture. Le pont natif (`adapter-dioxus-signals`) couvre déjà clic/saisie/DOM/eval via WebKitGTK ; seul `resize` (métriques moteur) reste indisponible hors CDP.
 - `adapter-tauri`
 - `adapter-cdp-chrome-standalone` (piloter Chrome déjà ouvert sans wry)
 - VRT (Visual Regression Testing) — `Diff` est dans le domaine, le comparateur viendra plus tard

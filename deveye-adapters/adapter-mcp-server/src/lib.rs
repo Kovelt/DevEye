@@ -2,7 +2,7 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Dix outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Douze outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `click` : clic à `(x, y)` (bouton gauche)
 //! - `hover` : déplace le pointeur à `(x, y)` sans presser (déclenche
@@ -18,6 +18,9 @@
 //! - `dom` : sérialise le DOM de l'app cible
 //! - `state` : sérialise le state opt-in poussé par le SDK
 //! - `logs_tail` : draine et renvoie le buffer de logs accumulé
+//! - `invoke_command` : invoque une commande logique exposée par l'app
+//!   (route déclarée via `deveye_sdk::expose_route`)
+//! - `list_commands` : liste les commandes logiques exposées par l'app
 //!
 //! Les appels d'outils sont **sérialisés** (un seul à la fois, mutex) : des
 //! interactions concurrentes pendant un re-render Dioxus touchaient le
@@ -44,7 +47,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use deveye_core::{InteractionCommand, Position};
-use deveye_ports::{AppInspector, InteractionSink, JsEvaluator, LogSource, Renderer};
+use deveye_ports::{
+    AppInspector, CommandRouter, InteractionSink, JsEvaluator, LogSource, Renderer,
+};
 
 /// Serveur MCP DevEye.
 ///
@@ -57,6 +62,7 @@ pub struct DeveyeMcpServer {
     inspector: Arc<dyn AppInspector>,
     log_source: Arc<dyn LogSource>,
     evaluator: Arc<dyn JsEvaluator>,
+    command_router: Arc<dyn CommandRouter>,
     /// Sérialise les appels d'outils : rmcp les traite en concurrence, mais
     /// deux interactions entrelacées pendant un re-render visent le mauvais
     /// nœud. Un seul outil à la fois, dans l'ordre d'arrivée.
@@ -120,6 +126,17 @@ struct ClickTextParams {
     text: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct InvokeCommandParams {
+    /// Nom de la commande logique à invoquer (tel que listé par
+    /// `list_commands`, déclaré côté app par `deveye_sdk::expose_route`).
+    name: String,
+    /// Arguments JSON passés au handler de la commande. Schéma défini par
+    /// l'app cible ; absent ou `null` si la commande n'en attend pas.
+    #[serde(default)]
+    args: serde_json::Value,
+}
+
 #[tool_router]
 impl DeveyeMcpServer {
     pub fn new(
@@ -128,6 +145,7 @@ impl DeveyeMcpServer {
         inspector: Arc<dyn AppInspector>,
         log_source: Arc<dyn LogSource>,
         evaluator: Arc<dyn JsEvaluator>,
+        command_router: Arc<dyn CommandRouter>,
     ) -> Self {
         Self {
             renderer,
@@ -135,6 +153,7 @@ impl DeveyeMcpServer {
             inspector,
             log_source,
             evaluator,
+            command_router,
             gate: Arc::new(tokio::sync::Mutex::new(())),
             tool_router: Self::tool_router(),
         }
@@ -296,6 +315,33 @@ impl DeveyeMcpServer {
         let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    #[tool(
+        description = "Invoque une commande logique exposée par l'app cible (route déclarée via deveye_sdk::expose_route). `name` = nom de la commande, `args` = payload JSON. Renvoie la valeur produite par le handler. Plus robuste qu'une cascade de clics pour mettre l'app dans un état donné."
+    )]
+    async fn invoke_command(
+        &self,
+        Parameters(p): Parameters<InvokeCommandParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let value = self
+            .command_router
+            .invoke(&p.name, p.args)
+            .await
+            .map_err(internal)?;
+        let json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(
+        description = "Liste les commandes logiques exposées par l'app cible (découverte) : tableau JSON `[{name, description}]`, trié par nom. Vide si l'app n'a déclaré aucune route via expose_route."
+    )]
+    async fn list_commands(&self) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let descriptors = self.command_router.list().await.map_err(internal)?;
+        let json = serde_json::to_string(&descriptors).unwrap_or_else(|_| "[]".to_string());
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
 }
 
 #[tool_handler]
@@ -308,7 +354,8 @@ impl ServerHandler for DeveyeMcpServer {
         info.instructions = Some(
             "DevEye MCP — observe et pilote une app vivante en dev. \
              Outils : screenshot, click, hover, click_selector, click_text, \
-             eval_js, type_text, dom, state, logs_tail."
+             eval_js, type_text, dom, state, logs_tail, invoke_command, \
+             list_commands."
                 .to_string(),
         );
         info

@@ -67,6 +67,20 @@ impl JsEvaluator for SdkEvaluator {
             if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
                 return Err(PortError::Network(format!("SDK eval : {error}")));
             }
+            // 504 = la pompe a été jointe mais n'a pas répondu dans les 10 s
+            // impartis par le SDK — distinct d'une erreur JS (Render) comme
+            // d'une absence de liaison (Network).
+            if status == reqwest::StatusCode::GATEWAY_TIMEOUT {
+                return Err(PortError::Timeout(format!("eval JS timeout : {error}")));
+            }
+            // 500 = la pompe a abandonné la requête (oneshot fermé) : rupture
+            // de liaison avec la pompe, pas un échec JS — Network, pour que le
+            // mode auto bascule comme pour un 503.
+            if status == reqwest::StatusCode::INTERNAL_SERVER_ERROR {
+                return Err(PortError::Network(format!(
+                    "SDK eval (pompe abandonnee) : {error}"
+                )));
+            }
             return Err(PortError::Render(format!("eval JS : {error}")));
         }
         Ok(body.value.unwrap_or(serde_json::Value::Null))

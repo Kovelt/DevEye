@@ -26,19 +26,27 @@
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
+// En build release, `init` est un no-op (filet de sécurité dev-only) : tout le
+// code orienté serveur (handlers, middlewares, imports axum, `host_is_local`)
+// devient du code mort *attendu*. On tait ces avertissements uniquement en
+// release ; en debug, `dead_code`/`unused_imports` restent pleinement actifs.
+#![cfg_attr(not(debug_assertions), allow(dead_code, unused_imports))]
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Json},
-    routing::get,
+    extract::{Request, State},
+    http::{header, HeaderName, HeaderValue, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Json, Response},
+    routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
+
+use deveye_core::CommandDescriptor;
 
 mod tracing_layer;
 
@@ -50,6 +58,12 @@ pub const DEFAULT_PORT: u16 = 31337;
 /// Capacité maximale du buffer de logs avant qu'on commence à perdre les
 /// anciens événements (politique drop-oldest).
 pub const LOG_BUFFER_CAPACITY: usize = 1024;
+
+/// Version du wire protocol DevEye, émise dans le header
+/// `X-DevEye-Protocol-Version` de **chaque** réponse. Incrémentée à chaque
+/// changement cassant du contrat HTTP (cf. `docs/wire-protocol.md`). Le client
+/// peut s'en servir pour détecter une incompatibilité de version.
+pub const PROTOCOL_VERSION: &str = "1";
 
 /// Configuration du SDK. Le `Default` lit `DEVEYE_PORT` si présent, sinon
 /// utilise [`DEFAULT_PORT`].
@@ -94,6 +108,24 @@ pub struct EvalRequest {
     pub respond: tokio::sync::oneshot::Sender<Result<serde_json::Value, String>>,
 }
 
+/// Closure synchrone enregistrée par l'app via [`expose_route`] : reçoit le
+/// `payload` JSON de l'invocation et retourne la valeur JSON de réponse. Le
+/// handler est responsable de sa propre gestion d'erreur (le contrat
+/// n'impose pas d'enveloppe de retour).
+///
+/// **Contrainte** : le handler tourne sur le runtime dédié du SDK (un seul
+/// thread). Il doit rester **court et non bloquant** — pas de `block_on`, pas
+/// de `std::thread::sleep`, pas de verrou std à forte contention — sous peine
+/// de figer le micro-serveur de debug.
+type CommandHandler = Arc<dyn Fn(serde_json::Value) -> serde_json::Value + Send + Sync>;
+
+/// Une commande logique exposée par l'app : sa description (pour la
+/// découverte par `GET /devtools/commands`) et son handler.
+struct Route {
+    description: String,
+    handler: CommandHandler,
+}
+
 /// Registry globale partagée entre l'app cible et le mini-serveur axum.
 pub(crate) struct Registry {
     pub(crate) state: RwLock<BTreeMap<String, serde_json::Value>>,
@@ -101,6 +133,9 @@ pub(crate) struct Registry {
     /// Émetteur vers la pompe d'évaluation de l'app (None tant que l'app
     /// n'a pas appelé [`take_eval_requests`]).
     pub(crate) eval_tx: RwLock<Option<tokio::sync::mpsc::UnboundedSender<EvalRequest>>>,
+    /// Commandes logiques exposées par l'app via [`expose_route`], servies
+    /// par `POST /devtools/command` et `GET /devtools/commands`.
+    pub(crate) routes: RwLock<HashMap<String, Route>>,
 }
 
 impl Default for Registry {
@@ -109,6 +144,7 @@ impl Default for Registry {
             state: RwLock::new(BTreeMap::new()),
             logs: Mutex::new(VecDeque::with_capacity(LOG_BUFFER_CAPACITY)),
             eval_tx: RwLock::new(None),
+            routes: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -139,25 +175,48 @@ pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
 /// Appelable de n'importe où (avant `dioxus::launch` compris). Idempotent au
 /// sens où un second appel re-spawn une tâche mais échouera silencieusement
 /// à bind le même port — ce qui est sans conséquence pour l'app.
+///
+/// **Filet de sécurité (défense en profondeur)** : en build **release**, cette
+/// fonction est un **no-op** — le SDK n'ouvre *jamais* de port HTTP hors
+/// `debug_assertions`, même si l'intégrateur oublie d'entourer l'appel de
+/// `#[cfg(debug_assertions)]`. La garde côté appelant reste la voie normale
+/// (cf. doc du module) ; ceci en est le dernier rempart contre une fuite du
+/// serveur de debug en production.
 pub fn init(config: Config) {
-    let registry = REGISTRY.clone();
-    runtime().spawn(async move {
-        let app = Router::new()
-            .route("/devtools/state", get(state_handler))
-            .route("/devtools/logs/poll", get(logs_poll_handler))
-            .route("/devtools/eval", axum::routing::post(eval_handler))
-            .with_state(registry);
-        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], config.port));
-        match tokio::net::TcpListener::bind(addr).await {
-            Ok(listener) => {
-                let _ = axum::serve(listener, app).await;
+    // Release : no-op total (cf. filet de sécurité ci-dessus). Le corps n'est
+    // même pas compilé hors `debug_assertions`.
+    #[cfg(not(debug_assertions))]
+    let _ = config;
+
+    #[cfg(debug_assertions)]
+    {
+        let registry = REGISTRY.clone();
+        runtime().spawn(async move {
+            let app = Router::new()
+                .route("/devtools/state", get(state_handler))
+                .route("/devtools/logs/poll", get(logs_poll_handler))
+                .route("/devtools/eval", post(eval_handler))
+                .route("/devtools/command", post(command_handler))
+                .route("/devtools/commands", get(commands_handler))
+                // axum applique les `.layer()` de droite à gauche : `add_protocol_version`
+                // (dernier appelé) est la couche EXTERNE, `guard_local_host` l'INTERNE.
+                // Ainsi le 403 de la garde retraverse `add_protocol_version` et reçoit
+                // le header de version — *chaque* réponse le porte.
+                .layer(middleware::from_fn(guard_local_host))
+                .layer(middleware::from_fn(add_protocol_version))
+                .with_state(registry);
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], config.port));
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => {
+                    let _ = axum::serve(listener, app).await;
+                }
+                Err(_e) => {
+                    // En dev on choisit de rester silencieux : un port déjà pris
+                    // signifie souvent qu'une autre instance écoute déjà.
+                }
             }
-            Err(_e) => {
-                // En dev on choisit de rester silencieux : un port déjà pris
-                // signifie souvent qu'une autre instance écoute déjà.
-            }
-        }
-    });
+        });
+    }
 }
 
 /// Pose une entrée nommée dans le registry. Écrase la valeur précédente
@@ -273,6 +332,156 @@ async fn eval_handler(
     }
 }
 
+/// Côté app : enregistre une commande logique nommée. L'agent la découvre via
+/// `GET /devtools/commands` (outil MCP `list_commands`) et la déclenche via
+/// `POST /devtools/command` (`invoke_command`). Un second appel sur le même
+/// `name` remplace le handler précédent.
+///
+/// L'enregistrement est **asynchrone** (posé sur le runtime du SDK) : la route
+/// peut n'être pas visible instantanément au retour. En pratique l'app appelle
+/// `expose_route` à l'init, bien avant qu'un agent n'invoque la commande.
+///
+/// ```ignore
+/// deveye_sdk::expose_route("set-page", "Change la page affichee", |payload| {
+///     let page = payload.get("page").and_then(|v| v.as_str()).unwrap_or("Accueil");
+///     // ... muter le signal de l'app ...
+///     serde_json::json!({ "ok": true, "page": page })
+/// });
+/// ```
+pub fn expose_route<F>(name: impl Into<String>, description: impl Into<String>, handler: F)
+where
+    F: Fn(serde_json::Value) -> serde_json::Value + Send + Sync + 'static,
+{
+    let name = name.into();
+    let description = description.into();
+    let handler: CommandHandler = Arc::new(handler);
+    let registry = REGISTRY.clone();
+    runtime().spawn(async move {
+        registry
+            .routes
+            .write()
+            .await
+            .insert(name, Route { description, handler });
+    });
+}
+
+/// Corps de `POST /devtools/command`.
+#[derive(Deserialize)]
+struct CommandRequest {
+    route: String,
+    #[serde(default)]
+    payload: serde_json::Value,
+}
+
+async fn command_handler(
+    State(registry): State<Arc<Registry>>,
+    Json(body): Json<CommandRequest>,
+) -> impl IntoResponse {
+    // On clone l'Arc du handler sous le verrou puis on relâche : le handler
+    // s'exécute hors verrou (il pourrait lui-même solliciter le registry).
+    let handler = registry
+        .routes
+        .read()
+        .await
+        .get(&body.route)
+        .map(|route| route.handler.clone());
+    match handler {
+        Some(handler) => (StatusCode::OK, Json(handler(body.payload))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("commande inconnue : {}", body.route)
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn commands_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
+    let mut descriptors: Vec<CommandDescriptor> = {
+        let guard = registry.routes.read().await;
+        guard
+            .iter()
+            .map(|(name, route)| CommandDescriptor {
+                name: name.clone(),
+                description: route.description.clone(),
+            })
+            .collect()
+    };
+    descriptors.sort_by(|a, b| a.name.cmp(&b.name));
+    (StatusCode::OK, Json(descriptors))
+}
+
+/// Middleware : rejette toute requête dont le header `Host` n'est pas local,
+/// **avant** d'atteindre la route. Le bind sur `127.0.0.1` empêche les
+/// connexions extérieures mais pas le DNS-rebinding (une page malveillante
+/// peut résoudre un domaine sous son contrôle vers `127.0.0.1`) ; cette garde
+/// coupe ce vecteur.
+async fn guard_local_host(req: Request, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok());
+    match host {
+        Some(host) if host_is_local(host) => next.run(req).await,
+        _ => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Host non local" })),
+        )
+            .into_response(),
+    }
+}
+
+/// Middleware : ajoute `X-DevEye-Protocol-Version` à **chaque** réponse. Posé
+/// en couche externe de [`guard_local_host`], il enveloppe aussi le 403 de la
+/// garde, conformément au contrat (cf. `docs/wire-protocol.md` §2.3).
+async fn add_protocol_version(req: Request, next: Next) -> Response {
+    let mut response = next.run(req).await;
+    response.headers_mut().insert(
+        HeaderName::from_static("x-deveye-protocol-version"),
+        HeaderValue::from_static(PROTOCOL_VERSION),
+    );
+    response
+}
+
+/// Vrai si `suffix` est un port HTTP optionnel valide : la chaîne vide, ou
+/// `:` suivi d'**au moins** un chiffre décimal. Tout autre suffixe (`toto`,
+/// `:abc`, `:` seul) est rejeté — garde-fou symétrique entre les branches
+/// IPv4/`localhost` et IPv6 de [`host_is_local`].
+fn is_optional_port(suffix: &str) -> bool {
+    suffix.is_empty()
+        || (suffix.len() > 1
+            && suffix.starts_with(':')
+            && suffix.as_bytes()[1..].iter().all(u8::is_ascii_digit))
+}
+
+/// Vrai si `host` (valeur du header HTTP `Host`, port optionnel) désigne la
+/// machine locale. `localhost` est insensible à la casse ; les littéraux IPv6
+/// sont acceptés sous leur forme entre crochets (`[::1]`). Le port, s'il est
+/// présent, doit être purement numérique — tout autre suffixe est rejeté.
+pub(crate) fn host_is_local(host: &str) -> bool {
+    let host = host.trim();
+    if host.is_empty() {
+        return false;
+    }
+    // IPv6 littéral entre crochets : `[::1]` ou `[::1]:<port>`. Le suffixe
+    // après `]` ne peut être que vide ou un `:port` numérique — tout autre
+    // suffixe (`[::1]toto`, `[::1]:abc`) est rejeté.
+    if let Some(rest) = host.strip_prefix('[') {
+        return matches!(
+            rest.split_once(']'),
+            Some((addr, suffix)) if addr == "::1" && is_optional_port(suffix)
+        );
+    }
+    // Sinon, isoler le hostname d'un éventuel `:port` (un seul `:` hors IPv6) ;
+    // un port non numérique laisse `host` entier, qui ne matchera pas.
+    let hostname = match host.rsplit_once(':') {
+        Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => name,
+        _ => host,
+    };
+    hostname.eq_ignore_ascii_case("localhost") || hostname == "127.0.0.1"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +500,41 @@ mod tests {
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"entries\""));
         assert!(json.contains("\"page\":\"Agenda\""));
+    }
+
+    #[test]
+    fn host_is_local_accepts_loopback_forms() {
+        for host in [
+            "localhost",
+            "localhost:31337",
+            "127.0.0.1",
+            "127.0.0.1:31337",
+            "LocalHost:31337",
+            "[::1]",
+            "[::1]:31337",
+        ] {
+            assert!(host_is_local(host), "devrait accepter {host}");
+        }
+    }
+
+    #[test]
+    fn host_is_local_rejects_foreign_hosts() {
+        for host in [
+            "evil.com",
+            "evil.com:31337",
+            "127.0.0.1.evil.com",
+            "localhost.evil.com",
+            "sub.localhost",
+            "0.0.0.0",
+            "::1",            // IPv6 sans crochets : non reconnu
+            "[::1]toto",      // suffixe arbitraire apres le ] (ex-bypass)
+            "[::1]evil.com",
+            "[::1]:abc",      // port non numerique
+            "[::1]:",         // port vide
+            "127.0.0.1:abc",  // port non numerique
+            "",
+        ] {
+            assert!(!host_is_local(host), "devrait rejeter {host:?}");
+        }
     }
 }

@@ -41,6 +41,21 @@ pub enum InteractionCommand {
     Navigate { route: String },
 }
 
+/// Description d'une commande logique exposée par l'app cible, listée par
+/// `GET /devtools/commands` et l'outil MCP `list_commands`.
+///
+/// L'app enregistre ses commandes via `deveye_sdk::expose_route(name,
+/// description, closure)` ; un agent (Claude) les découvre par cette liste
+/// puis les déclenche par `POST /devtools/command` / `invoke_command`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandDescriptor {
+    /// Identifiant de la commande, identique au champ `route` de l'invocation.
+    pub name: String,
+    /// Description lisible par un agent — à quoi sert la commande et ce
+    /// qu'attend son `payload`.
+    pub description: String,
+}
+
 impl InteractionCommand {
     pub fn click(position: Position) -> Self {
         Self::Click {

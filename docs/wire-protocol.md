@@ -83,7 +83,7 @@ X-DevEye-Protocol-Version: 1
 
 Le client (adapters DevEye) peut utiliser ce header pour détecter une incompatibilité de version et produire un message d'erreur exploitable plutôt qu'un échec JSON silencieux. La valeur courante est `1` ; elle sera incrémentée en cas de changement cassant du contrat.
 
-**Note** : ce header n'est pas encore émis par l'implémentation de référence au 2026-06-24 — c'est une extension à ajouter lors de la réconciliation M0.
+**État** : émis par l'implémentation de référence depuis M0. Le middleware `add_protocol_version` est posé en **couche externe** de la garde Host, de sorte que *chaque* réponse porte le header — y compris le `403` de `guard_local_host`. Ref. code : `deveye-sdk/src/lib.rs` (`PROTOCOL_VERSION`, `add_protocol_version`).
 
 ---
 
@@ -214,7 +214,7 @@ Si `deveye-server` s'arrête ou crashe entre deux polls, les événements déjà
 
 **Disponibilité** : uniquement si l'app cible a installé une **pompe d'évaluation** (appel à `take_eval_requests()` côté SDK Rust, ou équivalent). Sans pompe, le SDK retourne `503`.
 
-Ref. code : `Atelier/deveye/deveye-sdk/src/lib.rs:85-95` (struct `EvalRequest` et champ `respond: tokio::sync::oneshot::Sender<Result<serde_json::Value, String>>`).
+Ref. code : `deveye-sdk/src/lib.rs` (struct `EvalRequest` et champ `respond: tokio::sync::oneshot::Sender<Result<serde_json::Value, String>>`).
 
 **Requête** :
 
@@ -246,7 +246,7 @@ Ref. code : `Atelier/deveye/deveye-sdk/src/lib.rs:85-95` (struct `EvalRequest` e
 
 Note : le code HTTP est `200` dans les deux cas quand l'expression a été transmise et exécutée. C'est l'absence de `value` (ou la présence de `error`) qui signale l'échec applicatif.
 
-Ref. code : `Atelier/deveye/deveye-sdk/src/lib.rs:207-213` (struct `EvalResponse` avec `skip_serializing_if` sur les deux champs optionnels) :
+Ref. code : `deveye-sdk/src/lib.rs` (struct `EvalResponse` avec `skip_serializing_if` sur les deux champs optionnels) :
 
 ```rust
 #[derive(Serialize)]
@@ -268,7 +268,7 @@ struct EvalResponse {
 | 500 Internal Server Error | La pompe a abandonné la requête (channel fermé après envoi) |
 | 403 | Header `Host` invalide |
 
-Ref. code : `Atelier/deveye/deveye-sdk/src/lib.rs:244` — timeout de 10 secondes :
+Ref. code : `deveye-sdk/src/lib.rs` — timeout de 10 secondes :
 
 ```rust
 match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
@@ -396,23 +396,25 @@ Ref. code : `deveye-sdk/src/lib.rs:276-292` (handler `commands_handler`, tri par
 
 ---
 
-## 4. Réconciliation entre les deux implémentations SDK
+## 4. État de la réconciliation (jalon M0 — fait)
 
-Au 2026-06-24, deux implémentations coexistent. Leurs différences constituent le périmètre principal du jalon M0.
+Au démarrage de M0, l'export canonique `deveye-sdk` et les copies vendored (Atelier `deveye/deveye-sdk`, Chronos `crates/deveye/deveye-sdk`) étaient **byte-identiques** : tous trois servaient `/devtools/state`, `/devtools/logs/poll` et `/devtools/eval` (pompe d'évaluation, runtime tokio dédié via `once_cell`, locks `tokio::sync`), mais **aucun** n'avait la garde `Host` ni la surface commandes — l'inverse exact de ce que décrivait l'audit initial (qui supposait un canonique avec commandes mais sans eval).
 
-| Fonctionnalité | SDK DevEye (`deveye-sdk`) | SDK Atelier vendored (`Atelier/deveye/deveye-sdk`) |
+M0 a aligné les trois sur le contrat complet de ce document :
+
+| Fonctionnalité | Avant M0 (3 SDK identiques) | Après M0 |
 |---|---|---|
 | `GET /devtools/state` | oui | oui |
 | `GET /devtools/logs/poll` | oui | oui |
-| `POST /devtools/eval` | **absent** | oui (ref. `:148`) |
-| `POST /devtools/command` | oui | **absent** |
-| `GET /devtools/commands` | oui | **absent** |
-| Garde `Host` | oui (middleware axum) | **absente** (ref. `:144-149` — pas de layer middleware) |
-| Runtime tokio | celui de l'app hôte | runtime dédié SDK (1 thread, ref. `:125-135`) |
-| `once_cell` vs `LazyLock` | `std::sync::LazyLock` (stable) | `once_cell::sync::Lazy` (dep externe) |
-| Locks | `std::sync::RwLock` / `Mutex` | `tokio::sync::RwLock` / `Mutex` |
+| `POST /devtools/eval` | oui | oui |
+| `POST /devtools/command` | **absent** | oui (`command_handler`) |
+| `GET /devtools/commands` | **absent** | oui (`commands_handler`, tri par `name`) |
+| Garde `Host` (`guard_local_host`) | **absente** | oui (middleware, `403` hors localhost) |
+| Header `X-DevEye-Protocol-Version` | **absent** | oui (toutes réponses, y compris `403`) |
+| `expose_route` (enregistrement de commandes) | **absent** | oui |
+| `PortError::Timeout` (mapping `504` côté client) | **absent** | oui (`adapter-dioxus-signals`) |
 
-Le SDK DevEye canonique doit absorber `POST /devtools/eval` et la logique de pompe. Le SDK Atelier vendored doit absorber la garde `Host`, `POST /devtools/command` et `GET /devtools/commands`. À l'issue de M0, les deux surfaces sont identiques et le SDK Atelier peut être remplacé par une dépendance directe à `deveye-sdk` (sous `cfg(all(feature = "deveye", debug_assertions))`).
+Runtime tokio dédié (`once_cell::sync::Lazy`) et locks `tokio::sync` sont conservés à l'identique sur les trois. Le canonique `deveye-sdk` est l'**implémentation de référence** ; les vendored Atelier/Chronos sont resynchronisés byte pour byte. À terme, ces vendored peuvent être remplacés par une dépendance directe à `deveye-sdk` sous `cfg(all(feature = "deveye", debug_assertions))`. Le shim .NET `Atlas.DevEye` (M3) implémentera ce même contrat.
 
 ---
 
@@ -426,7 +428,7 @@ Le SDK DevEye canonique doit absorber `POST /devtools/eval` et la logique de pom
 | POST | `/devtools/command` | selon commande | `{ "route": "...", "payload": ... }` | JSON libre | 10 s |
 | GET | `/devtools/commands` | non | aucun | `[{ "name": "...", "description": "..." }]` | 10 s |
 
-Note sur le timeout de `/devtools/eval` : le SDK impose un timeout interne de 10 s (ref. `Atelier/deveye/deveye-sdk/src/lib.rs:244`). Le client doit prévoir une marge supplémentaire pour le réseau loopback (négligeable en pratique) et la latence de sérialisation. 15-20 s côté client est raisonnable pour éviter un double-timeout.
+Note sur le timeout de `/devtools/eval` : le SDK impose un timeout interne de 10 s (ref. `deveye-sdk/src/lib.rs`, `tokio::time::timeout(Duration::from_secs(10), ...)`). Le client doit prévoir une marge supplémentaire pour le réseau loopback (négligeable en pratique) et la latence de sérialisation. 15-20 s côté client est raisonnable pour éviter un double-timeout. Côté client Rust, un `504` est distingué par `PortError::Timeout` (cf. `adapter-dioxus-signals/src/bridge.rs`).
 
 ---
 
