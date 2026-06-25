@@ -16,4 +16,4 @@ mod error;
 mod renderer;
 
 pub use error::ScreencapError;
-pub use renderer::XcapRenderer;
+pub use renderer::{MonitorRenderer, XcapRenderer};

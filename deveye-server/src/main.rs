@@ -20,11 +20,11 @@ use adapter_commands_http::SdkCommandRouter;
 use adapter_dioxus_signals::{
     DioxusSignalsInspector, EvalDomInspector, JsInteraction, SdkEvaluator,
 };
+use adapter_interaction_kwin_eis::KwinEisInteraction;
 use adapter_logs_tracing::SdkTracingLogSource;
 use adapter_mcp_server::DeveyeMcpServer;
-use adapter_interaction_kwin_eis::KwinEisInteraction;
 use adapter_screencap_kwin::KwinRenderer;
-use adapter_screencap_xcap::XcapRenderer;
+use adapter_screencap_xcap::{MonitorRenderer, XcapRenderer};
 use deveye_core::{
     ConsoleError, DomTree, InteractionCommand, Screenshot, Size, StateDump, WaitOutcome,
     WaitPredicate, WindowInfo,
@@ -127,7 +127,17 @@ fn is_kde_wayland() -> bool {
 /// Sélectionne le renderer OS-level (yeux) selon le backend demandé. Le repli
 /// vers xcap n'est jamais silencieux en cas d'erreur D-Bus : il est décidé ici,
 /// au démarrage, par la nature de la session — pas par une erreur d'exécution.
-fn build_os_renderer(title: &str, backend: ScreencapBackend) -> Arc<dyn Renderer> {
+///
+/// Sans titre de fenêtre (`--screencap-window` absent), bascule sur le repli
+/// **plein écran** [`MonitorRenderer`] — utile en CI headless (Xvfb) ou quand
+/// la fenêtre cible n'est pas titrée.
+fn build_os_renderer(title: Option<&str>, backend: ScreencapBackend) -> Arc<dyn Renderer> {
+    let Some(title) = title else {
+        eprintln!(
+            "deveye-server : yeux = MonitorRenderer (plein écran ; --screencap-window absent)."
+        );
+        return Arc::new(MonitorRenderer);
+    };
     let use_kwin = match backend {
         ScreencapBackend::Kwin => true,
         ScreencapBackend::Xcap => false,
@@ -159,25 +169,23 @@ async fn main() -> Result<()> {
     // Dioxus (retro-compatible). Des qu'un filtre est fourni, `accept_blank`
     // suit --cdp-accept-blank (false par defaut) pour ne pas s'attacher a la
     // page about:blank transitoire d'une tete WASM avant son chargement.
-    let cdp_filter = if args.cdp_target_filter_url.is_none()
-        && args.cdp_target_filter_title.is_none()
-    {
-        TargetFilter::default()
-    } else {
-        TargetFilter {
-            url_contains: args.cdp_target_filter_url.clone(),
-            title_contains: args.cdp_target_filter_title.clone(),
-            accept_blank: args.cdp_accept_blank,
-        }
-    };
+    let cdp_filter =
+        if args.cdp_target_filter_url.is_none() && args.cdp_target_filter_title.is_none() {
+            TargetFilter::default()
+        } else {
+            TargetFilter {
+                url_contains: args.cdp_target_filter_url.clone(),
+                title_contains: args.cdp_target_filter_title.clone(),
+                accept_blank: args.cdp_accept_blank,
+            }
+        };
 
     // Pièces du pont natif (SDK) : évaluateur JS via la pompe de l'app,
     // interaction en événements JS, DOM par outerHTML, yeux par xcap.
     let sdk_eval: Arc<dyn JsEvaluator> = Arc::new(SdkEvaluator::new(args.sdk_url.clone()));
-    let xcap_title = args
-        .screencap_window
-        .clone()
-        .unwrap_or_else(|| "chronos".to_string());
+    // Titre de fenêtre pour les yeux OS-level ; `None` → repli plein écran
+    // (MonitorRenderer) au lieu de l'ancien défaut codé en dur.
+    let screencap_title = args.screencap_window.clone();
 
     // CDP : connexion PARESSEUSE — un navigateur absent au démarrage (ou
     // fermé en cours de session) n'est pas fatal, chaque appel d'outil
@@ -197,14 +205,19 @@ async fn main() -> Result<()> {
         }
     };
 
-    let (renderer, interaction, dom_inspector, evaluator, window_lister): Pilotage =
-        match args.target {
+    let (renderer, interaction, dom_inspector, evaluator, window_lister): Pilotage = match args
+        .target
+    {
         TargetMode::Cdp => {
-            let lazy = Arc::new(LazyCdp::new(args.cdp_url.clone(), cdp_filter.clone(), initial));
+            let lazy = Arc::new(LazyCdp::new(
+                args.cdp_url.clone(),
+                cdp_filter.clone(),
+                initial,
+            ));
             (lazy.clone(), lazy.clone(), lazy.clone(), lazy.clone(), lazy)
         }
         TargetMode::Sdk => (
-            build_os_renderer(&xcap_title, args.screencap_backend),
+            build_os_renderer(screencap_title.as_deref(), args.screencap_backend),
             Arc::new(JsInteraction::new(sdk_eval.clone())),
             Arc::new(EvalDomInspector::new(sdk_eval.clone())),
             sdk_eval.clone(),
@@ -213,11 +226,15 @@ async fn main() -> Result<()> {
         // Auto : CDP en premier ; toute erreur de LIAISON (PortError::Network
         // — navigateur absent/fermé) bascule l'appel sur le pont natif.
         TargetMode::Auto => {
-            let lazy = Arc::new(LazyCdp::new(args.cdp_url.clone(), cdp_filter.clone(), initial));
+            let lazy = Arc::new(LazyCdp::new(
+                args.cdp_url.clone(),
+                cdp_filter.clone(),
+                initial,
+            ));
             (
                 Arc::new(FallbackRenderer {
                     primary: lazy.clone(),
-                    fallback: build_os_renderer(&xcap_title, args.screencap_backend),
+                    fallback: build_os_renderer(screencap_title.as_deref(), args.screencap_backend),
                 }),
                 Arc::new(FallbackInteraction {
                     primary: lazy.clone(),
@@ -237,7 +254,7 @@ async fn main() -> Result<()> {
         // Mains OS-level EIS ; yeux par screencap (M1) ; DOM/JS indisponibles
         // (rendu natif). Le state/les logs restent servis par le SDK plus bas.
         TargetMode::KwinEis => (
-            build_os_renderer(&xcap_title, args.screencap_backend),
+            build_os_renderer(screencap_title.as_deref(), args.screencap_backend),
             Arc::new(KwinEisInteraction::new((0, 0))),
             Arc::new(UnsupportedInspector),
             Arc::new(UnsupportedEvaluator),

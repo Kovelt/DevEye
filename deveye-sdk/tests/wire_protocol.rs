@@ -80,9 +80,11 @@ async fn wire_protocol_contract_end_to_end() {
     assert_eq!(list, serde_json::json!([]), "aucune commande au depart");
 
     // 4. expose_route puis découverte + invocation.
-    deveye_sdk::expose_route("ping", "repond pong", |payload| {
-        serde_json::json!({ "pong": true, "echo": payload })
-    });
+    deveye_sdk::expose_route(
+        "ping",
+        "repond pong",
+        |payload| serde_json::json!({ "pong": true, "echo": payload }),
+    );
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let resp = http
@@ -92,7 +94,10 @@ async fn wire_protocol_contract_end_to_end() {
         .await
         .unwrap();
     let list: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(list, serde_json::json!([{ "name": "ping", "description": "repond pong" }]));
+    assert_eq!(
+        list,
+        serde_json::json!([{ "name": "ping", "description": "repond pong" }])
+    );
 
     // invocation d'une route connue : le corps est la valeur du handler, sans enveloppe.
     let resp = http
@@ -117,7 +122,10 @@ async fn wire_protocol_contract_end_to_end() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["error"].as_str().unwrap_or_default().contains("inexistante"));
+    assert!(body["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("inexistante"));
 
     // 5. Round-trip state : set_state cote app puis GET /devtools/state.
     deveye_sdk::set_state("compteur", serde_json::json!(42));
@@ -151,7 +159,11 @@ async fn wire_protocol_contract_end_to_end() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["value"], serde_json::json!(2), "eval nominal => {{ value }}");
+    assert_eq!(
+        body["value"],
+        serde_json::json!(2),
+        "eval nominal => {{ value }}"
+    );
     assert!(body.get("error").is_none());
 
     // 7. logs/poll : injecter un log via la couche tracing puis le draîner.
@@ -167,7 +179,10 @@ async fn wire_protocol_contract_end_to_end() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(
-        body["events"].as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        body["events"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false),
         "au moins un log doit etre draine apres l'info!"
     );
 }

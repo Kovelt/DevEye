@@ -54,11 +54,23 @@ pub(crate) async fn open_session() -> Result<EisSession, EisError> {
 /// thread worker EIS. Découple le port (`Send`) des types `reis`/`xkb` qui ne
 /// le sont pas.
 pub(crate) enum EisAction {
-    Click { abs: (f64, f64), button: MouseButton },
-    Hover { abs: (f64, f64) },
-    Drag { from: (f64, f64), to: (f64, f64) },
-    Type { text: String },
-    KeyPress { key: String },
+    Click {
+        abs: (f64, f64),
+        button: MouseButton,
+    },
+    Hover {
+        abs: (f64, f64),
+    },
+    Drag {
+        from: (f64, f64),
+        to: (f64, f64),
+    },
+    Type {
+        text: String,
+    },
+    KeyPress {
+        key: String,
+    },
 }
 
 /// Un travail soumis au worker : l'action + le canal de réponse.
@@ -105,7 +117,10 @@ impl KwinEisInteraction {
     pub(crate) async fn submit(&self, action: EisAction) -> Result<(), PortError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.jobs
-            .send(Job { action, reply: reply_tx })
+            .send(Job {
+                action,
+                reply: reply_tx,
+            })
             .await
             .map_err(|_| PortError::Interaction("worker EIS arrêté".to_string()))?;
         match reply_rx.await {

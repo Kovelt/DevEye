@@ -357,11 +357,13 @@ where
     let handler: CommandHandler = Arc::new(handler);
     let registry = REGISTRY.clone();
     runtime().spawn(async move {
-        registry
-            .routes
-            .write()
-            .await
-            .insert(name, Route { description, handler });
+        registry.routes.write().await.insert(
+            name,
+            Route {
+                description,
+                handler,
+            },
+        );
     });
 }
 
@@ -526,12 +528,12 @@ mod tests {
             "localhost.evil.com",
             "sub.localhost",
             "0.0.0.0",
-            "::1",            // IPv6 sans crochets : non reconnu
-            "[::1]toto",      // suffixe arbitraire apres le ] (ex-bypass)
+            "::1",       // IPv6 sans crochets : non reconnu
+            "[::1]toto", // suffixe arbitraire apres le ] (ex-bypass)
             "[::1]evil.com",
-            "[::1]:abc",      // port non numerique
-            "[::1]:",         // port vide
-            "127.0.0.1:abc",  // port non numerique
+            "[::1]:abc",     // port non numerique
+            "[::1]:",        // port vide
+            "127.0.0.1:abc", // port non numerique
             "",
         ] {
             assert!(!host_is_local(host), "devrait rejeter {host:?}");

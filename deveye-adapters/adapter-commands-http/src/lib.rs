@@ -87,9 +87,7 @@ impl CommandRouter for SdkCommandRouter {
             // Un échec de listing est un problème de liaison/SDK, pas une
             // route inconnue : Network (et non Route) pour que les
             // compositions à repli puissent basculer.
-            return Err(PortError::Network(format!(
-                "GET {url} : statut {status}"
-            )));
+            return Err(PortError::Network(format!("GET {url} : statut {status}")));
         }
         resp.json()
             .await
