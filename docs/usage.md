@@ -140,6 +140,47 @@ cargo run -p deveye-server -- --serve-mcp --target sdk
 
 ---
 
+## Piloter une app WASM via un Chromium externe
+
+Pour une tête **WASM** (ex. Uno/atlas `net10.0-browserwasm`, ou toute SPA) servie par un Chromium externe plutôt qu'un webview Dioxus, on pilote en **CDP pur** (`--target cdp`) avec un **filtre de cible explicite** (le défaut `dioxus` ne matcherait pas).
+
+```bash
+# Terminal 1 — l'app WASM (dotnet, dx, vite…), ex. sur http://localhost:5000
+dotnet run --project src/MonApp -f net10.0-browserwasm
+# attendre « Now listening on: http://localhost:5000 »
+
+# Terminal 2 — Chromium ISOLÉ en mode debug (profil dédié OBLIGATOIRE)
+brave --remote-debugging-port=9222 --user-data-dir=/tmp/deveye-brave http://localhost:5000
+
+# Terminal 3 — Claude Code dans le projet client
+claude
+```
+
+> **`--user-data-dir` obligatoire** : sans lui, si Brave/Chrome est déjà ouvert, l'instance existante absorbe la commande et ignore `--remote-debugging-port` → `/json/version` injoignable.
+
+`.mcp.json` ciblant la tête WASM par sous-chaîne d'URL (aucun nom d'app n'est codé en dur dans DevEye — c'est une valeur d'opérateur) :
+
+```json
+{
+  "mcpServers": {
+    "deveye": {
+      "type": "stdio",
+      "command": "/chemin/vers/DevEye/target/release/deveye-server",
+      "args": [
+        "--cdp-url", "http://localhost:9222",
+        "--cdp-target-filter-url", "localhost:5000",
+        "--target", "cdp",
+        "--serve-mcp"
+      ]
+    }
+  }
+}
+```
+
+Variante par titre : `--cdp-target-filter-title atlas` (les deux flags se combinent en OU). En cible CDP pure, le SDK opt-in n'est pas embarqué (cible .NET/WASM) → `state`, `logs_tail`, `invoke_command`, `list_commands` renvoient une erreur réseau explicite ; seules les capacités CDP (`screenshot`, `click*`, `right_click`, `type_text`, `eval_js`, `dom`, `navigate`) répondent.
+
+---
+
 ## Étape 5 — Vérifier que tout marche
 
 Dans le client, après les deux lancements :
@@ -179,7 +220,7 @@ Côté app cible, le seul fichier qui référence DevEye est son `Cargo.toml` (f
 | Symptôme | Cause probable | Fix |
 |----------|----------------|-----|
 | `CDP injoignable au demarrage (...) — reconnexion automatique au premier appel d'outil.` | App cible pas lancée avec `--features deveye`, navigateur CDP absent, ou WebView2 pas prêt | Lancer l'app/navigateur puis **rappeler l'outil** : l'attache est paresseuse, inutile de relancer `deveye-server`. En natif Linux, utiliser `--target sdk`. |
-| `timeout en attente d'une page CDP attachable (10 s)` | Aucune page ne matche le filtre (URL/titre contient `dioxus`) | Vérifier que l'app est bien chargée ; ajuster `target_matches` dans `client.rs` si l'app cible a un autre title/URL |
+| `timeout en attente d'une page CDP attachable (10 s)` | Aucune page ouverte ne matche le filtre de cible | Vérifier que le navigateur/l'app est chargé(e) ; passer `--cdp-target-filter-url <sous-chaine>` ou `--cdp-target-filter-title <sous-chaine>` pour viser une autre page (ex. tête WASM) |
 | `Connection refused: 127.0.0.1:31337` côté `state` ou `logs_tail` | Feature `deveye` absente du build de l'app | Vérifier `dx serve --features deveye`. Le SDK refuse de bind sinon |
 | Le client ne voit pas `deveye` dans `/mcp` | `.mcp.json` mal placé, syntaxe JSON invalide, ou chemin du binaire faux | Vérifier `.mcp.json` à la racine ; valider la syntaxe ; vérifier que `target\release\deveye-server.exe` existe |
 | `Tool execution failed: ...` quand on appelle un outil | Erreur côté adapter (CDP injoignable, SDK crashé, etc.) | Regarder les logs `deveye-server` dans le panneau MCP du client ; relancer l'app si besoin |

@@ -60,6 +60,8 @@ struct CdpInner {
     /// Permet à l'appelant de jeter ce client et d'en reconnecter un autre
     /// — la session page se ré-attache toute seule, pas le WS navigateur.
     closed: AtomicBool,
+    /// Filtre de sélection de la page cible (configurable ; défaut Dioxus).
+    filter: TargetFilter,
 }
 
 #[derive(Clone, Debug)]
@@ -117,8 +119,8 @@ impl CdpClient {
     ///
     /// Bootstrap : `GET /json/version` → WS browser → `setDiscoverTargets`
     /// → attendre `Target.attachedToTarget` (jusqu'à 5 s) pour la première
-    /// page qui matche le filtre Dioxus.
-    pub async fn connect(http_url: &str) -> Result<Self, CdpError> {
+    /// page qui matche `filter`.
+    pub async fn connect(http_url: &str, filter: TargetFilter) -> Result<Self, CdpError> {
         let version_url = format!("{}/json/version", http_url.trim_end_matches('/'));
         let http = reqwest::Client::builder()
             .build()
@@ -146,6 +148,7 @@ impl CdpClient {
             session: Mutex::new(None),
             attached: Notify::new(),
             closed: AtomicBool::new(false),
+            filter,
         });
 
         spawn_writer(sink, cmd_rx);
@@ -324,7 +327,7 @@ async fn handle_event(inner: &Arc<CdpInner>, method: &str, params: Value) {
             let Ok(p) = serde_json::from_value::<TargetCreatedParams>(params) else {
                 return;
             };
-            if !target_matches(&p.target_info) {
+            if !inner.filter.matches(&p.target_info) {
                 return;
             }
             attach_to(inner, &p.target_info.target_id);
@@ -333,7 +336,7 @@ async fn handle_event(inner: &Arc<CdpInner>, method: &str, params: Value) {
             let Ok(p) = serde_json::from_value::<AttachedToTargetParams>(params) else {
                 return;
             };
-            if !target_matches(&p.target_info) {
+            if !inner.filter.matches(&p.target_info) {
                 return;
             }
             *inner.session.lock().await = Some(SessionInfo {
@@ -385,61 +388,114 @@ fn attach_to(inner: &Arc<CdpInner>, target_id: &str) {
     let _ = inner.cmd_tx.send(Message::Text(payload));
 }
 
-/// Filtre les targets CDP candidats à l'attache automatique.
+/// Filtre de sélection de la page CDP cible.
 ///
-/// Pour Chronos / Dioxus desktop, la page principale a typiquement :
-/// - `type = "page"`,
-/// - `url = "http://dioxus.index.html/"` (asset manganis),
-/// - `title = "Dioxus app"` (ou personnalisé via la config Dioxus).
+/// Conditions évaluées en **OU** sur un même target `type=page` : URL contenant
+/// `url_contains`, titre contenant `title_contains`, ou `about:blank` si
+/// `accept_blank`. Comparaisons insensibles à la casse. Configurable depuis la
+/// CLI (`--cdp-target-filter-url` / `--cdp-target-filter-title`) — **aucun nom
+/// d'app n'est codé en dur** ici (règle de découplage, cf. `architecture.md`).
 ///
-/// On accepte large : toute page dont l'URL ou le titre évoque Dioxus, ou
-/// une `about:blank` (cas transitoire pendant le boot wry).
-fn target_matches(t: &TargetInfo) -> bool {
-    if t.kind != "page" {
-        return false;
+/// `Default` reproduit le comportement historique pour les webviews **Dioxus**
+/// (URL ou titre contenant `dioxus`, ou `about:blank` transitoire au boot wry).
+/// Une app Dioxus desktop expose typiquement `url = http://dioxus.index.html/`.
+#[derive(Clone, Debug)]
+pub struct TargetFilter {
+    /// Sous-chaîne attendue dans l'URL de la page (insensible à la casse).
+    pub url_contains: Option<String>,
+    /// Sous-chaîne attendue dans le titre de la page (insensible à la casse).
+    pub title_contains: Option<String>,
+    /// Accepte les pages `about:blank` (transitoire wry au boot).
+    pub accept_blank: bool,
+}
+
+impl Default for TargetFilter {
+    fn default() -> Self {
+        Self {
+            url_contains: Some("dioxus".to_string()),
+            title_contains: Some("dioxus".to_string()),
+            accept_blank: true,
+        }
     }
-    let title = t.title.to_lowercase();
-    let url = t.url.to_lowercase();
-    title.contains("dioxus")
-        || title.contains("chronos")
-        || url.contains("dioxus")
-        || url == "about:blank"
+}
+
+impl TargetFilter {
+    /// Vrai si `t` est une page acceptée par ce filtre.
+    fn matches(&self, t: &TargetInfo) -> bool {
+        if t.kind != "page" {
+            return false;
+        }
+        let title = t.title.to_lowercase();
+        let url = t.url.to_lowercase();
+        if self.accept_blank && url == "about:blank" {
+            return true;
+        }
+        let url_ok = self
+            .url_contains
+            .as_deref()
+            .map(|s| url.contains(&s.to_lowercase()))
+            .unwrap_or(false);
+        let title_ok = self
+            .title_contains
+            .as_deref()
+            .map(|s| title.contains(&s.to_lowercase()))
+            .unwrap_or(false);
+        url_ok || title_ok
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn target_matches_page_dioxus_url() {
-        let t = TargetInfo {
+    fn page(title: &str, url: &str) -> TargetInfo {
+        TargetInfo {
             target_id: "x".into(),
             kind: "page".into(),
-            title: "Dioxus app".into(),
-            url: "http://dioxus.index.html/".into(),
-        };
-        assert!(target_matches(&t));
+            title: title.into(),
+            url: url.into(),
+        }
     }
 
     #[test]
-    fn target_matches_rejects_service_worker() {
-        let t = TargetInfo {
-            target_id: "x".into(),
-            kind: "service_worker".into(),
-            title: "Dioxus app".into(),
-            url: "http://dioxus.index.html/".into(),
-        };
-        assert!(!target_matches(&t));
+    fn default_filter_matches_dioxus_url() {
+        assert!(TargetFilter::default().matches(&page("Dioxus app", "http://dioxus.index.html/")));
     }
 
     #[test]
-    fn target_matches_accepts_about_blank_page() {
-        let t = TargetInfo {
-            target_id: "x".into(),
-            kind: "page".into(),
-            title: "".into(),
-            url: "about:blank".into(),
+    fn default_filter_rejects_service_worker() {
+        let mut t = page("Dioxus app", "http://dioxus.index.html/");
+        t.kind = "service_worker".into();
+        assert!(!TargetFilter::default().matches(&t));
+    }
+
+    #[test]
+    fn default_filter_accepts_about_blank_page() {
+        assert!(TargetFilter::default().matches(&page("", "about:blank")));
+    }
+
+    #[test]
+    fn filter_url_contains_matches_wasm_page() {
+        let filter = TargetFilter {
+            url_contains: Some("localhost:5000".to_string()),
+            title_contains: None,
+            accept_blank: false,
         };
-        assert!(target_matches(&t));
+        assert!(filter.matches(&page("Atlas", "http://localhost:5000/")));
+        // accept_blank=false : la page transitoire about:blank est rejetée.
+        assert!(!filter.matches(&page("", "about:blank")));
+        // une autre URL ne matche pas.
+        assert!(!filter.matches(&page("Atlas", "http://localhost:9999/")));
+    }
+
+    #[test]
+    fn filter_title_contains_is_case_insensitive() {
+        let filter = TargetFilter {
+            url_contains: None,
+            title_contains: Some("Atlas".to_string()),
+            accept_blank: false,
+        };
+        // filtre "Atlas" (majuscule) doit matcher un titre "atlas" (minuscule).
+        assert!(filter.matches(&page("atlas", "http://localhost:5000/")));
     }
 }
