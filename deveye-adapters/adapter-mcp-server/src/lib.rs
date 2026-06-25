@@ -2,9 +2,10 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Douze outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Treize outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `click` : clic à `(x, y)` (bouton gauche)
+//! - `right_click` : clic droit à `(x, y)` (ouvre les menus contextuels)
 //! - `hover` : déplace le pointeur à `(x, y)` sans presser (déclenche
 //!   `mouseover`/`mouseenter`)
 //! - `click_selector` : clique sur le premier élément matchant un sélecteur
@@ -46,7 +47,7 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use deveye_core::{InteractionCommand, Position};
+use deveye_core::{InteractionCommand, MouseButton, Position};
 use deveye_ports::{
     AppInspector, CommandRouter, InteractionSink, JsEvaluator, LogSource, Renderer,
 };
@@ -188,6 +189,22 @@ impl DeveyeMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
         let cmd = InteractionCommand::click(Position::new(p.x, p.y));
+        self.interaction.dispatch(cmd).await.map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(
+        description = "Effectue un clic DROIT (menu contextuel) sur le viewport de l'app cible aux coordonnées absolues fournies. Déclenche button=right (contextmenu) — ouvre les menus contextuels des UI qui les écoutent."
+    )]
+    async fn right_click(
+        &self,
+        Parameters(p): Parameters<ClickParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let cmd = InteractionCommand::Click {
+            position: Position::new(p.x, p.y),
+            button: MouseButton::Right,
+        };
         self.interaction.dispatch(cmd).await.map_err(internal)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
@@ -353,9 +370,9 @@ impl ServerHandler for DeveyeMcpServer {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
             "DevEye MCP — observe et pilote une app vivante en dev. \
-             Outils : screenshot, click, hover, click_selector, click_text, \
-             eval_js, type_text, dom, state, logs_tail, invoke_command, \
-             list_commands."
+             Outils : screenshot, click, right_click, hover, click_selector, \
+             click_text, eval_js, type_text, dom, state, logs_tail, \
+             invoke_command, list_commands."
                 .to_string(),
         );
         info
@@ -364,4 +381,22 @@ impl ServerHandler for DeveyeMcpServer {
 
 fn internal<E: std::fmt::Display>(err: E) -> McpError {
     McpError::internal_error(err.to_string(), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use deveye_core::{InteractionCommand, MouseButton, Position};
+
+    #[test]
+    fn right_click_command_serializes_button_right() {
+        // Contrat sur lequel s'appuie l'outil `right_click` : le bouton droit
+        // se sérialise en `"right"`, ce qu'attend l'adapter d'interaction.
+        let cmd = InteractionCommand::Click {
+            position: Position::new(100, 200),
+            button: MouseButton::Right,
+        };
+        let v = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(v["button"], "right");
+        assert_eq!(v["kind"], "click");
+    }
 }
