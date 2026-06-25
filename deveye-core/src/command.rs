@@ -39,6 +39,9 @@ pub enum InteractionCommand {
     /// Navigation logique à une route définie par l'app (ex. `"Agenda"`).
     /// L'app cible décide comment l'interpréter via son `CommandRouter`.
     Navigate { route: String },
+    /// Glisser-déposer de `from` vers `to`, bouton gauche maintenu pendant le
+    /// déplacement (réordonnancement, Kanban…).
+    DragDrop { from: Position, to: Position },
 }
 
 /// Description d'une commande logique exposée par l'app cible, listée par
@@ -81,6 +84,10 @@ impl InteractionCommand {
     pub fn hover(position: Position) -> Self {
         Self::Hover { position }
     }
+
+    pub fn drag_drop(from: Position, to: Position) -> Self {
+        Self::DragDrop { from, to }
+    }
 }
 
 #[cfg(test)]
@@ -112,6 +119,20 @@ mod tests {
         let v = json!({ "kind": "navigate", "route": "Agenda" });
         let cmd: InteractionCommand = serde_json::from_value(v).unwrap();
         assert_eq!(cmd, InteractionCommand::navigate("Agenda"));
+    }
+
+    #[test]
+    fn drag_drop_serializes_with_kind_tag() {
+        let cmd = InteractionCommand::drag_drop(Position::new(10, 20), Position::new(100, 200));
+        let v = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(
+            v,
+            json!({
+                "kind": "drag-drop",
+                "from": { "x": 10, "y": 20 },
+                "to": { "x": 100, "y": 200 }
+            })
+        );
     }
 
     #[test]
