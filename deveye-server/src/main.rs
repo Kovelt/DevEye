@@ -21,6 +21,7 @@ use adapter_dioxus_signals::{
 };
 use adapter_logs_tracing::SdkTracingLogSource;
 use adapter_mcp_server::DeveyeMcpServer;
+use adapter_screencap_kwin::KwinRenderer;
 use adapter_screencap_xcap::XcapRenderer;
 use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump};
 use deveye_ports::{
@@ -48,6 +49,11 @@ struct Args {
     #[arg(long)]
     screencap_window: Option<String>,
 
+    /// Backend de capture OS-level (yeux en mode `sdk` ou repli `auto`) :
+    /// `auto` choisit KWin sous Wayland/KDE, xcap sinon ; `kwin`/`xcap` forcent.
+    #[arg(long, value_enum, default_value_t = ScreencapBackend::Auto)]
+    screencap_backend: ScreencapBackend,
+
     /// Cible des yeux et des mains :
     /// - `auto` : CDP d'abord, repli SDK + xcap des que le CDP est injoignable ;
     /// - `cdp`  : CDP uniquement (webview Chromium — `just ui-eyes`) ;
@@ -66,6 +72,47 @@ enum TargetMode {
     Auto,
     Cdp,
     Sdk,
+}
+
+/// Backend de capture OS-level (indépendant du backend CDP).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum ScreencapBackend {
+    /// Détection auto : KWin sous Wayland/KDE, xcap sinon.
+    Auto,
+    /// KWin D-Bus `ScreenShot2` — Wayland natif KDE (pixel-perfect, sans XWayland).
+    Kwin,
+    /// xcap — X11, XWayland, ou Wayland non-KDE.
+    Xcap,
+}
+
+/// Vrai si la session est KDE Plasma sous Wayland natif (seul contexte où
+/// `org.kde.KWin.ScreenShot2` répond).
+fn is_kde_wayland() -> bool {
+    let wayland = std::env::var("XDG_SESSION_TYPE")
+        .map(|v| v.eq_ignore_ascii_case("wayland"))
+        .unwrap_or(false);
+    let kde = std::env::var("XDG_CURRENT_DESKTOP")
+        .map(|v| v.to_uppercase().contains("KDE"))
+        .unwrap_or(false);
+    wayland && kde
+}
+
+/// Sélectionne le renderer OS-level (yeux) selon le backend demandé. Le repli
+/// vers xcap n'est jamais silencieux en cas d'erreur D-Bus : il est décidé ici,
+/// au démarrage, par la nature de la session — pas par une erreur d'exécution.
+fn build_os_renderer(title: &str, backend: ScreencapBackend) -> Arc<dyn Renderer> {
+    let use_kwin = match backend {
+        ScreencapBackend::Kwin => true,
+        ScreencapBackend::Xcap => false,
+        ScreencapBackend::Auto => is_kde_wayland(),
+    };
+    if use_kwin {
+        eprintln!("deveye-server : yeux = KWin D-Bus ScreenShot2 (Wayland natif KDE).");
+        Arc::new(KwinRenderer::new(title))
+    } else {
+        eprintln!("deveye-server : yeux = xcap (X11 / XWayland / Wayland non-KDE).");
+        Arc::new(XcapRenderer::new(title))
+    }
 }
 
 /// Le quatuor pilotant : yeux, mains, DOM, évaluateur JS.
@@ -112,7 +159,7 @@ async fn main() -> Result<()> {
             (lazy.clone(), lazy.clone(), lazy.clone(), lazy)
         }
         TargetMode::Sdk => (
-            Arc::new(XcapRenderer::new(xcap_title)),
+            build_os_renderer(&xcap_title, args.screencap_backend),
             Arc::new(JsInteraction::new(sdk_eval.clone())),
             Arc::new(EvalDomInspector::new(sdk_eval.clone())),
             sdk_eval.clone(),
@@ -124,7 +171,7 @@ async fn main() -> Result<()> {
             (
                 Arc::new(FallbackRenderer {
                     primary: lazy.clone(),
-                    fallback: Arc::new(XcapRenderer::new(xcap_title)),
+                    fallback: build_os_renderer(&xcap_title, args.screencap_backend),
                 }),
                 Arc::new(FallbackInteraction {
                     primary: lazy.clone(),
