@@ -11,13 +11,17 @@
 #![deny(rust_2018_idioms)]
 
 pub mod command;
+pub mod console_error;
 pub mod log_event;
 pub mod session;
 pub mod snapshot;
+pub mod wait_condition;
 pub mod window_info;
 
 pub use command::{CommandDescriptor, InteractionCommand, MouseButton};
+pub use console_error::{ConsoleError, ConsoleLevel};
 pub use log_event::{LogEvent, LogLevel};
 pub use session::{AppKind, AppSession};
 pub use snapshot::{DomTree, Position, Screenshot, Size, StateDump};
+pub use wait_condition::{WaitOutcome, WaitPredicate};
 pub use window_info::WindowInfo;
