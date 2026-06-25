@@ -181,6 +181,30 @@ Variante par titre : `--cdp-target-filter-title atlas` (les deux flags se combin
 
 ---
 
+## Piloter atlas (.NET / Uno) — shim Atlas.DevEye
+
+atlas n'embarque ni CDP ni le SDK Rust (c'est du .NET 10 / Uno). Le pont est le **shim `Atlas.DevEye`** (projet C# injecté **en Debug uniquement**) qui sert le même wire protocol HTTP que le SDK Rust, sur deux sources / deux ports :
+
+| Source | Port | Capacités |
+|---|---|---|
+| **Atlas.App** — tête desktop Skia (Debug) | `31337` | `state` (ViewModels), `logs_tail` (logs client), `invoke_command` / `list_commands` |
+| **Atlas.Api** — backend ASP.NET (Debug) | `31338` | `logs_tail` (Serilog), `invoke_command` / `list_commands` |
+
+```bash
+# Tête desktop atlas en Debug → lance le shim sur 127.0.0.1:31337
+dotnet run --project src/Atlas.App -f net10.0-desktop -c Debug
+
+# deveye-server : état + logs du CLIENT atlas (port 31337)
+cargo run -p deveye-server -- --target sdk --sdk-url http://localhost:31337 --serve-mcp
+```
+
+- **Logs backend** (Serilog) : pointer une seconde instance sur `--sdk-url http://localhost:31338`.
+- **Yeux** sur la tête **WASM** d'atlas : passer par le mode CDP (cf. section précédente), p. ex. `--target cdp --cdp-target-filter-title atlas`. La tête desktop Skia n'est pas un webview ; pour la voir, le screencap OS (`--screencap-window atlas`) reste possible.
+- `eval_js` répond **503** côté .NET (pas de pompe webview) — les capacités JS/DOM passent par le CDP de la tête WASM.
+- Le shim n'existe **qu'en build Debug** (référence `Atlas.DevEye` conditionnée Debug + `#if DEBUG`) : aucun binaire Release d'atlas n'embarque DevEye.
+
+---
+
 ## Étape 5 — Vérifier que tout marche
 
 Dans le client, après les deux lancements :
