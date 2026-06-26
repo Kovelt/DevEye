@@ -138,6 +138,13 @@ pub(crate) struct Registry {
     /// n'a pas appelé [`take_eval_requests`]).
     pub(crate) eval_tx:
         tokio::sync::RwLock<Option<tokio::sync::mpsc::UnboundedSender<EvalRequest>>>,
+    /// Émetteur du canal de drain des logs (N6) : posé une seule fois par
+    /// [`install_tracing_layer`][crate::install_tracing_layer]. La couche
+    /// tracing envoie chaque [`deveye_core::LogEvent`] via ce canal
+    /// (synchrone, non bloquant) ; une unique tâche tokio consomme le
+    /// récepteur et pousse dans `logs`, préservant l'ordre d'émission.
+    pub(crate) log_tx:
+        std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<deveye_core::LogEvent>>,
     /// Commandes logiques exposées par l'app via [`expose_route`], servies
     /// par `POST /devtools/command` et `GET /devtools/commands`.
     pub(crate) routes: std::sync::RwLock<HashMap<String, Route>>,
@@ -149,6 +156,7 @@ impl Default for Registry {
             state: std::sync::RwLock::new(BTreeMap::new()),
             logs: Mutex::new(VecDeque::with_capacity(LOG_BUFFER_CAPACITY)),
             eval_tx: tokio::sync::RwLock::new(None),
+            log_tx: std::sync::OnceLock::new(),
             routes: std::sync::RwLock::new(HashMap::new()),
         }
     }

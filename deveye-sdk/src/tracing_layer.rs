@@ -11,13 +11,13 @@ use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
 
 use deveye_core::{LogEvent, LogLevel};
 
-use crate::{LOG_BUFFER_CAPACITY, REGISTRY};
-
 /// Installe un layer DevEye dans le subscriber global tracing.
 ///
 /// **À appeler une seule fois**, idéalement juste après `init`. Si un autre
 /// subscriber est déjà installé, cet appel échoue silencieusement (le runtime
-/// global tracing ne supporte qu'un seul subscriber actif).
+/// global tracing ne supporte qu'un seul subscriber actif). Les appels
+/// ultérieurs sont idempotents : le canal de drain et la tâche de consommation
+/// sont créés uniquement lors du premier appel (gardé par `OnceLock`).
 ///
 /// En build **release**, cette fonction est un no-op — cohérent avec le fait
 /// que le SDK est entièrement inactif hors `debug_assertions`.
@@ -28,6 +28,27 @@ pub fn install_tracing_layer() {
         use tracing_subscriber::Registry;
         let subscriber = Registry::default().with(DeveyeLayer);
         let _ = tracing::subscriber::set_global_default(subscriber);
+
+        // Canal de drain (N6) : un seul spawn consomme tous les LogEvent dans
+        // l'ordre d'émission, éliminant le coût d'un tokio::spawn par log.
+        // OnceLock garantit l'idempotence si install_tracing_layer est appelé
+        // plusieurs fois : seul le premier appel installe le canal.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<LogEvent>();
+        // Si le OnceLock est deja peuple (2e appel), set retourne Err(tx) et
+        // tx est dropped ; le drain ci-dessous reoit None immediatement et
+        // se termine proprement.
+        let _ = crate::REGISTRY.log_tx.set(tx);
+        let registry = crate::REGISTRY.clone();
+        crate::runtime().spawn(async move {
+            let mut rx = rx;
+            while let Some(log) = rx.recv().await {
+                let mut guard = registry.logs.lock().await;
+                if guard.len() >= crate::LOG_BUFFER_CAPACITY {
+                    guard.pop_front();
+                }
+                guard.push_back(log);
+            }
+        });
     }
 }
 
@@ -67,14 +88,12 @@ where
         )
         .with_fields(visitor.fields.unwrap_or(serde_json::Value::Null));
 
-        let registry = REGISTRY.clone();
-        crate::runtime().spawn(async move {
-            let mut guard = registry.logs.lock().await;
-            if guard.len() >= LOG_BUFFER_CAPACITY {
-                guard.pop_front();
-            }
-            guard.push_back(log);
-        });
+        // Envoi synchrone non bloquant vers la tâche de drain unique.
+        // Si le canal n'est pas encore initialise (install_tracing_layer
+        // n'a pas encore ete appele), on abandonne silencieusement.
+        if let Some(tx) = crate::REGISTRY.log_tx.get() {
+            let _ = tx.send(log);
+        }
     }
 }
 
@@ -150,5 +169,22 @@ mod tests {
         assert_eq!(map_level(Level::INFO), LogLevel::Info);
         assert_eq!(map_level(Level::WARN), LogLevel::Warn);
         assert_eq!(map_level(Level::ERROR), LogLevel::Error);
+    }
+
+    /// Verifie que le canal unbounded preserve l'ordre FIFO des LogEvent,
+    /// propriete sur laquelle la tache de drain de N6 s'appuie.
+    /// Test purement synchrone : try_recv ne necessite pas de runtime tokio.
+    #[test]
+    fn log_drain_channel_preserves_fifo_order() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<LogEvent>();
+        let e1 = LogEvent::new(LogLevel::Info, "app", "first");
+        let e2 = LogEvent::new(LogLevel::Warn, "app", "second");
+        let e3 = LogEvent::new(LogLevel::Error, "app", "third");
+        tx.send(e1).unwrap();
+        tx.send(e2).unwrap();
+        tx.send(e3).unwrap();
+        assert_eq!(rx.try_recv().unwrap().message, "first");
+        assert_eq!(rx.try_recv().unwrap().message, "second");
+        assert_eq!(rx.try_recv().unwrap().message, "third");
     }
 }

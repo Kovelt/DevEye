@@ -407,6 +407,19 @@ fn attach_to(inner: &Arc<CdpInner>, target_id: &str) {
 /// `Default` reproduit le comportement historique pour les webviews **Dioxus**
 /// (URL ou titre contenant `dioxus`, ou `about:blank` transitoire au boot wry).
 /// Une app Dioxus desktop expose typiquement `url = http://dioxus.index.html/`.
+///
+/// # Comportement avec double-None
+///
+/// Si `url_contains = None` **et** `title_contains = None`, `matches` renvoie
+/// `false` pour toute page non-blank : chaque `Option::unwrap_or(false)` vaut
+/// `false`, donc leur OU vaut `false` également.
+/// - `accept_blank = false` : **rejette absolument tout**.
+/// - `accept_blank = true` : accepte uniquement `about:blank` (garde anticipée
+///   avant les vérifications des `Option`).
+///
+/// Ce comportement n'est **pas** « pas de filtre = tout accepter » : un
+/// `TargetFilter` double-None sans `accept_blank` est un filtre qui refuse
+/// toutes les pages — ne pas l'utiliser comme filtre ouvert.
 #[derive(Clone, Debug)]
 pub struct TargetFilter {
     /// Sous-chaîne attendue dans l'URL de la page (insensible à la casse).
@@ -429,6 +442,23 @@ impl Default for TargetFilter {
 
 impl TargetFilter {
     /// Vrai si `t` est une page acceptée par ce filtre.
+    ///
+    /// # Logique de décision
+    ///
+    /// 1. Rejette tout ce qui n'est pas `kind == "page"`.
+    /// 2. Si `accept_blank` est vrai et `url == "about:blank"`, accepte
+    ///    immédiatement (page transitoire wry au boot — avant tout autre test).
+    /// 3. `url_ok = url_contains.is_some() && url.contains(url_contains)`
+    ///    (comparaison insensible à la casse).
+    /// 4. `title_ok = title_contains.is_some() && title.contains(title_contains)`
+    ///    (comparaison insensible à la casse).
+    /// 5. Retourne `url_ok || title_ok`.
+    ///
+    /// **Cas double-None** : si `url_contains` et `title_contains` sont tous
+    /// deux `None`, les étapes 3-4 valent toutes les deux `false`
+    /// (`Option::unwrap_or(false)`), donc l'étape 5 retourne `false`.
+    /// Toute page non-blank est rejetée dans ce cas.
+    /// Voir aussi la documentation de [`TargetFilter`] pour les détails.
     fn matches(&self, t: &TargetInfo) -> bool {
         if t.kind != "page" {
             return false;
@@ -654,5 +684,75 @@ mod tests {
         };
         // filtre "Atlas" (majuscule) doit matcher un titre "atlas" (minuscule).
         assert!(filter.matches(&page("atlas", "http://localhost:5000/")));
+    }
+
+    // -------------------------------------------------------------------------
+    // N20 — TargetFilter double-None
+    // -------------------------------------------------------------------------
+
+    // Cas double-None, accept_blank=false : REJETTE toutes les pages sans
+    // exception. Les deux unwrap_or(false) valent false ; leur OU aussi.
+    // Ce n'est PAS un filtre "tout accepter" — c'est un filtre "tout rejeter".
+    #[test]
+    fn target_filter_double_none_accept_blank_false_rejects_all_pages() {
+        let filter = TargetFilter {
+            url_contains: None,
+            title_contains: None,
+            accept_blank: false,
+        };
+        // page ordinaire
+        assert!(!filter.matches(&page("Any title", "http://example.com/")));
+        // page qui matche le défaut Dioxus (mais le filtre n'a pas de critère)
+        assert!(!filter.matches(&page("Dioxus app", "http://dioxus.index.html/")));
+        // about:blank également rejeté (accept_blank=false)
+        assert!(!filter.matches(&page("", "about:blank")));
+        // page vide
+        assert!(!filter.matches(&page("", "")));
+    }
+
+    // Cas double-None, accept_blank=true : seule about:blank passe (garde
+    // anticipée, avant les vérifications Option). Toute autre page est rejetée.
+    #[test]
+    fn target_filter_double_none_accept_blank_true_only_accepts_blank() {
+        let filter = TargetFilter {
+            url_contains: None,
+            title_contains: None,
+            accept_blank: true,
+        };
+        // about:blank : accepté grâce à la garde accept_blank (avant tout le reste)
+        assert!(filter.matches(&page("", "about:blank")));
+        // page normale : rejetée même si accept_blank=true
+        assert!(!filter.matches(&page("Any title", "http://example.com/")));
+        assert!(!filter.matches(&page("Dioxus app", "http://dioxus.index.html/")));
+    }
+
+    // Filtre par url_contains seul (title_contains=None) : seules les pages
+    // dont l'URL contient la sous-chaîne sont acceptées.
+    #[test]
+    fn filter_url_only_rejects_title_match_without_url_match() {
+        let filter = TargetFilter {
+            url_contains: Some("myapp".to_string()),
+            title_contains: None,
+            accept_blank: false,
+        };
+        // URL matche => accepté
+        assert!(filter.matches(&page("Anything", "http://myapp.local/")));
+        // Titre matche mais pas l'URL => rejeté (title_contains=None)
+        assert!(!filter.matches(&page("myapp", "http://other.local/")));
+    }
+
+    // Filtre par title_contains seul (url_contains=None) : seules les pages
+    // dont le titre contient la sous-chaîne sont acceptées.
+    #[test]
+    fn filter_title_only_rejects_url_match_without_title_match() {
+        let filter = TargetFilter {
+            url_contains: None,
+            title_contains: Some("myapp".to_string()),
+            accept_blank: false,
+        };
+        // Titre matche => accepté
+        assert!(filter.matches(&page("MyApp Dashboard", "http://other.local/")));
+        // URL matche mais pas le titre => rejeté (url_contains=None)
+        assert!(!filter.matches(&page("Unrelated", "http://myapp.local/")));
     }
 }

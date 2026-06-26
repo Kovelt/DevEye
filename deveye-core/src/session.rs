@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 /// le nom du projet (`"chronos"`). `kind` aide les couches supérieures (UI,
 /// MCP) à présenter les bonnes interactions selon la cible. `ended_at` reste
 /// `None` tant que la session est active ; l'orchestrateur le pose à la clôture.
+// Reserved for future runtime wiring: the multi-app orchestrator that creates
+// and tracks AppSession instances is planned but not yet implemented. No adapter
+// or server binary instantiates this type at runtime today. #[allow(dead_code)]
+// is intentional -- suppresses the lint while keeping the domain model visible
+// and ready to wire in without further ceremony.
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppSession {
     pub id: String,
@@ -21,6 +27,8 @@ pub struct AppSession {
 /// Sert à choisir le bon adapter et à informer le consommateur (Claude, UI
 /// humaine) du genre d'interactions possibles. `Unknown` est un placeholder
 /// quand le binaire orchestrateur attache une cible sans la qualifier.
+// Reserved for future runtime wiring -- same rationale as AppSession above.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AppKind {
@@ -40,6 +48,9 @@ pub enum AppKind {
     Unknown,
 }
 
+// Reserved for future runtime wiring -- methods are intentionally dead until
+// the orchestrator that manages AppSession lifecycle is implemented.
+#[allow(dead_code)]
 impl AppSession {
     pub fn new(id: impl Into<String>, kind: AppKind) -> Self {
         Self {
