@@ -45,7 +45,7 @@ Alternative en dev itératif (recompile à la volée, plus lent au démarrage) :
 
 **Notes** :
 
-- `--target auto` (défaut) tente CDP puis bascule **appel par appel** sur le pont natif si le CDP est injoignable ; `--target cdp` / `--target sdk` forcent l'un ou l'autre. Sur Linux desktop, mettre `sdk` (ou `auto`).
+- `--target auto` (défaut) tente CDP puis bascule **appel par appel** sur le pont natif si le CDP est injoignable ; `--target cdp` / `--target sdk` forcent l'un ou l'autre. Sur Linux desktop WebKitGTK, mettre `sdk` (ou `auto`). Pour une cible sans WebView ni SDK (Uno/Skia), utiliser `--target kwin-eis` (injection KWin EIS — Wayland natif KDE).
 - **Chemin absolu obligatoire sous Windows**, double backslashes inclus. Claude Code n'expanse **pas** `${CLAUDE_PROJECT_DIR}` ni `${workspaceFolder}` dans le champ `command` d'un `.mcp.json` — la première est une variable réservée aux *hooks*, la seconde est une variable VSCode. Si tu y mets `${CLAUDE_PROJECT_DIR}`, `claude mcp list` répond `Missing environment variables: CLAUDE_PROJECT_DIR` et `deveye` n'apparaît pas dans `/mcp`.
 - Pour pointer sur `cargo run` (pas besoin de rebuild manuel après chaque modif DevEye) :
   ```json
@@ -85,35 +85,42 @@ dx serve --platform desktop --features deveye
 claude
 ```
 
-Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **12 sont implémentés à ce jour** ; les 5 marqués _(à venir)_ relèvent de jalons ultérieurs (M4/M6) et ne sont **pas encore exposés** — ne pas les invoquer :
+Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **20 outils sont disponibles** (2 _(à venir)_ pas encore implémentés) :
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|
 | `screenshot` | aucun | image PNG (contenu image natif MCP, affichée par le client) | « prends un screenshot » |
 | `click` | `{x, y}` | `"ok"` | « clique sur 50, 200 » (envoie `mouseMoved` + sleep 60 ms + press/release) |
+| `right_click` | `{x, y}` | `"ok"` | « clic droit à 50, 200 » (ouvre les menus contextuels — émet `contextmenu`) |
 | `hover` | `{x, y}` | `"ok"` | « hover sur 10, 375 » (ouvre une zone rétractable sans cliquer) |
-| `scroll` _(à venir)_ | `{dx?, dy?, x?, y?}` | `"ok"` | « scrolle vers le bas de 600px » (`dy` positif = bas ; ancrage par défaut au centre) |
-| `resize` _(à venir)_ | `{width, height}` | `"ok"` | « passe en 375x812 » (émule le rendu responsive, pas la fenêtre OS) |
 | `click_selector` | `{selector}` | JSON `{ok, reason?}` | « clique sur `button.btn-primary` » (robuste aux décalages de coords) |
 | `click_text` | `{text}` | JSON `{ok, reason?}` | « clique sur le bouton "Valider" » (matche `button/a/[role=button]` par `innerText` exact) |
-| `eval_js` | `{expression}` | JSON sérialisé | « renvoie `document.querySelectorAll('button').length` » (Promise awaitée) |
 | `type_text` | `{text}` | `"ok"` | « tape "Bonjour" dans le champ focus » |
-| `press_key` _(à venir)_ | `{key}` | `"ok"` | « appuie sur Entrée » (`Enter`, `Tab`, `Escape`, `ArrowDown`… au format DevTools) |
-| `navigate` _(à venir)_ | `{route}` | `"ok"` | « va sur l'écran Agenda » (route logique via le routeur du SDK opt-in) |
+| `eval_js` | `{expression}` | JSON sérialisé | « renvoie `document.querySelectorAll('button').length` » (Promise awaitée) |
 | `dom` | aucun | JSON du DOM courant | « renvoie le DOM courant » |
 | `state` | aucun | JSON `{ ... }` | « quel est l'état applicatif courant ? » |
 | `logs_tail` | aucun | JSON `[{ level, target, message, ... }]` | « affiche les derniers logs » |
-| `logs_wait` _(à venir)_ | `{timeout_ms?, min_level?}` | JSON `{events, timed_out}` | « clique Valider puis attends une erreur (max 10s) » (long-poll bloquant) |
+| `find_element` | `{selector}` | JSON `{found, tag, text, rect, visible, disabled, attributes}` | « inspecte le premier `#save-btn` » (alternatif léger à `dom`) |
+| `assert_selector` | `{selector, expected_text?, expected_count?}` | JSON `{ok, selector, actual_count, actual_text?}` | « vérifie qu'il y a exactement 3 `.card` » (`isError` si l'assertion échoue) |
+| `wait_for_selector` | `{selector, timeout_ms?, visible?}` | JSON `{found, elapsed_ms}` | « attends que `#result` soit présent (max 5 s) » (sans sleep arbitraire) |
+| `wait_condition` | `{predicate, timeout_ms?}` | JSON `{satisfied, elapsed_ms, detail}` | « attends que `count` vaille 3 dans le state » (dom-selector / state-key / screenshot-stable) |
+| `drag_drop` | `{from_x, from_y, to_x, to_y}` | `"ok"` | « glisse de (10, 20) vers (100, 200) » |
 | `invoke_command` | `{name, args?}` | JSON (résultat de la commande) | « invoque `set-page` avec `{page:"Agenda"}` » (route exposée par l'app) |
 | `list_commands` | aucun | JSON `[{name, description}]` | « quelles commandes l'app expose-t-elle ? » |
+| `collect_console_errors` | aucun | JSON `[{level, text, url?, line?, timestamp}]` | « y a-t-il eu des erreurs JS depuis la dernière vérification ? » |
+| `list_windows` | aucun | JSON `[{id, title, url, kind}]` | « liste les onglets/fenêtres de la cible CDP » |
+| `scroll` _(à venir)_ | `{dx?, dy?, x?, y?}` | `"ok"` | « scrolle vers le bas de 600 px » (`dy` positif = bas ; ancrage par défaut au centre) |
+| `resize` _(à venir)_ | `{width, height}` | `"ok"` | « passe en 375×812 » (émule le rendu responsive, pas la fenêtre OS) |
 
 **Conseils d'usage** :
 
 - Pour les UI qui dépendent d'un hover (sidebar rétractable, menus contextuels), envoyer `hover(x, y)` d'abord, puis `click_text` / `click_selector` pour cibler l'élément révélé.
 - Préférer `click_text` / `click_selector` aux coordonnées brutes : elles ne cassent pas quand le layout bouge (responsive, animations, refactor CSS) et déclenchent un vrai clic CDP (`mousedown`/`mouseup`/`pointer`), au même titre que `click(x, y)`.
-- `eval_js` est le couteau-suisse pour tout cas non couvert : lire un `getBoundingClientRect`, sonder un état frontend, déclencher du JS interne au framework.
-- Le buffer logs est **drainé** à chaque appel `logs_tail` : un second appel ne renverra que les events arrivés entre-temps.
-- Pour *suivre* les logs sans spammer `logs_tail`, utiliser `logs_wait` : il bloque côté serveur jusqu'à de nouveaux events (filtre `min_level` optionnel, ex. `error`) ou expiration de `timeout_ms` (défaut 5000, max 30000), puis renvoie `{events, timed_out}`. Idéal après une action : « clique X, puis attends une erreur ».
+- `eval_js` est le couteau-suisse pour tout cas non couvert : lire un `getBoundingClientRect`, sonder un état frontend, déclencher du JS interne au framework, ou injecter des événements clavier (`new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })`).
+- **Touche clavier** : pas d'outil `press_key` dédié — utiliser `eval_js` pour dispatcher un `KeyboardEvent` sur `document.activeElement` (ex. `Enter`, `Tab`, `Escape`, `ArrowDown`). Exemple : `eval_js({ expression: "document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))" })`.
+- **Navigation** : utiliser `invoke_command` si l'app expose une route logique (ex. `set-page`) ; sinon `eval_js` avec le hook routeur du SDK (`window.__deveye_router__`).
+- Le buffer logs est **drainé** à chaque appel `logs_tail` : un second appel ne renverra que les events arrivés entre-temps. Pour attendre de nouveaux logs après une action, utiliser une boucle `logs_tail` ou `wait_condition` avec un prédicat `state-key`.
+- Pour éviter tout sleep arbitraire après une action asynchrone, préférer `wait_for_selector` (attend un sélecteur CSS) ou `wait_condition` (prédicats : `dom-selector`, `state-key`, `screenshot-stable`).
 - Pour piloter l'app par sa **logique métier** plutôt que par l'UI : l'app expose des routes via `deveye_sdk::expose_route("set-page", "Change la page", |payload| { ... })` (en `cfg(debug_assertions)`) ; l'agent les découvre avec `list_commands` puis les déclenche avec `invoke_command`. Plus robuste qu'une cascade de clics pour mettre l'app dans un état donné.
 - Plus besoin de `/mcp reconnect` après un hot-reload Dioxus (auto-reattach browser-level — cf. [`architecture.md`](./architecture.md)).
 
@@ -132,11 +139,46 @@ cargo run -p deveye-server -- --serve-mcp --target sdk
 ```
 
 - `click_*` / `type_text` / `dom` / `eval_js` passent par la pompe `document::eval` de l'app (événements JS synthétiques complets : pointer + mouse + focus) — moins fidèles que CDP mais fonctionnels.
-- `screenshot` : capture xcap de la fenêtre titrée (défaut « atelier », réglable via `--screencap-window`). **XWayland obligatoire** (`GDK_BACKEND=x11`) : xcap n'énumère pas les fenêtres Wayland. Lancer via `dx serve` (un `cargo run` nu n'a pas ses assets `asset!()` → page sans CSS).
+- `screenshot` : sans `--screencap-window`, capture **plein écran** (`MonitorRenderer`) — adapté au CI/headless. Avec `--screencap-window <sous-chaîne>`, capture de la fenêtre par titre : sous KDE/Wayland natif ajouter `--screencap-backend kwin` (aucun XWayland requis) ; ailleurs, xcap avec `GDK_BACKEND=x11`. Lancer via `dx serve` (un `cargo run` nu n'a pas ses assets `asset!()` → page sans CSS).
 - `state` / `logs_tail` viennent du SDK, comme en mode CDP.
 - `resize` n'est **pas** disponible via le pont natif (les métriques du moteur exigent CDP) ; tout le reste l'est.
 
 > **Leçons d'usage (Linux/web)** : (1) pour chronométrer une animation, vérifier `document.visibilityState === "visible"` — une fenêtre masquée gèle `requestAnimationFrame`. (2) Le scroll de l'app vit souvent dans un conteneur (`.shell__content`), pas dans `window`. (3) En mode web sans `logs_tail`, poser un collecteur `window.addEventListener('error'/'unhandledrejection', …)` via `eval_js` et le relever en fin de session (à reposer après chaque `location.reload()`).
+
+---
+
+## Linux — piloter une app native Wayland (kwin-eis)
+
+Pour une cible **sans WebView ni SDK** — notamment atlas Uno desktop (rendu Skia) — DevEye injecte des événements d'entrée au niveau OS via **KWin EIS** (`org.kde.KWin.EIS.RemoteDesktop`), sans XWayland, sans shim dans l'app.
+
+```bash
+# Terminal 1 — l'app native (Skia/Uno, .NET ou autre)
+dotnet run --project src/Atlas.App -f net10.0-desktop -c Debug
+
+# Terminal 2 — le serveur MCP en mode kwin-eis
+cargo run -p deveye-server -- --serve-mcp --target kwin-eis
+```
+
+- **Mains** : clics, survols, saisies et touche clavier passent par KWin EIS (événements OS-level vrais, identiques à la souris et au clavier physiques).
+- **Yeux** : screencap de la fenêtre (`--screencap-window <sous-chaîne>`) ou plein écran sans ce flag. Sous KDE/Wayland, `--screencap-backend kwin` (défaut auto) ; ailleurs, xcap avec `GDK_BACKEND=x11`.
+- **DOM / JS / state** : indisponibles (rendu natif, pas de WebView). `dom`, `eval_js`, `wait_for_selector`, `find_element` renvoient `PortError::Unsupported`.
+- **Prérequis** : `KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1` dans l'environnement de session KWin (cf. [architecture.md](./architecture.md)) ; la connexion D-Bus qui initie EIS doit rester ouverte pendant toute la session — DevEye la maintient.
+
+```json
+{
+  "mcpServers": {
+    "deveye": {
+      "type": "stdio",
+      "command": "/chemin/vers/DevEye/target/release/deveye-server",
+      "args": [
+        "--target", "kwin-eis",
+        "--screencap-window", "atlas",
+        "--serve-mcp"
+      ]
+    }
+  }
+}
+```
 
 ---
 
@@ -177,7 +219,7 @@ claude
 }
 ```
 
-Variante par titre : `--cdp-target-filter-title atlas` (les deux flags se combinent en OU). En cible CDP pure, le SDK opt-in n'est pas embarqué (cible .NET/WASM) → `state`, `logs_tail`, `invoke_command`, `list_commands` renvoient une erreur réseau explicite ; seules les capacités CDP (`screenshot`, `click*`, `right_click`, `type_text`, `eval_js`, `dom`, `navigate`) répondent.
+Variante par titre : `--cdp-target-filter-title atlas` (les deux flags se combinent en OU). En cible CDP pure, le SDK opt-in n'est pas embarqué (cible .NET/WASM) → `state`, `logs_tail`, `invoke_command`, `list_commands` renvoient une erreur réseau explicite ; seules les capacités CDP (`screenshot`, `click`, `right_click`, `hover`, `click_selector`, `click_text`, `type_text`, `eval_js`, `dom`, `find_element`, `assert_selector`, `wait_for_selector`, `wait_condition`, `drag_drop`, `collect_console_errors`, `list_windows`) répondent.
 
 ---
 
@@ -255,8 +297,8 @@ Côté app cible, le seul fichier qui référence DevEye est son `Cargo.toml` (f
 
 ## Limitations connues
 
-- **CDP = Windows (WebView2) uniquement.** Sur macOS (WKWebView) et Linux (WebKitGTK), CDP n'est pas exposé. Sous Linux, le **pont natif** du SDK (`--target sdk`/`auto`) conserve clic / saisie / DOM / JS / state via la pompe `document::eval` — seul `resize` (métriques moteur) reste indisponible. Le screencap pur (`--screencap-window` sans SDK actif) reste, lui, en vision passive.
-- **Pas de stream WebSocket** sur les logs : `logs_tail` est un drain ponctuel ; pour suivre en continu sans boucler côté agent, utiliser `logs_wait` (long-poll bloquant). Pas de flux poussé temps réel (choix assumé).
+- **CDP = Windows (WebView2) uniquement.** Sur macOS (WKWebView) et Linux (WebKitGTK), CDP n'est pas exposé. Sous Linux, le **pont natif** du SDK (`--target sdk`/`auto`) conserve clic / saisie / DOM / JS / state via la pompe `document::eval` — seul `resize` (métriques moteur) reste indisponible. Pour les cibles sans WebView ni SDK (ex. atlas Uno desktop / Skia), utiliser `--target kwin-eis` (injection OS-level KWin EIS — yeux par screencap).
+- **Pas de stream WebSocket** sur les logs : `logs_tail` est un drain ponctuel ; pour attendre de nouveaux événements sans boucle arbitraire, utiliser `wait_condition` (prédicat `state-key` si l'app expose l'état) ou une boucle `logs_tail` côté agent. Pas de flush poussé temps réel (choix assumé).
 - **Commandes logiques** : `invoke_command` / `list_commands` sont opérationnels via `adapter-commands-http`, mais ne renvoient quelque chose que si l'app cible a déclaré des routes avec `deveye_sdk::expose_route` (sinon `list_commands` renvoie une liste vide). C'est à l'app d'exposer ce qu'elle veut rendre pilotable.
 - **Test runtime end-to-end** non automatisé : à valider manuellement à chaque release majeure Dioxus/wry (on dépend de l'option WebView2 `--remote-debugging-port`).
 - **Reconnect du WebSocket browser** : **géré** depuis la feature `--target` / `LazyCdp` (juin 2026). Un navigateur absent au démarrage ou fermé en cours de session n'est plus fatal — chaque appel d'outil retente l'attache (l'outil renvoie une erreur actionnable tant que le CDP manque). Plus besoin de `/mcp reconnect`.
@@ -274,4 +316,4 @@ Côté app cible, le seul fichier qui référence DevEye est son `Cargo.toml` (f
 
 ## Docs liées
 
-- [`architecture.md`](./architecture.md) — architecture hexagonale, 6 ports, robustesse CDP
+- [`architecture.md`](./architecture.md) — architecture hexagonale, 9 ports, robustesse CDP

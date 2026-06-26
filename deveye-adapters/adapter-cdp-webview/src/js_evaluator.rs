@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use deveye_ports::{JsEvaluator, PortResult};
+use deveye_ports::{JsEvaluator, PortError, PortResult};
 
 use crate::client::CdpClient;
 use crate::error::CdpError;
@@ -45,7 +45,7 @@ impl JsEvaluator for CdpClient {
                 }),
             )
             .await
-            .map_err(Into::<deveye_ports::PortError>::into)?;
+            .map_err(PortError::from)?;
 
         if let Some(ex) = response.exception {
             let detail = ex

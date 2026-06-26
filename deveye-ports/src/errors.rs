@@ -25,6 +25,11 @@ pub enum PortError {
     #[error("réseau : {0}")]
     Network(String),
 
+    #[error("protocole : {0}")]
+    Protocol(String),
+
+    // Réservé à l'impl ConsoleErrorSource CDP-native (M-futur, pas encore construite).
+    // Ne pas supprimer : les sites de match exhaustifs et l'affichage en dépendent.
     #[error("console webview : {0}")]
     Console(String),
 

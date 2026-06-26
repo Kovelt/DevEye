@@ -24,6 +24,8 @@ futures-util = "0.3"
 xkbcommon = "0.9"
 # Horloge CLOCK_MONOTONIC en microsecondes pour les timestamps de frame EIS.
 rustix = { version = "1", features = ["time"] }
+# Traces diagnostiques (warn!, ...) : keymap, debordements de keycode, deconnexions.
+tracing = "0.1"
 
 [dev-dependencies]
 deveye-core = { path = "../../deveye-core" }

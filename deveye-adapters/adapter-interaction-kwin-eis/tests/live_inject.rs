@@ -11,7 +11,7 @@ use deveye_ports::InteractionSink;
 #[tokio::test]
 #[ignore = "intrusif : bouge le vrai pointeur ; exige une session KDE Wayland (KWin EIS)"]
 async fn hover_moves_real_pointer() {
-    let eis = KwinEisInteraction::new((0, 0));
+    let eis = KwinEisInteraction::new((0, 0)).expect("worker EIS");
     // Un simple déplacement absolu : prouve handshake + seat + device + motion.
     let result = eis
         .dispatch(InteractionCommand::hover(Position::new(400, 400)))

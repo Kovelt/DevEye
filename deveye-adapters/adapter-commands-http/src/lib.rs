@@ -7,10 +7,15 @@
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 
 use deveye_core::CommandDescriptor;
 use deveye_ports::{CommandRouter, PortError, PortResult};
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub const DEFAULT_SDK_URL: &str = "http://127.0.0.1:31337";
 
@@ -25,7 +30,11 @@ impl SdkCommandRouter {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .expect("client reqwest (TLS rustls indisponible)"),
         }
     }
 

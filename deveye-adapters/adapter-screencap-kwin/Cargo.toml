@@ -15,10 +15,12 @@ deveye-ports = { path = "../../deveye-ports" }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros", "fs"] }
 zbus = { workspace = true }
 nix = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# L11: creation de fichier temporaire O_EXCL (nom aleatoire, evite TOCTOU sur /tmp).
+tempfile = "3"
 
 [dev-dependencies]
 deveye-ports = { path = "../../deveye-ports" }

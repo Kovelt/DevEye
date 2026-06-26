@@ -37,15 +37,19 @@ Cinq cercles, avec la règle d'or : **le sens des dépendances pointe toujours v
 ┌──────────────────────────────────────────────────────────────────┐
 │   ADAPTERS DevEye (cercle extérieur)                              │
 │   - CDP WebView (Chromium / WebView2)                             │
-│   - Screencap OS (xcap)                                           │
+│   - Screencap xcap (X11 / XWayland / Wayland non-KDE)            │
+│   - Screencap KWin (KDE Wayland, D-Bus ScreenShot2)              │
 │   - Logs tracing-subscriber                                       │
 │   - Dioxus signals (via SDK opt-in)                               │
+│   - Interaction KWin EIS (injection OS-level Wayland natif)       │
 │   - MCP server (consomme tout, expose à un client MCP)            │
 │              ┌──────────────────────────────────────┐             │
 │              │  PORTS DevEye (traits Rust)          │             │
 │              │  Renderer, AppInspector,             │             │
 │              │  InteractionSink, JsEvaluator,       │             │
-│              │  LogSource, CommandRouter            │             │
+│              │  LogSource, CommandRouter,           │             │
+│              │  ConsoleErrorSource,                 │             │
+│              │  WaitCondition, WindowLister         │             │
 │              │  ┌────────────────────────────────┐  │             │
 │              │  │   DOMAIN DevEye — métier pur   │  │             │
 │              │  │   Snapshot, InteractionCommand,│  │             │
@@ -71,25 +75,30 @@ DevEye/
 ├── deveye-core/                ← DOMAINE PUR (aucune dépendance technique)
 │   └── src/
 │       ├── snapshot.rs         # Snapshot { visual, dom, state, timestamp }
-│       ├── command.rs          # InteractionCommand (Click, Hover, Type, KeyPress, Navigate ; Scroll/Resize prévus)
+│       ├── command.rs          # InteractionCommand (Click, Hover, Type, KeyPress, Navigate, DragDrop ; Scroll/Resize prévus)
 │       └── log_event.rs        # LogEvent, niveaux, fields
 │
 ├── deveye-ports/               ← INTERFACES (traits uniquement)
 │   └── src/
-│       ├── renderer.rs         # trait Renderer
-│       ├── inspector.rs        # trait AppInspector
-│       ├── interaction.rs      # trait InteractionSink
-│       ├── js_evaluator.rs     # trait JsEvaluator
-│       ├── log_source.rs       # trait LogSource
-│       └── command_router.rs   # trait CommandRouter
+│       ├── renderer.rs              # trait Renderer
+│       ├── inspector.rs             # trait AppInspector
+│       ├── interaction.rs           # trait InteractionSink
+│       ├── js_evaluator.rs          # trait JsEvaluator
+│       ├── log_source.rs            # trait LogSource
+│       ├── command_router.rs        # trait CommandRouter
+│       ├── console_error_source.rs  # trait ConsoleErrorSource
+│       ├── wait_condition.rs        # trait WaitCondition
+│       └── window_lister.rs         # trait WindowLister
 │
-├── deveye-adapters/            ← IMPLÉMENTATIONS (un crate par adapter)
-│   ├── adapter-cdp-webview/    # Renderer + InteractionSink + AppInspector + JsEvaluator via CDP
-│   ├── adapter-screencap-xcap/ # Renderer fallback OS-level (any app)
-│   ├── adapter-dioxus-signals/ # AppInspector + pont natif (JsEvaluator/InteractionSink) via SDK
-│   ├── adapter-logs-tracing/   # LogSource via le buffer tracing du SDK opt-in
-│   ├── adapter-commands-http/  # CommandRouter via POST /devtools/command + GET /devtools/commands
-│   └── adapter-mcp-server/     # consomme les ports, expose au Model Context Protocol
+├── deveye-adapters/                       ← IMPLÉMENTATIONS (un crate par adapter)
+│   ├── adapter-cdp-webview/               # Renderer + InteractionSink + AppInspector + JsEvaluator + WindowLister via CDP
+│   ├── adapter-screencap-xcap/            # Renderer OS-level (xcap — X11 / XWayland / Wayland non-KDE)
+│   ├── adapter-screencap-kwin/            # Renderer KDE Wayland natif (org.kde.KWin.ScreenShot2 D-Bus)
+│   ├── adapter-dioxus-signals/            # AppInspector + pont natif (JsEvaluator/InteractionSink) via SDK
+│   ├── adapter-logs-tracing/              # LogSource via le buffer tracing du SDK opt-in
+│   ├── adapter-commands-http/             # CommandRouter via POST /devtools/command + GET /devtools/commands
+│   ├── adapter-interaction-kwin-eis/      # InteractionSink OS-level Wayland natif (KWin EIS)
+│   └── adapter-mcp-server/               # consomme les 9 ports, expose au Model Context Protocol
 │
 ├── deveye-sdk/                 ← micro-lib opt-in à intégrer dans l'app cible (cfg debug)
 └── deveye-server/              ← BINAIRE orchestrateur (compose les adapters selon les options CLI)
@@ -103,40 +112,43 @@ DevEye/
 
 ---
 
-## Les 6 ports en détail
+## Les 9 ports en détail
 
 ### 1. `Renderer`
 
 ```rust
 #[async_trait]
 pub trait Renderer: Send + Sync {
-    async fn screenshot(&self) -> Result<PngBytes, RendererError>;
-    async fn viewport_size(&self) -> Result<Size, RendererError>;
+    async fn screenshot(&self) -> PortResult<Screenshot>;
+    async fn viewport_size(&self) -> PortResult<Size>;
 }
 ```
 
-- `adapter-cdp-webview` (CDP + screencap via DevTools) — app desktop wry WebView2
-- `adapter-screencap-xcap` (capture fenêtre OS) — fallback universel
+`PortResult<T>` = `Result<T, PortError>` (défini dans `deveye-ports::errors`). `Screenshot` est un wrapper newtype autour de `Vec<u8>` (bytes PNG).
+
+- `adapter-cdp-webview` (`Page.captureScreenshot` CDP) — app desktop wry WebView2
+- `adapter-screencap-xcap` (capture fenêtre OS) — X11 / XWayland / Wayland non-KDE
+- `adapter-screencap-kwin` (KWin D-Bus `ScreenShot2`) — KDE Wayland natif
 
 ### 2. `AppInspector`
 
 ```rust
 #[async_trait]
 pub trait AppInspector: Send + Sync {
-    async fn dom_snapshot(&self) -> Result<DomTree, InspectorError>;
-    async fn state_snapshot(&self) -> Result<StateDump, InspectorError>;
+    async fn dom_snapshot(&self) -> PortResult<DomTree>;
+    async fn state_snapshot(&self) -> PortResult<StateDump>;
 }
 ```
 
 - `adapter-cdp-webview` (DOM via CDP `DOM.getDocument`)
-- `adapter-dioxus-signals` (state via SDK opt-in qui sérialise les signaux)
+- `adapter-dioxus-signals` (state via SDK opt-in qui sérialise les signaux ; DOM fallback via `outerHTML`)
 
 ### 3. `InteractionSink`
 
 ```rust
 #[async_trait]
 pub trait InteractionSink: Send + Sync {
-    async fn dispatch(&self, cmd: InteractionCommand) -> Result<(), InteractionError>;
+    async fn dispatch(&self, command: InteractionCommand) -> PortResult<()>;
 }
 ```
 
@@ -144,13 +156,14 @@ Variantes de `InteractionCommand` :
 
 - `Click { position, button }` — séquence `mouseMoved` + sleep 60 ms + `mousePressed` + `mouseReleased`. Le `mouseMoved` préalable est indispensable pour déclencher les `onmouseenter` des UI dont des éléments n'apparaissent qu'au hover. Le sleep laisse le temps au framework de re-render avant le press.
 - `Hover { position }` — `mouseMoved` seul, sans press. Utile pour ouvrir une zone dépendante du hover puis cliquer ailleurs.
-- `Type { text }` — `Input.insertText`.
-- `KeyPress { key }` — `Input.dispatchKeyEvent` (keyDown + keyUp).
-- `Navigate { route }` — `Runtime.evaluate` sur un routeur exposé côté JS par l'app cible (nécessite le support dans le SDK opt-in).
+- `Type { text }` — `Input.insertText` (CDP) ou événement `input` synthétique (SDK).
+- `KeyPress { key }` — `Input.dispatchKeyEvent` keyDown + keyUp (CDP) ou `KeyboardEvent` synthétique (SDK).
+- `Navigate { route }` — `Runtime.evaluate` sur le hook routeur exposé côté JS par le SDK opt-in.
+- `DragDrop { from, to }` — séquence pointer/souris native CDP ou `PointerEvent` synthétique (SDK).
 - `Scroll { position, delta_x, delta_y }` *(prévu — pas encore dans `InteractionCommand`)* — `Input.dispatchMouseEvent` type `mouseWheel` ancré à `position` (`delta_y` positif = vers le bas).
 - `Resize { width, height }` *(prévu — pas encore dans `InteractionCommand`)* — `Emulation.setDeviceMetricsOverride`. Émule les métriques de rendu (responsive), ne redimensionne pas la fenêtre OS réelle.
 
-Adapter : `adapter-cdp-webview` (CDP `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent` / `Runtime.evaluate`).
+Adapters : `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK).
 
 ### 4. `JsEvaluator`
 
@@ -165,7 +178,7 @@ Exécute une expression JavaScript dans le contexte de la page cible. L'adapter 
 
 Cas d'usage : lire un `getBoundingClientRect()` pour cliquer précisément ; déclencher un `.click()` par sélecteur (plus robuste que des coordonnées) ; sonder un état frontend.
 
-Adapter : `adapter-cdp-webview`.
+Adapters : `adapter-cdp-webview` (CDP), `adapter-dioxus-signals` (`SdkEvaluator` → `POST /devtools/eval`).
 
 ### 5. `LogSource`
 
@@ -186,13 +199,49 @@ le dernier appel (pas de `Stream`, pas de dépendance `futures` dans le domaine)
 ```rust
 #[async_trait]
 pub trait CommandRouter: Send + Sync {
-    async fn invoke(&self, route: &str, payload: serde_json::Value)
-        -> Result<serde_json::Value, RouterError>;
-    async fn list(&self) -> Result<Vec<CommandDescriptor>, RouterError>;
+    async fn invoke(&self, route: &str, payload: serde_json::Value) -> PortResult<serde_json::Value>;
+    async fn list(&self) -> PortResult<Vec<CommandDescriptor>>;
 }
 ```
 
 Permet à un agent de **dire à l'app cible** d'exécuter une action logique (« change de page », « charge telle fixture »). Implémenté par `adapter-commands-http` : l'app enregistre ses routes via `deveye_sdk::expose_route(name, description, closure)` (servies en local par `POST /devtools/command` et `GET /devtools/commands`), exposées au client MCP par les outils `invoke_command` et `list_commands`.
+
+### 7. `ConsoleErrorSource`
+
+```rust
+#[async_trait]
+pub trait ConsoleErrorSource: Send + Sync {
+    async fn drain_console_errors(&self) -> PortResult<Vec<ConsoleError>>;
+}
+```
+
+Drain des erreurs console émises par le webview (exceptions non capturées, promesses rejetées, `console.error`). Par analogie avec `LogSource::poll` : chaque appel vide le buffer accumulé. En pratique, `deveye-server` compose ce port via un collecteur JS injecté dans l'évaluateur (fonctionne en CDP comme en SDK). Exposé via l'outil MCP `collect_console_errors`.
+
+### 8. `WaitCondition`
+
+```rust
+#[async_trait]
+pub trait WaitCondition: Send + Sync {
+    async fn wait_until(
+        &self,
+        predicate: WaitPredicate,
+        timeout: Duration,
+    ) -> PortResult<WaitOutcome>;
+}
+```
+
+Attente conditionnelle sur l'état de l'app cible. `WaitPredicate` est une enum (domaine) avec trois variantes : `DomSelector { selector }`, `StateKey { key, expected }`, `ScreenshotStable { threshold_ms }`. Retourne un `WaitOutcome { satisfied, elapsed_ms, detail }` — un timeout n'est pas une erreur (`Err`), c'est un `satisfied: false`. Implémenté par `CompositeWaitCondition` dans `deveye-server` (boucle de polling sur les ports déjà composés). Exposé via l'outil MCP `wait_condition`.
+
+### 9. `WindowLister`
+
+```rust
+#[async_trait]
+pub trait WindowLister: Send + Sync {
+    async fn list_windows(&self) -> PortResult<Vec<WindowInfo>>;
+}
+```
+
+Énumère les fenêtres/onglets de la cible. Implémenté par `adapter-cdp-webview` (`Target.getTargets`, filtré sur `type=page`). Le pont natif SDK et le mode `kwin-eis` (cibles sans WebView) renvoient une liste vide — pas une erreur. Exposé via l'outil MCP `list_windows`.
 
 ---
 
@@ -234,9 +283,15 @@ L'attachement direct à un *target page* s'est révélé fragile : à chaque rec
 
 Conséquence : un hot-reload ne nécessite plus de reconnexion manuelle du MCP. Le binaire `deveye-server` reste vivant et bascule tout seul sur la nouvelle page dès qu'elle apparaît.
 
-**Reconnexion paresseuse (`LazyCdp`, `--target`)** : `deveye-server` n'exige plus le navigateur au démarrage. La façade `LazyCdp` (re)connecte **à la demande** : chaque appel d'outil dont le WebSocket est mort retente l'attache via `/json/version`. Un navigateur absent au boot ou fermé en cours de session n'est donc pas fatal — l'outil renvoie une erreur actionnable tant que le CDP manque, puis repart seul. Le drapeau `--target {auto|cdp|sdk}` choisit la source des yeux/mains : `auto` tente CDP puis bascule **appel par appel** sur le pont natif du SDK (Linux/WebKitGTK), `cdp` et `sdk` forcent l'un ou l'autre. Détails opérationnels : [`usage.md`](./usage.md).
+**Reconnexion paresseuse (`LazyCdp`, `--target`)** : `deveye-server` n'exige plus le navigateur au démarrage. La façade `LazyCdp` (re)connecte **à la demande** : chaque appel d'outil dont le WebSocket est mort retente l'attache via `/json/version`. Un navigateur absent au boot ou fermé en cours de session n'est donc pas fatal — l'outil renvoie une erreur actionnable tant que le CDP manque, puis repart seul. Le drapeau `--target {auto|cdp|sdk|kwin-eis}` choisit la source des yeux/mains :
 
-**Hors périmètre** : le pont natif ne couvre pas le `resize` de viewport (métriques moteur, exige CDP). La capture pixel en Wayland natif passe encore par XWayland (`adapter-screencap-kwin` à venir).
+- `auto` — tente CDP puis bascule **appel par appel** sur le pont natif du SDK (Linux/WebKitGTK).
+- `cdp` / `sdk` — forcent l'un ou l'autre.
+- `kwin-eis` — injection d'entrée OS-level via `org.kde.KWin.EIS.RemoteDesktop` (Wayland natif KDE, sans XWayland ni shim dans l'app). C'est la voie « mains » pour les cibles sans WebView ni SDK, notamment atlas Uno desktop (rendu Skia). Les yeux viennent du screencap (`adapter-screencap-kwin` en KDE/Wayland, xcap sinon) ; DOM et JS sont indisponibles (`PortError::Unsupported`).
+
+Détails opérationnels : [`usage.md`](./usage.md).
+
+**Hors périmètre** : le pont natif ne couvre pas le `resize` de viewport (métriques moteur, exige CDP). Sous Wayland non-KDE, xcap reste le fallback screencap (XWayland requis).
 
 ---
 
@@ -267,12 +322,12 @@ Le contrat complet des routes HTTP du SDK (codes de statut, formes des corps, ga
 ## Hors périmètre actuel
 
 - Adapter macOS (alternative à CDP sur WKWebView)
-- Adapter Linux pixel natif Wayland (`adapter-screencap-kwin`, KWin `ScreenShot2`) — l'intérim XWayland (`GDK_BACKEND=x11`) couvre déjà la capture. Le pont natif (`adapter-dioxus-signals`) couvre déjà clic/saisie/DOM/eval via WebKitGTK ; seul `resize` (métriques moteur) reste indisponible hors CDP.
 - `adapter-tauri`
 - `adapter-cdp-chrome-standalone` (piloter Chrome déjà ouvert sans wry)
 - VRT (Visual Regression Testing) — `Diff` est dans le domaine, le comparateur viendra plus tard
 - Replay de `Recording` — tests E2E reproductibles
 - Dashboard HTML pour humain (alternative au MCP)
+- `InteractionCommand::Scroll` et `::Resize` — variantes prévues, pas encore dans le domaine
 
 ---
 

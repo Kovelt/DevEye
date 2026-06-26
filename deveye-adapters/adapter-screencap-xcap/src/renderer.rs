@@ -9,6 +9,21 @@ use deveye_ports::{PortError, PortResult, Renderer};
 
 use crate::error::ScreencapError;
 
+/// N8: Execute une closure de capture xcap bloquante sur le pool de threads,
+/// avec mapping d'erreur unifie vers PortError. Factorise les 4 blocs
+/// spawn_blocking identiques.
+async fn run_xcap<T>(
+    f: impl FnOnce() -> Result<T, ScreencapError> + Send + 'static,
+) -> PortResult<T>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| PortError::from(ScreencapError::Xcap(format!("spawn_blocking : {e}"))))?
+        .map_err(PortError::from)
+}
+
 /// Capture la fenêtre dont le titre contient la sous-chaîne fournie.
 ///
 /// Utilise [`xcap`](https://crates.io/crates/xcap) — multi-OS (Windows,
@@ -45,7 +60,7 @@ impl XcapRenderer {
 impl Renderer for XcapRenderer {
     async fn screenshot(&self) -> PortResult<Screenshot> {
         let renderer = self.clone();
-        tokio::task::spawn_blocking(move || {
+        run_xcap(move || {
             let window = renderer.find_window()?;
             let img = window
                 .capture_image()
@@ -54,22 +69,18 @@ impl Renderer for XcapRenderer {
             let mut buf = Vec::new();
             img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
                 .map_err(|e| ScreencapError::Encoding(e.to_string()))?;
-            Ok::<_, ScreencapError>(Screenshot::new_png(buf, viewport))
+            Ok(Screenshot::new_png(buf, viewport))
         })
         .await
-        .map_err(|e| PortError::from(ScreencapError::Xcap(format!("spawn_blocking : {e}"))))?
-        .map_err(PortError::from)
     }
 
     async fn viewport_size(&self) -> PortResult<Size> {
         let renderer = self.clone();
-        tokio::task::spawn_blocking(move || {
+        run_xcap(move || {
             let window = renderer.find_window()?;
-            Ok::<_, ScreencapError>(Size::new(window.width(), window.height()))
+            Ok(Size::new(window.width(), window.height()))
         })
         .await
-        .map_err(|e| PortError::from(ScreencapError::Xcap(format!("spawn_blocking : {e}"))))?
-        .map_err(PortError::from)
     }
 }
 
@@ -83,18 +94,26 @@ pub struct MonitorRenderer;
 
 impl MonitorRenderer {
     fn primary() -> Result<Monitor, ScreencapError> {
-        Monitor::all()
-            .map_err(|e| ScreencapError::Xcap(e.to_string()))?
-            .into_iter()
-            .next()
-            .ok_or_else(|| ScreencapError::Xcap("aucun moniteur détecté".into()))
+        let monitors = Monitor::all().map_err(|e| ScreencapError::Xcap(e.to_string()))?;
+        // N2: preference au moniteur marque is_primary(), avec repli sur le
+        // premier si aucun n'est marque principal.
+        let mut fallback: Option<Monitor> = None;
+        for m in monitors {
+            if m.is_primary() {
+                return Ok(m);
+            }
+            if fallback.is_none() {
+                fallback = Some(m);
+            }
+        }
+        fallback.ok_or_else(|| ScreencapError::Xcap("aucun moniteur detecte".into()))
     }
 }
 
 #[async_trait]
 impl Renderer for MonitorRenderer {
     async fn screenshot(&self) -> PortResult<Screenshot> {
-        tokio::task::spawn_blocking(move || {
+        run_xcap(|| {
             let monitor = MonitorRenderer::primary()?;
             let img = monitor
                 .capture_image()
@@ -103,20 +122,16 @@ impl Renderer for MonitorRenderer {
             let mut buf = Vec::new();
             img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
                 .map_err(|e| ScreencapError::Encoding(e.to_string()))?;
-            Ok::<_, ScreencapError>(Screenshot::new_png(buf, viewport))
+            Ok(Screenshot::new_png(buf, viewport))
         })
         .await
-        .map_err(|e| PortError::from(ScreencapError::Xcap(format!("spawn_blocking : {e}"))))?
-        .map_err(PortError::from)
     }
 
     async fn viewport_size(&self) -> PortResult<Size> {
-        tokio::task::spawn_blocking(move || {
+        run_xcap(|| {
             let monitor = MonitorRenderer::primary()?;
-            Ok::<_, ScreencapError>(Size::new(monitor.width(), monitor.height()))
+            Ok(Size::new(monitor.width(), monitor.height()))
         })
         .await
-        .map_err(|e| PortError::from(ScreencapError::Xcap(format!("spawn_blocking : {e}"))))?
-        .map_err(PortError::from)
     }
 }

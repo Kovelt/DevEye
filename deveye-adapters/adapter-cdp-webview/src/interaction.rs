@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use deveye_core::{InteractionCommand, MouseButton, Position};
-use deveye_ports::{InteractionSink, PortResult};
+use deveye_ports::{InteractionSink, PortError, PortResult};
 
 use crate::client::CdpClient;
 
@@ -30,7 +30,7 @@ impl InteractionSink for CdpClient {
                 let _: Value = self
                     .call("Input.insertText", json!({ "text": text }))
                     .await
-                    .map_err(Into::<deveye_ports::PortError>::into)?;
+                    .map_err(PortError::from)?;
             }
             InteractionCommand::KeyPress { key } => {
                 let payload = json!({
@@ -40,7 +40,7 @@ impl InteractionSink for CdpClient {
                 let _: Value = self
                     .call("Input.dispatchKeyEvent", payload)
                     .await
-                    .map_err(Into::<deveye_ports::PortError>::into)?;
+                    .map_err(PortError::from)?;
                 let payload = json!({
                     "type": "keyUp",
                     "key": key,
@@ -48,7 +48,7 @@ impl InteractionSink for CdpClient {
                 let _: Value = self
                     .call("Input.dispatchKeyEvent", payload)
                     .await
-                    .map_err(Into::<deveye_ports::PortError>::into)?;
+                    .map_err(PortError::from)?;
             }
             InteractionCommand::Navigate { route } => {
                 // Le routage logique est pris en charge par le SDK opt-in via
@@ -65,7 +65,7 @@ impl InteractionSink for CdpClient {
                         json!({ "expression": expression, "awaitPromise": true }),
                     )
                     .await
-                    .map_err(Into::<deveye_ports::PortError>::into)?;
+                    .map_err(PortError::from)?;
             }
             InteractionCommand::DragDrop { from, to } => {
                 // Séquence souris native : hover -> press -> déplacements
@@ -104,7 +104,7 @@ async fn mouse_event(
     let _: Value = client
         .call("Input.dispatchMouseEvent", payload)
         .await
-        .map_err(Into::<deveye_ports::PortError>::into)?;
+        .map_err(PortError::from)?;
     Ok(())
 }
 
