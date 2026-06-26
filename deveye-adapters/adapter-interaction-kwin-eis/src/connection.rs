@@ -71,6 +71,14 @@ pub(crate) enum EisAction {
     KeyPress {
         key: String,
     },
+    KeyCombo {
+        modifiers: Vec<String>,
+        key: String,
+    },
+    Scroll {
+        dx: f64,
+        dy: f64,
+    },
 }
 
 /// Un travail soumis au worker : l'action + le canal de réponse.
@@ -196,6 +204,8 @@ async fn run_action(session: &mut EisSession, action: EisAction) -> Result<(), E
         EisAction::Drag { from, to } => session.drag(from, to).await,
         EisAction::Type { text } => session.type_text(&text).await,
         EisAction::KeyPress { key } => session.key_press(&key).await,
+        EisAction::KeyCombo { modifiers, key } => session.key_combo(&modifiers, &key).await,
+        EisAction::Scroll { dx, dy } => session.scroll(dx, dy).await,
     }
 }
 

@@ -15,7 +15,7 @@ use adapter_dioxus_signals::{
 };
 use adapter_interaction_kwin_eis::KwinEisInteraction;
 use adapter_logs_tracing::SdkTracingLogSource;
-use adapter_mcp_server::{DeveyeMcpServer, DeveyePorts};
+use adapter_mcp_server::{DeveyeMcpServer, DeveyePorts, TargetInfo};
 use adapter_screencap_kwin::KwinRenderer;
 use adapter_screencap_xcap::{MonitorRenderer, XcapRenderer};
 use deveye_ports::{
@@ -116,6 +116,68 @@ async fn resolve_kwin_origin(title: Option<&str>, backend: ScreencapBackend) -> 
             );
             (0, 0)
         }
+    }
+}
+
+/// Construit la description statique de la cible (outil `target_info`) selon le
+/// mode choisi : capacites distinctives (DOM/eval_js/console/fenetres) + notes
+/// sur les pieges et indisponibilites propres a chaque cible.
+fn build_target_info(target: TargetMode) -> TargetInfo {
+    match target {
+        TargetMode::Auto => TargetInfo {
+            target: "auto".to_string(),
+            eyes: "CDP Page.captureScreenshot, repli screencap OS (KWin/xcap)".to_string(),
+            hands: "CDP Input.* (events natifs), repli events JS synthetiques (pont SDK)"
+                .to_string(),
+            eval_js: true,
+            dom: true,
+            state: true,
+            console_errors: true,
+            list_windows: true,
+            notes: "Repli appel-par-appel sur le pont SDK des que le CDP est injoignable. \
+                    Les capacites webview (eval_js/dom) supposent un webview joignable (CDP ou pompe SDK)."
+                .to_string(),
+        },
+        TargetMode::Cdp => TargetInfo {
+            target: "cdp".to_string(),
+            eyes: "CDP Page.captureScreenshot".to_string(),
+            hands: "CDP Input.* (events natifs navigateur, isTrusted=true)".to_string(),
+            eval_js: true,
+            dom: true,
+            state: true,
+            console_errors: true,
+            list_windows: true,
+            notes: "state/logs/commandes dependent du SDK opt-in embarque dans l'app — \
+                    absent en cible WASM/.NET pure (renvoie alors une erreur reseau)."
+                .to_string(),
+        },
+        TargetMode::Sdk => TargetInfo {
+            target: "sdk".to_string(),
+            eyes: "screencap OS (KWin sous Wayland/KDE, xcap sinon)".to_string(),
+            hands: "events JS synthetiques via la pompe document::eval de l'app".to_string(),
+            eval_js: true,
+            dom: true,
+            state: true,
+            console_errors: true,
+            list_windows: false,
+            notes: "resize indisponible (metriques moteur = CDP). Pas de visibilite \
+                    inter-fenetres (list_windows vide)."
+                .to_string(),
+        },
+        TargetMode::KwinEis => TargetInfo {
+            target: "kwin-eis".to_string(),
+            eyes: "screencap OS (KWin sous Wayland/KDE, xcap sinon)".to_string(),
+            hands: "injection OS-level via KWin EIS (souris/clavier reels)".to_string(),
+            eval_js: false,
+            dom: false,
+            state: true,
+            console_errors: false,
+            list_windows: false,
+            notes: "Rendu natif, pas de WebView : dom/eval_js/find_element/wait_for_selector \
+                    renvoient Unsupported, navigate indisponible. state/logs via le SDK/shim \
+                    de l'app si lance. Yeux et assertions visuelles : screenshot/assert_visual."
+                .to_string(),
+        },
     }
 }
 
@@ -246,5 +308,6 @@ pub(crate) async fn build_mcp(args: &Args) -> DeveyeMcpServer {
         window_lister,
         console_errors,
         wait_condition,
+        target_info: build_target_info(args.target),
     })
 }

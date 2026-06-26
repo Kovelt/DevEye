@@ -36,12 +36,27 @@ pub enum InteractionCommand {
     Type { text: String },
     /// Pression d'une touche unique (`Enter`, `Tab`, `Escape`, …).
     KeyPress { key: String },
+    /// Combinaison de touches : les `modifiers` sont maintenus pendant la
+    /// frappe de `key` (Ctrl+S, Ctrl+Shift+P, Alt+F4…). Modificateurs
+    /// reconnus (insensibles a la casse) : `ctrl`/`control`, `shift`, `alt`,
+    /// `meta`/`super`/`cmd`. Indispensable : `KeyPress` seul ne porte aucun
+    /// modificateur (Ctrl+Z etait impossible).
+    KeyCombo { modifiers: Vec<String>, key: String },
     /// Navigation logique à une route définie par l'app (ex. `"Agenda"`).
     /// L'app cible décide comment l'interpréter via son `CommandRouter`.
     Navigate { route: String },
     /// Glisser-déposer de `from` vers `to`, bouton gauche maintenu pendant le
     /// déplacement (réordonnancement, Kanban…).
     DragDrop { from: Position, to: Position },
+    /// Molette / défilement de `dx`/`dy` pixels, ancré en `position`. `dy > 0`
+    /// défile vers le bas. En CDP l'ancrage cible le bon conteneur scrollable ;
+    /// via le pont SDK, le conteneur scrollable sous le point est privilégié
+    /// (sinon `window`) ; en kwin-eis le défilement va à la fenêtre focus.
+    Scroll {
+        position: Position,
+        dx: i32,
+        dy: i32,
+    },
 }
 
 /// Description d'une commande logique exposée par l'app cible, listée par
@@ -75,6 +90,13 @@ impl InteractionCommand {
         Self::KeyPress { key: name.into() }
     }
 
+    pub fn key_combo(modifiers: Vec<String>, key: impl Into<String>) -> Self {
+        Self::KeyCombo {
+            modifiers,
+            key: key.into(),
+        }
+    }
+
     pub fn navigate(route: impl Into<String>) -> Self {
         Self::Navigate {
             route: route.into(),
@@ -87,6 +109,10 @@ impl InteractionCommand {
 
     pub fn drag_drop(from: Position, to: Position) -> Self {
         Self::DragDrop { from, to }
+    }
+
+    pub fn scroll(position: Position, dx: i32, dy: i32) -> Self {
+        Self::Scroll { position, dx, dy }
     }
 }
 
@@ -132,6 +158,27 @@ mod tests {
                 "from": { "x": 10, "y": 20 },
                 "to": { "x": 100, "y": 200 }
             })
+        );
+    }
+
+    #[test]
+    fn scroll_serializes_with_kind_tag() {
+        let cmd = InteractionCommand::scroll(Position::new(10, 20), 0, 600);
+        let v = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(
+            v,
+            json!({ "kind": "scroll", "position": { "x": 10, "y": 20 }, "dx": 0, "dy": 600 })
+        );
+    }
+
+    #[test]
+    fn key_combo_serializes_with_kind_tag() {
+        let cmd =
+            InteractionCommand::key_combo(vec!["ctrl".to_string(), "shift".to_string()], "KeyP");
+        let v = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(
+            v,
+            json!({ "kind": "key-combo", "modifiers": ["ctrl", "shift"], "key": "KeyP" })
         );
     }
 

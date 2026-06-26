@@ -28,6 +28,10 @@ const BTN_RIGHT: u32 = 0x111;
 const BTN_MIDDLE: u32 = 0x112;
 /// `KEY_LEFTSHIFT` evdev — pour les caractères de niveau 1 (majuscules, etc.).
 const KEY_LEFTSHIFT: u32 = 42;
+/// Modificateurs evdev (`linux/input-event-codes.h`) pour `key_combo`.
+const KEY_LEFTCTRL: u32 = 29;
+const KEY_LEFTALT: u32 = 56;
+const KEY_LEFTMETA: u32 = 125;
 /// Decalage de keycode entre la numerotation XKB (base 8) et evdev (base 0).
 /// Voir : https://xkbcommon.org/doc/current/group__keycodes.html
 const XKB_TO_EVDEV_OFFSET: u32 = 8;
@@ -195,6 +199,13 @@ impl EisSession {
             .ok_or_else(|| EisError::Eis("aucun device clavier EIS disponible".into()))
     }
 
+    fn scroll_index(&self) -> Result<usize, EisError> {
+        self.devices
+            .iter()
+            .position(|d| d.interface::<ei::Scroll>().is_some())
+            .ok_or_else(|| EisError::Eis("aucun device scroll EIS disponible".into()))
+    }
+
     fn flush(&self) -> Result<(), EisError> {
         self.context
             .flush()
@@ -327,6 +338,84 @@ impl EisSession {
         proto.frame(serial, monotonic_us());
         proto.stop_emulating(serial);
         self.flush()
+    }
+
+    /// Combinaison de touches : maintient les `modifiers` (Ctrl/Shift/Alt/Meta)
+    /// pendant la frappe de `key`, puis les relache en ordre inverse. Vrais
+    /// events OS-level — les raccourcis du toolkit/compositeur se declenchent.
+    pub(crate) async fn key_combo(
+        &mut self,
+        modifiers: &[String],
+        key: &str,
+    ) -> Result<(), EisError> {
+        // Resolution AVANT d'emettre quoi que ce soit : un modificateur ou une
+        // touche inconnue echoue net, sans laisser un modificateur enfonce.
+        let mut mod_codes: Vec<u32> = Vec::with_capacity(modifiers.len());
+        for m in modifiers {
+            let code = modifier_to_evdev(m)
+                .ok_or_else(|| EisError::Eis(format!("modificateur inconnu : {m}")))?;
+            mod_codes.push(code);
+        }
+        let (serial, seq) = self.begin_emit()?;
+        let device = &self.devices[self.keyboard_index()?];
+        let kbd = device
+            .interface::<ei::Keyboard>()
+            .ok_or_else(|| EisError::Eis("pas d'interface clavier".into()))?;
+        let keymap = self
+            .keymap
+            .as_ref()
+            .ok_or_else(|| EisError::Eis("keymap EIS indisponible".into()))?;
+        let key_code = xkb_name_to_evdev(keymap, key)
+            .ok_or_else(|| EisError::Eis(format!("touche XKB inconnue : {key}")))?;
+        let proto = device.device();
+        proto.start_emulating(serial, seq);
+        for code in &mod_codes {
+            kbd.key(*code, ei::keyboard::KeyState::Press);
+            proto.frame(serial, monotonic_us());
+        }
+        kbd.key(key_code, ei::keyboard::KeyState::Press);
+        proto.frame(serial, monotonic_us());
+        kbd.key(key_code, ei::keyboard::KeyState::Released);
+        proto.frame(serial, monotonic_us());
+        for code in mod_codes.iter().rev() {
+            kbd.key(*code, ei::keyboard::KeyState::Released);
+            proto.frame(serial, monotonic_us());
+        }
+        proto.stop_emulating(serial);
+        self.flush()
+    }
+
+    /// Defilement lisse de `(dx, dy)` pixels logiques sur le device scroll EIS,
+    /// suivi d'un `scroll_stop` (fin du geste, pas d'inertie). `dy > 0` = bas.
+    pub(crate) async fn scroll(&mut self, dx: f64, dy: f64) -> Result<(), EisError> {
+        let (serial, seq) = self.begin_emit()?;
+        let device = &self.devices[self.scroll_index()?];
+        let sc = device
+            .interface::<ei::Scroll>()
+            .ok_or_else(|| EisError::Eis("pas d'interface scroll".into()))?;
+        let proto = device.device();
+        proto.start_emulating(serial, seq);
+        sc.scroll(dx as f32, dy as f32);
+        proto.frame(serial, monotonic_us());
+        // scroll_stop(x, y, is_cancel) : signale l'arret sur chaque axe utilise.
+        let stop_x = if dx != 0.0 { 1 } else { 0 };
+        let stop_y = if dy != 0.0 { 1 } else { 0 };
+        sc.scroll_stop(stop_x, stop_y, 0);
+        proto.frame(serial, monotonic_us());
+        proto.stop_emulating(serial);
+        self.flush()
+    }
+}
+
+/// Nom de modificateur (insensible a la casse) -> code evdev de la touche
+/// gauche correspondante. Reconnait ctrl/control, shift, alt, meta/super/cmd.
+fn modifier_to_evdev(name: &str) -> Option<u32> {
+    match name.to_ascii_lowercase().as_str() {
+        "ctrl" | "control" => Some(KEY_LEFTCTRL),
+        "shift" => Some(KEY_LEFTSHIFT),
+        "alt" => Some(KEY_LEFTALT),
+        "meta" | "super" | "cmd" | "command" => Some(KEY_LEFTMETA),
+        _ => None,
     }
 }
 
@@ -476,5 +565,26 @@ mod tests {
     #[test]
     fn button_code_middle_maps_to_btn_middle() {
         assert_eq!(button_code(MouseButton::Middle), BTN_MIDDLE);
+    }
+
+    // --- modifier_to_evdev : mapping nom -> code evdev (insensible a la casse) ---
+
+    #[test]
+    fn modifier_evdev_constants_match_linux_input_event_codes() {
+        assert_eq!(KEY_LEFTCTRL, 29);
+        assert_eq!(KEY_LEFTSHIFT, 42);
+        assert_eq!(KEY_LEFTALT, 56);
+        assert_eq!(KEY_LEFTMETA, 125);
+    }
+
+    #[test]
+    fn modifier_to_evdev_resolves_known_aliases() {
+        assert_eq!(modifier_to_evdev("Ctrl"), Some(KEY_LEFTCTRL));
+        assert_eq!(modifier_to_evdev("control"), Some(KEY_LEFTCTRL));
+        assert_eq!(modifier_to_evdev("SHIFT"), Some(KEY_LEFTSHIFT));
+        assert_eq!(modifier_to_evdev("alt"), Some(KEY_LEFTALT));
+        assert_eq!(modifier_to_evdev("Super"), Some(KEY_LEFTMETA));
+        assert_eq!(modifier_to_evdev("cmd"), Some(KEY_LEFTMETA));
+        assert_eq!(modifier_to_evdev("fn"), None);
     }
 }

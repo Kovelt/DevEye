@@ -11,12 +11,19 @@ pub enum WaitPredicate {
     /// L'element matchant le selecteur CSS est present dans le DOM.
     /// Si `visible` est vrai, l'element doit en plus avoir un
     /// `BoundingClientRect` non vide (present ET visible a l'ecran).
-    /// Retro-compatible : champ absent dans le JSON => `false`.
+    /// Si `negate` est vrai, la condition est inversee : satisfaite quand
+    /// l'element est ABSENT (ou non visible si `visible`) — base de
+    /// `wait_for_gone` (attendre la disparition d'un spinner/toast/modale).
+    /// Retro-compatible : champs absents dans le JSON => `false`.
     DomSelector {
         selector: String,
         /// Si true, attend aussi que l'element soit visible (rect non vide).
         #[serde(default)]
         visible: bool,
+        /// Si true, inverse la condition : satisfaite quand l'element est
+        /// absent (ou disparait).
+        #[serde(default)]
+        negate: bool,
     },
     /// La clé `key` du state exposé par le SDK a pour valeur `expected`
     /// (comparaison JSON).
@@ -50,10 +57,11 @@ mod tests {
         let p = WaitPredicate::DomSelector {
             selector: ".error-banner".to_string(),
             visible: false,
+            negate: false,
         };
         assert_eq!(
             serde_json::to_value(&p).unwrap(),
-            json!({ "kind": "dom-selector", "selector": ".error-banner", "visible": false })
+            json!({ "kind": "dom-selector", "selector": ".error-banner", "visible": false, "negate": false })
         );
     }
 
@@ -62,11 +70,12 @@ mod tests {
         let p = WaitPredicate::DomSelector {
             selector: "#save-btn".to_string(),
             visible: true,
+            negate: false,
         };
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(
             v,
-            json!({ "kind": "dom-selector", "selector": "#save-btn", "visible": true })
+            json!({ "kind": "dom-selector", "selector": "#save-btn", "visible": true, "negate": false })
         );
         let back: WaitPredicate = serde_json::from_value(v).unwrap();
         assert_eq!(back, p);
@@ -82,6 +91,7 @@ mod tests {
             WaitPredicate::DomSelector {
                 selector: ".foo".to_string(),
                 visible: false,
+                negate: false,
             }
         );
     }
@@ -98,6 +108,30 @@ mod tests {
             json!({ "kind": "state-key", "key": "count", "expected": 3 })
         );
         let back: WaitPredicate = serde_json::from_value(v).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn dom_selector_negate_defaults_false_and_roundtrips_true() {
+        // Absent => false (retro-compat).
+        let v = json!({ "kind": "dom-selector", "selector": ".spinner" });
+        let p: WaitPredicate = serde_json::from_value(v).unwrap();
+        assert_eq!(
+            p,
+            WaitPredicate::DomSelector {
+                selector: ".spinner".to_string(),
+                visible: false,
+                negate: false,
+            }
+        );
+        // negate=true roundtrip.
+        let p = WaitPredicate::DomSelector {
+            selector: ".spinner".to_string(),
+            visible: false,
+            negate: true,
+        };
+        let back: WaitPredicate =
+            serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
         assert_eq!(back, p);
     }
 

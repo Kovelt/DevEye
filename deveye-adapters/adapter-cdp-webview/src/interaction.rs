@@ -50,6 +50,32 @@ impl InteractionSink for CdpClient {
                     .await
                     .map_err(PortError::from)?;
             }
+            InteractionCommand::KeyCombo { modifiers, key } => {
+                // Resout chaque modificateur en (bit CDP, nom de touche). Un
+                // modificateur inconnu est une erreur explicite (pas un silence).
+                let mut mods: Vec<(i64, &'static str)> = Vec::with_capacity(modifiers.len());
+                for m in &modifiers {
+                    let resolved = cdp_modifier(m).ok_or_else(|| {
+                        PortError::Interaction(format!("modificateur inconnu : {m}"))
+                    })?;
+                    mods.push(resolved);
+                }
+                let full_mask: i64 = mods.iter().fold(0, |acc, (bit, _)| acc | bit);
+                // Press des modificateurs (bitmask accumule), puis press/release
+                // de la touche principale (bitmask complet), puis release des
+                // modificateurs en ordre inverse.
+                let mut active = 0i64;
+                for (bit, name) in &mods {
+                    active |= bit;
+                    key_event(self, "keyDown", name, active).await?;
+                }
+                key_event(self, "keyDown", &key, full_mask).await?;
+                key_event(self, "keyUp", &key, full_mask).await?;
+                for (bit, name) in mods.iter().rev() {
+                    key_event(self, "keyUp", name, active).await?;
+                    active &= !bit;
+                }
+            }
             InteractionCommand::Navigate { route } => {
                 // Le routage logique est pris en charge par le SDK opt-in via
                 // `window.__deveye_router__.invoke('navigate', { route })`.
@@ -64,6 +90,22 @@ impl InteractionSink for CdpClient {
                         "Runtime.evaluate",
                         json!({ "expression": expression, "awaitPromise": true }),
                     )
+                    .await
+                    .map_err(PortError::from)?;
+            }
+            InteractionCommand::Scroll { position, dx, dy } => {
+                // mouseWheel ancre en (x, y) : CDP route le delta vers le bon
+                // conteneur scrollable sous le point (vs window.scrollBy qui ne
+                // defile que la racine).
+                let payload = json!({
+                    "type": "mouseWheel",
+                    "x": position.x,
+                    "y": position.y,
+                    "deltaX": dx,
+                    "deltaY": dy,
+                });
+                let _: Value = self
+                    .call("Input.dispatchMouseEvent", payload)
                     .await
                     .map_err(PortError::from)?;
             }
@@ -116,6 +158,31 @@ fn mouse_button_label(button: MouseButton) -> &'static str {
     }
 }
 
+/// Envoie un `Input.dispatchKeyEvent` (keyDown/keyUp) avec un bitmask de
+/// modificateurs CDP. Utilise par `KeyCombo`.
+async fn key_event(client: &CdpClient, ty: &str, key: &str, modifiers: i64) -> PortResult<()> {
+    let _: Value = client
+        .call(
+            "Input.dispatchKeyEvent",
+            json!({ "type": ty, "key": key, "modifiers": modifiers }),
+        )
+        .await
+        .map_err(PortError::from)?;
+    Ok(())
+}
+
+/// Resout un nom de modificateur (insensible a la casse) en `(bit CDP, nom de
+/// touche CDP)`. Bitmask CDP : Alt=1, Ctrl=2, Meta=4, Shift=8.
+fn cdp_modifier(name: &str) -> Option<(i64, &'static str)> {
+    match name.to_ascii_lowercase().as_str() {
+        "alt" => Some((1, "Alt")),
+        "ctrl" | "control" => Some((2, "Control")),
+        "meta" | "super" | "cmd" | "command" => Some((4, "Meta")),
+        "shift" => Some((8, "Shift")),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,5 +192,16 @@ mod tests {
         assert_eq!(mouse_button_label(MouseButton::Left), "left");
         assert_eq!(mouse_button_label(MouseButton::Right), "right");
         assert_eq!(mouse_button_label(MouseButton::Middle), "middle");
+    }
+
+    #[test]
+    fn cdp_modifier_resolves_known_aliases_case_insensitive() {
+        assert_eq!(cdp_modifier("Ctrl"), Some((2, "Control")));
+        assert_eq!(cdp_modifier("control"), Some((2, "Control")));
+        assert_eq!(cdp_modifier("SHIFT"), Some((8, "Shift")));
+        assert_eq!(cdp_modifier("alt"), Some((1, "Alt")));
+        assert_eq!(cdp_modifier("super"), Some((4, "Meta")));
+        assert_eq!(cdp_modifier("cmd"), Some((4, "Meta")));
+        assert_eq!(cdp_modifier("hyper"), None);
     }
 }

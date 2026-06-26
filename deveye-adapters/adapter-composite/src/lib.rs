@@ -135,9 +135,15 @@ pub struct CompositeWaitCondition {
 impl CompositeWaitCondition {
     async fn check(&self, predicate: &WaitPredicate) -> PortResult<bool> {
         match predicate {
-            WaitPredicate::DomSelector { selector, visible } => {
+            WaitPredicate::DomSelector {
+                selector,
+                visible,
+                negate,
+            } => {
                 let sel = serde_json::to_string(selector).unwrap_or_default();
-                // (a) VISIBLE : snippet adapte selon le mode demande.
+                // (a) VISIBLE : snippet adapte selon le mode demande. Le snippet
+                // renvoie la PRESENCE (ou presence+visibilite) ; la negation est
+                // appliquee cote Rust pour rester robuste aux exceptions JS.
                 let snippet = if *visible {
                     format!(
                         "(function(){{ const el = document.querySelector({sel}); \
@@ -153,7 +159,14 @@ impl CompositeWaitCondition {
                 // exception JS benigne — on la traite comme `false` (continuer
                 // le polling). Seule une erreur de transport interrompt l'attente.
                 match self.evaluator.evaluate(&snippet).await {
-                    Ok(value) => Ok(value.as_bool().unwrap_or(false)),
+                    // `negate` : satisfaite quand l'element est absent. On
+                    // n'inverse que sur une evaluation REUSSIE — une erreur
+                    // transitoire reste "non satisfaite" (continuer le polling),
+                    // jamais transformee en faux "disparu".
+                    Ok(value) => {
+                        let present = value.as_bool().unwrap_or(false);
+                        Ok(present ^ *negate)
+                    }
                     Err(e @ PortError::Network(_)) => Err(e),
                     Err(_) => Ok(false),
                 }
@@ -367,6 +380,7 @@ mod tests {
                 WaitPredicate::DomSelector {
                     selector: ".never".to_string(),
                     visible: false,
+                    negate: false,
                 },
                 Duration::from_millis(50),
             )
@@ -429,6 +443,7 @@ mod tests {
                 WaitPredicate::DomSelector {
                     selector: "#btn".to_string(),
                     visible: true,
+                    negate: false,
                 },
                 Duration::from_millis(500),
             )
@@ -439,6 +454,59 @@ mod tests {
         assert!(
             snippet.contains("getBoundingClientRect"),
             "snippet visible doit contenir getBoundingClientRect, recu: {snippet}"
+        );
+    }
+
+    /// wait_for_gone : un selecteur ABSENT (evaluator renvoie false) avec
+    /// `negate=true` satisfait la condition immediatement.
+    #[tokio::test]
+    async fn composite_dom_selector_negate_satisfied_when_absent() {
+        struct AbsentEval;
+        #[async_trait]
+        impl JsEvaluator for AbsentEval {
+            async fn evaluate(&self, _: &str) -> PortResult<serde_json::Value> {
+                Ok(serde_json::json!(false)) // element absent
+            }
+        }
+        struct NoopInsp;
+        struct NoopRend;
+        #[async_trait]
+        impl AppInspector for NoopInsp {
+            async fn dom_snapshot(&self) -> PortResult<DomTree> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+            async fn state_snapshot(&self) -> PortResult<StateDump> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+        }
+        #[async_trait]
+        impl Renderer for NoopRend {
+            async fn screenshot(&self) -> PortResult<Screenshot> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+            async fn viewport_size(&self) -> PortResult<Size> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+        }
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(AbsentEval),
+            inspector: Arc::new(NoopInsp),
+            renderer: Arc::new(NoopRend),
+        };
+        let outcome = cond
+            .wait_until(
+                WaitPredicate::DomSelector {
+                    selector: ".spinner".to_string(),
+                    visible: false,
+                    negate: true,
+                },
+                Duration::from_millis(500),
+            )
+            .await
+            .expect("wait_until ne doit pas echouer");
+        assert!(
+            outcome.satisfied,
+            "element absent + negate => condition satisfaite (disparu)"
         );
     }
 
@@ -488,6 +556,7 @@ mod tests {
                 WaitPredicate::DomSelector {
                     selector: ".x".to_string(),
                     visible: false,
+                    negate: false,
                 },
                 Duration::from_millis(100),
             )
@@ -546,6 +615,7 @@ mod tests {
                 WaitPredicate::DomSelector {
                     selector: ".transient".to_string(),
                     visible: false,
+                    negate: false,
                 },
                 Duration::from_millis(50),
             )

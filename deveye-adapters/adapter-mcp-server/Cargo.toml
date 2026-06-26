@@ -16,7 +16,10 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std", "time", "fs"] }
 base64 = "0.22"
 rmcp = { version = "1.7", default-features = false, features = ["server", "macros", "transport-io"] }
 schemars = "1"
+# Decode/crop/encode PNG pour screenshot_region (recadrage) et assert_visual
+# (diff pixel). Version alignee sur le reste du workspace (screencap-*).
+image = { version = "0.25", default-features = false, features = ["png"] }

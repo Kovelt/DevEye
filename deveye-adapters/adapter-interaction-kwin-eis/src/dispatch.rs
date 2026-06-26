@@ -30,8 +30,17 @@ impl InteractionSink for KwinEisInteraction {
                 from: to_abs(from),
                 to: to_abs(to),
             },
+            // Le defilement EIS va a la fenetre focus : l'ancrage `position`
+            // n'a pas de sens OS-level, seuls les deltas comptent.
+            InteractionCommand::Scroll { dx, dy, .. } => EisAction::Scroll {
+                dx: dx as f64,
+                dy: dy as f64,
+            },
             InteractionCommand::Type { text } => EisAction::Type { text },
             InteractionCommand::KeyPress { key } => EisAction::KeyPress { key },
+            InteractionCommand::KeyCombo { modifiers, key } => {
+                EisAction::KeyCombo { modifiers, key }
+            }
             // `Navigate` suppose un routeur applicatif : pas de sens OS-level.
             InteractionCommand::Navigate { .. } => {
                 return Err(PortError::Unsupported(

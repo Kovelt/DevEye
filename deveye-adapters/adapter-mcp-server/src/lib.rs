@@ -2,8 +2,11 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Vingt et un outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Vingt-huit outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
+//! - `screenshot_region` : capture puis recadre sur (x, y, width, height)
+//! - `assert_visual` : compare le viewport (ou une région) à un PNG baseline
+//!   (golden) ; crée la baseline si absente
 //! - `click` : clic à `(x, y)` (bouton gauche)
 //! - `right_click` : clic droit à `(x, y)` (ouvre les menus contextuels)
 //! - `hover` : déplace le pointeur à `(x, y)` sans presser (déclenche
@@ -16,6 +19,10 @@
 //! - `eval_js` : évalue une expression JS dans la page cible, retourne la
 //!   valeur sérialisée
 //! - `type_text` : saisit du texte au focus courant
+//! - `press_key` : presse une touche unique (Enter, Tab, Escape, ArrowDown…)
+//! - `key_combo` : combinaison avec modificateurs (Ctrl+S, Ctrl+Shift+P…)
+//! - `navigate` : navigue vers une route logique (routeur du SDK opt-in)
+//! - `scroll` : défile de (dx, dy) pixels, ancré (centre par défaut)
 //! - `dom` : sérialise le DOM de l'app cible
 //! - `state` : sérialise le state opt-in poussé par le SDK
 //! - `logs_tail` : draine et renvoie le buffer de logs accumulé
@@ -34,6 +41,10 @@
 //! - `wait_condition` : attend un prédicat (dom-selector / state-key /
 //!   screenshot-stable) avec timeout
 //! - `wait_ready` : attend que l'app publie un state non vide (app prête)
+//! - `target_info` : décrit la cible active et ses capacités (eval_js, dom…)
+//!
+//! `wait_for_selector` accepte aussi `negate` (attendre la disparition d'un
+//! élément — « wait_for_gone »).
 //!
 //! Les appels d'outils sont **sérialisés** (un seul à la fois, mutex) : des
 //! interactions concurrentes pendant un re-render Dioxus touchaient le
@@ -66,6 +77,34 @@ use deveye_ports::{
     Renderer, WaitCondition, WindowLister,
 };
 
+/// Description statique de la cible active et de ses capacites, renvoyee par
+/// l'outil `target_info`. Construite par `deveye-server` (compose) selon le
+/// `--target` choisi : permet a l'agent de savoir d'avance quels outils
+/// repondront (ex. `eval_js`/`dom` absents en kwin-eis) sans tenter un appel
+/// pour le decouvrir.
+#[derive(Clone, Debug, Serialize)]
+pub struct TargetInfo {
+    /// Mode actif : "auto" | "cdp" | "sdk" | "kwin-eis".
+    pub target: String,
+    /// Comment les yeux (screenshot) sont obtenus.
+    pub eyes: String,
+    /// Comment les mains (clic/saisie) agissent.
+    pub hands: String,
+    /// `eval_js` / `dom` / `find_element` / `wait_for_selector` disponibles ?
+    pub eval_js: bool,
+    /// Le DOM est inspectable (`dom`, `find_element`) ?
+    pub dom: bool,
+    /// Le pont SDK (state/logs/commandes) est cable ? (peut renvoyer vide si le
+    /// SDK/shim de l'app n'est pas lance).
+    pub state: bool,
+    /// Les erreurs console JS sont collectables (`collect_console_errors`) ?
+    pub console_errors: bool,
+    /// `list_windows` renvoie des fenetres (CDP uniquement) ?
+    pub list_windows: bool,
+    /// Notes libres : pieges, prerequis, capacites indisponibles.
+    pub notes: String,
+}
+
 /// Ports passes a [`DeveyeMcpServer::new`] — evite les 9 arguments positionnels
 /// dont l'ordre fragile etait source d'erreurs silencieuses.
 pub struct DeveyePorts {
@@ -78,6 +117,7 @@ pub struct DeveyePorts {
     pub window_lister: Arc<dyn WindowLister>,
     pub console_errors: Arc<dyn ConsoleErrorSource>,
     pub wait_condition: Arc<dyn WaitCondition>,
+    pub target_info: TargetInfo,
 }
 
 /// Serveur MCP DevEye.
@@ -95,6 +135,7 @@ pub struct DeveyeMcpServer {
     window_lister: Arc<dyn WindowLister>,
     console_errors: Arc<dyn ConsoleErrorSource>,
     wait_condition: Arc<dyn WaitCondition>,
+    target_info: TargetInfo,
     /// Sérialise les appels d'outils : rmcp les traite en concurrence, mais
     /// deux interactions entrelacées pendant un re-render visent le mauvais
     /// nœud. Un seul outil à la fois, dans l'ordre d'arrivée.
@@ -118,6 +159,33 @@ struct ClickParams {
 struct TypeParams {
     /// Texte UTF-8 à insérer au focus courant.
     text: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct PressKeyParams {
+    /// Nom de la touche à presser (keydown + keyup). En CDP, noms W3C
+    /// (`Enter`, `Tab`, `Escape`, `ArrowDown`, `F5`…). En kwin-eis, noms XKB
+    /// (`Return`, `Down`…). Les noms communs (`Tab`, `Escape`, `F5`, `space`)
+    /// passent sur les deux.
+    key: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct KeyComboParams {
+    /// Modificateurs maintenus pendant la frappe (insensibles à la casse) :
+    /// `ctrl`/`control`, `shift`, `alt`, `meta`/`super`/`cmd`.
+    modifiers: Vec<String>,
+    /// Touche principale. En CDP, nom W3C (`KeyZ`, `KeyS`, `Tab`…) ou caractère
+    /// (`z`, `s`) ; en kwin-eis, nom XKB (`z`, `s`, `Tab`…).
+    key: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct NavigateParams {
+    /// Route logique à atteindre via le routeur exposé par le SDK opt-in
+    /// (`window.__deveye_router__`). Indisponible en kwin-eis (pas de routeur
+    /// applicatif OS-level).
+    route: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -185,6 +253,12 @@ struct WaitForSelectorParams {
     /// Si true, attend aussi que l'élément soit *visible* (rect non vide).
     #[serde(default)]
     visible: Option<bool>,
+    /// Si true, inverse la condition : attend que l'élément DISPARAISSE
+    /// (absent du DOM, ou non visible si `visible` est aussi vrai). C'est le
+    /// mode « wait_for_gone » : attendre la disparition d'un spinner, d'un
+    /// toast ou d'une modale après une action.
+    #[serde(default)]
+    negate: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -197,6 +271,22 @@ struct DragDropParams {
     to_x: i32,
     /// Ordonnée d'arrivée.
     to_y: i32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ScrollParams {
+    /// Abscisse d'ancrage (pixels viewport). Défaut : centre du viewport.
+    #[serde(default)]
+    x: Option<i32>,
+    /// Ordonnée d'ancrage. Défaut : centre du viewport.
+    #[serde(default)]
+    y: Option<i32>,
+    /// Défilement horizontal en pixels (positif = droite). Défaut 0.
+    #[serde(default)]
+    dx: Option<i32>,
+    /// Défilement vertical en pixels (positif = bas). Défaut 0.
+    #[serde(default)]
+    dy: Option<i32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -229,6 +319,39 @@ struct WaitReadyParams {
     timeout_ms: u64,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ScreenshotRegionParams {
+    /// Abscisse du coin haut-gauche de la région (pixels du screenshot).
+    x: u32,
+    /// Ordonnée du coin haut-gauche.
+    y: u32,
+    /// Largeur de la région.
+    width: u32,
+    /// Hauteur de la région.
+    height: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AssertVisualParams {
+    /// Chemin du PNG de référence (baseline). S'il n'existe pas, il est créé à
+    /// partir de la capture courante (`{ created: true }`) ; sinon la capture
+    /// est comparée pixel à pixel à ce fichier.
+    baseline_path: String,
+    /// Ratio maximal de pixels différents toléré (0.0–1.0). Défaut 0.01 (1 %).
+    #[serde(default)]
+    threshold: Option<f64>,
+    /// Région optionnelle à comparer (sinon tout le viewport) : x, y.
+    #[serde(default)]
+    x: Option<u32>,
+    #[serde(default)]
+    y: Option<u32>,
+    /// Région optionnelle : largeur, hauteur.
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
+}
+
 #[tool_router]
 impl DeveyeMcpServer {
     pub fn new(ports: DeveyePorts) -> Self {
@@ -242,6 +365,7 @@ impl DeveyeMcpServer {
             window_lister: ports.window_lister,
             console_errors: ports.console_errors,
             wait_condition: ports.wait_condition,
+            target_info: ports.target_info,
             gate: Arc::new(tokio::sync::Mutex::new(())),
             tool_router: Self::tool_router(),
         }
@@ -265,6 +389,75 @@ impl DeveyeMcpServer {
             b64,
             "image/png",
         )]))
+    }
+
+    #[tool(
+        description = "Capture un screenshot puis le recadre sur la région (x, y, width, height) avant de renvoyer le PNG (image MCP). Réduit nettement le coût en tokens d'une vérification ciblée, et reste la seule façon d'inspecter un composant précis en kwin-eis (pas de DOM). La région est bornée aux dimensions de la capture."
+    )]
+    async fn screenshot_region(
+        &self,
+        Parameters(p): Parameters<ScreenshotRegionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let shot = self.renderer.screenshot().await.map_err(internal)?;
+        let cropped = crop_png(&shot.bytes, p.x, p.y, p.width, p.height).map_err(internal)?;
+        let b64 = B64.encode(&cropped);
+        Ok(CallToolResult::success(vec![Content::image(
+            b64,
+            "image/png",
+        )]))
+    }
+
+    #[tool(
+        description = "Assertion visuelle (golden) : capture le viewport (ou la région x/y/width/height) et le compare au PNG `baseline_path`. Si le fichier n'existe pas, il est créé (`{ created: true }`). Sinon renvoie `{ ok, diff_ratio, threshold, same_dims, ... }` ; `isError` si le ratio de pixels différents dépasse `threshold` (défaut 0.01) ou si les dimensions diffèrent. Premier outil d'assertion déterministe disponible en kwin-eis (sans DOM/JS)."
+    )]
+    async fn assert_visual(
+        &self,
+        Parameters(p): Parameters<AssertVisualParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let shot = self.renderer.screenshot().await.map_err(internal)?;
+        // Recadrage optionnel : les 4 bornes doivent etre fournies ensemble.
+        let current = match (p.x, p.y, p.width, p.height) {
+            (Some(x), Some(y), Some(w), Some(h)) => {
+                crop_png(&shot.bytes, x, y, w, h).map_err(internal)?
+            }
+            _ => shot.bytes.clone(),
+        };
+        let path = std::path::Path::new(&p.baseline_path);
+        if !tokio::fs::try_exists(path).await.map_err(internal)? {
+            // Baseline absente : on l'ecrit a partir de la capture courante.
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    tokio::fs::create_dir_all(parent).await.map_err(internal)?;
+                }
+            }
+            tokio::fs::write(path, &current).await.map_err(internal)?;
+            return Ok(json_success(&serde_json::json!({
+                "ok": true,
+                "created": true,
+                "baseline_path": p.baseline_path,
+            })));
+        }
+        let baseline = tokio::fs::read(path).await.map_err(internal)?;
+        let threshold = p.threshold.unwrap_or(0.01);
+        let outcome = visual_diff(&baseline, &current).map_err(internal)?;
+        let ok = outcome.same_dims && outcome.diff_ratio <= threshold;
+        let payload = serde_json::json!({
+            "ok": ok,
+            "created": false,
+            "diff_ratio": outcome.diff_ratio,
+            "threshold": threshold,
+            "same_dims": outcome.same_dims,
+            "baseline_dims": { "width": outcome.baseline_dims.0, "height": outcome.baseline_dims.1 },
+            "current_dims": { "width": outcome.current_dims.0, "height": outcome.current_dims.1 },
+            "baseline_path": p.baseline_path,
+        });
+        if ok {
+            Ok(json_success(&payload))
+        } else {
+            Ok(json_error(&payload))
+        }
     }
 
     #[tool(
@@ -304,6 +497,51 @@ impl DeveyeMcpServer {
         let _serial = self.gate.lock().await;
         self.interaction
             .dispatch(InteractionCommand::type_text(p.text))
+            .await
+            .map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(
+        description = "Presse une touche unique (keydown + keyup) au focus courant : Enter, Tab, Escape, ArrowDown, F5… Marche sur toutes les cibles, y compris kwin-eis (où eval_js est indisponible). Noms W3C en CDP (Enter, ArrowDown) ; noms XKB en kwin-eis (Return, Down) ; les noms communs (Tab, Escape, F5) passent partout."
+    )]
+    async fn press_key(
+        &self,
+        Parameters(p): Parameters<PressKeyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        self.interaction
+            .dispatch(InteractionCommand::key(p.key))
+            .await
+            .map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(
+        description = "Combinaison de touches : maintient les modificateurs (ctrl/shift/alt/meta) pendant la frappe de `key`, puis les relâche. Ctrl+S, Ctrl+Z, Ctrl+Shift+P, Alt+F4… Marche sur toutes les cibles, y compris kwin-eis (events OS-level : les raccourcis du toolkit se déclenchent). `press_key` seul ne porte aucun modificateur."
+    )]
+    async fn key_combo(
+        &self,
+        Parameters(p): Parameters<KeyComboParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        self.interaction
+            .dispatch(InteractionCommand::key_combo(p.modifiers, p.key))
+            .await
+            .map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(
+        description = "Navigue vers une route logique exposée par l'app cible (routeur du SDK opt-in). Interface découvrable, à préférer à un eval_js sur le hook interne `window.__deveye_router__`. Indisponible en kwin-eis (pas de routeur applicatif OS-level)."
+    )]
+    async fn navigate(
+        &self,
+        Parameters(p): Parameters<NavigateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        self.interaction
+            .dispatch(InteractionCommand::navigate(p.route))
             .await
             .map_err(internal)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
@@ -444,7 +682,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Attend qu'un sélecteur CSS soit présent (et optionnellement visible) dans le DOM. Renvoie `{ found, elapsed_ms }`. Évite tout sleep arbitraire après une action asynchrone. Défaut 5000 ms, plafond 30000."
+        description = "Attend qu'un sélecteur CSS soit présent (et optionnellement visible) dans le DOM. Renvoie `{ found, elapsed_ms }` (`isError` si non satisfait). Avec `negate=true`, attend au contraire que l'élément DISPARAISSE (wait_for_gone : spinner/toast/modale) — `found=true` signifie alors « disparu ». Évite tout sleep arbitraire. Défaut 5000 ms, plafond 30000."
     )]
     async fn wait_for_selector(
         &self,
@@ -458,6 +696,7 @@ impl DeveyeMcpServer {
         let predicate = WaitPredicate::DomSelector {
             selector: p.selector,
             visible: p.visible.unwrap_or(false),
+            negate: p.negate.unwrap_or(false),
         };
         let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(30_000));
         let outcome = self
@@ -590,6 +829,35 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
+        description = "Défile de (dx, dy) pixels — `dy > 0` vers le bas. Ancré en (x, y) ou, par défaut, au centre du viewport. En CDP, l'ancrage cible le bon conteneur scrollable (mouseWheel) ; via le pont SDK, le conteneur scrollable sous le point est privilégié (sinon window) ; en kwin-eis, le défilement va à la fenêtre focus. Indispensable pour les listes/grilles en kwin-eis (eval_js indisponible)."
+    )]
+    async fn scroll(
+        &self,
+        Parameters(p): Parameters<ScrollParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let dx = p.dx.unwrap_or(0);
+        let dy = p.dy.unwrap_or(0);
+        // Ancrage : centre du viewport si x ou y manquant. Resolu via le
+        // renderer ; en cas d'echec (cible sans dimensions exploitables), on
+        // retombe sur (0, 0) — sans incidence en kwin-eis (ancrage ignore).
+        let (cx, cy) = if p.x.is_none() || p.y.is_none() {
+            match self.renderer.viewport_size().await {
+                Ok(size) => (size.width as i32 / 2, size.height as i32 / 2),
+                Err(_) => (0, 0),
+            }
+        } else {
+            (0, 0)
+        };
+        let anchor = Position::new(p.x.unwrap_or(cx), p.y.unwrap_or(cy));
+        self.interaction
+            .dispatch(InteractionCommand::scroll(anchor, dx, dy))
+            .await
+            .map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(
         description = "Draine les erreurs console émises par le webview depuis le dernier appel (exceptions non capturées, promesses rejetées, console.error). Renvoie un tableau typé `[{ level, text, url?, line?, timestamp }]` (port ConsoleErrorSource). Un crash JS de la page devient visible à l'agent."
     )]
     async fn collect_console_errors(&self) -> Result<CallToolResult, McpError> {
@@ -600,6 +868,14 @@ impl DeveyeMcpServer {
             .await
             .map_err(internal)?;
         Ok(json_success(&errors))
+    }
+
+    #[tool(
+        description = "Décrit la cible active et ses capacités : `{ target, eyes, hands, eval_js, dom, state, console_errors, list_windows, notes }`. Permet de savoir d'avance quels outils répondront (ex. eval_js/dom = false en kwin-eis) sans tenter un appel pour le découvrir."
+    )]
+    async fn target_info(&self) -> Result<CallToolResult, McpError> {
+        // Description statique resolue au demarrage : pas de gate, pas d'I/O.
+        Ok(json_success(&self.target_info))
     }
 
     #[tool(
@@ -654,11 +930,14 @@ impl ServerHandler for DeveyeMcpServer {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
             "DevEye MCP — observe et pilote une app vivante en dev. \
-             Outils : screenshot, click, right_click, hover, click_selector, \
-             click_text, eval_js, type_text, dom, state, logs_tail, \
-             invoke_command, list_commands, wait_for_selector, find_element, \
-             assert_selector, drag_drop, collect_console_errors, list_windows, \
-             wait_condition, wait_ready."
+             Outils : screenshot, screenshot_region, assert_visual, click, \
+             right_click, hover, click_selector, click_text, eval_js, \
+             type_text, press_key, key_combo, navigate, scroll, dom, state, \
+             logs_tail, invoke_command, list_commands, wait_for_selector, \
+             find_element, assert_selector, drag_drop, collect_console_errors, \
+             list_windows, wait_condition, wait_ready, target_info. \
+             Appeler target_info en premier pour connaitre les capacites de la \
+             cible (eval_js/dom indisponibles en kwin-eis)."
                 .to_string(),
         );
         info
@@ -687,9 +966,170 @@ fn internal<E: std::fmt::Display>(err: E) -> McpError {
     McpError::internal_error(err.to_string(), None)
 }
 
+/// Recadre un PNG sur `(x, y, width, height)` et le re-encode en PNG.
+/// La region est bornee aux dimensions reelles de l'image (un `width` trop
+/// grand est tronque) ; une origine hors image ou une dimension nulle est une
+/// erreur. Utilise par `screenshot_region` et `assert_visual`.
+fn crop_png(png: &[u8], x: u32, y: u32, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    use image::GenericImageView;
+    if width == 0 || height == 0 {
+        return Err("region vide (width ou height = 0)".to_string());
+    }
+    let img = image::load_from_memory(png).map_err(|e| format!("decode PNG : {e}"))?;
+    let (iw, ih) = img.dimensions();
+    if x >= iw || y >= ih {
+        return Err(format!(
+            "region hors capture : origine ({x}, {y}) hors dimensions {iw}x{ih}"
+        ));
+    }
+    let cw = width.min(iw - x);
+    let ch = height.min(ih - y);
+    let cropped = img.crop_imm(x, y, cw, ch);
+    let mut out = Vec::new();
+    cropped
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .map_err(|e| format!("encode PNG : {e}"))?;
+    Ok(out)
+}
+
+/// Resultat d'une comparaison visuelle (`assert_visual`).
+struct VisualOutcome {
+    /// Vrai si baseline et capture ont les memes dimensions.
+    same_dims: bool,
+    /// Ratio de pixels differents (0.0–1.0). `1.0` si les dimensions different.
+    diff_ratio: f64,
+    baseline_dims: (u32, u32),
+    current_dims: (u32, u32),
+}
+
+/// Compare deux PNG pixel a pixel (RGBA). Des dimensions differentes => echec
+/// (`same_dims=false`, `diff_ratio=1.0`) sans iterer. Sinon, ratio de pixels
+/// non identiques sur le total.
+fn visual_diff(baseline_png: &[u8], current_png: &[u8]) -> Result<VisualOutcome, String> {
+    let a = image::load_from_memory(baseline_png)
+        .map_err(|e| format!("decode baseline : {e}"))?
+        .to_rgba8();
+    let b = image::load_from_memory(current_png)
+        .map_err(|e| format!("decode capture : {e}"))?
+        .to_rgba8();
+    let baseline_dims = a.dimensions();
+    let current_dims = b.dimensions();
+    if baseline_dims != current_dims {
+        return Ok(VisualOutcome {
+            same_dims: false,
+            diff_ratio: 1.0,
+            baseline_dims,
+            current_dims,
+        });
+    }
+    let total = (baseline_dims.0 as u64) * (baseline_dims.1 as u64);
+    let diff = a
+        .pixels()
+        .zip(b.pixels())
+        .filter(|(pa, pb)| pa != pb)
+        .count() as u64;
+    let diff_ratio = if total == 0 {
+        0.0
+    } else {
+        diff as f64 / total as f64
+    };
+    Ok(VisualOutcome {
+        same_dims: true,
+        diff_ratio,
+        baseline_dims,
+        current_dims,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{crop_png, visual_diff};
     use deveye_core::{InteractionCommand, MouseButton, Position};
+
+    /// Encode une image RGBA unie de `w`x`h` en PNG (helper de test).
+    fn solid_png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(w, h, image::Rgba(rgba));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("encode png test");
+        out
+    }
+
+    fn png_dims(png: &[u8]) -> (u32, u32) {
+        use image::GenericImageView;
+        image::load_from_memory(png).expect("decode").dimensions()
+    }
+
+    #[test]
+    fn crop_png_reduces_to_region() {
+        let src = solid_png(10, 10, [255, 0, 0, 255]);
+        let cropped = crop_png(&src, 2, 3, 4, 5).expect("crop ok");
+        assert_eq!(png_dims(&cropped), (4, 5));
+    }
+
+    #[test]
+    fn crop_png_clamps_oversized_region() {
+        let src = solid_png(10, 10, [0, 255, 0, 255]);
+        // Origine (8,8), demande 10x10 => borne a 2x2 (10-8).
+        let cropped = crop_png(&src, 8, 8, 10, 10).expect("crop ok");
+        assert_eq!(png_dims(&cropped), (2, 2));
+    }
+
+    #[test]
+    fn crop_png_rejects_origin_out_of_bounds() {
+        let src = solid_png(10, 10, [0, 0, 255, 255]);
+        assert!(crop_png(&src, 20, 0, 4, 4).is_err());
+    }
+
+    #[test]
+    fn crop_png_rejects_zero_dimension() {
+        let src = solid_png(10, 10, [0, 0, 255, 255]);
+        assert!(crop_png(&src, 0, 0, 0, 4).is_err());
+    }
+
+    #[test]
+    fn visual_diff_identical_is_zero() {
+        let a = solid_png(4, 4, [10, 20, 30, 255]);
+        let out = visual_diff(&a, &a).expect("diff ok");
+        assert!(out.same_dims);
+        assert_eq!(out.diff_ratio, 0.0);
+    }
+
+    #[test]
+    fn visual_diff_dimension_mismatch_is_max() {
+        let a = solid_png(4, 4, [0, 0, 0, 255]);
+        let b = solid_png(8, 8, [0, 0, 0, 255]);
+        let out = visual_diff(&a, &b).expect("diff ok");
+        assert!(!out.same_dims);
+        assert_eq!(out.diff_ratio, 1.0);
+        assert_eq!(out.baseline_dims, (4, 4));
+        assert_eq!(out.current_dims, (8, 8));
+    }
+
+    #[test]
+    fn visual_diff_one_changed_pixel_ratio() {
+        // 2x2 = 4 pixels ; un seul differe => ratio 0.25.
+        let mut a_img = image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]));
+        let mut b_img = a_img.clone();
+        b_img.put_pixel(0, 0, image::Rgba([255, 255, 255, 255]));
+        let encode = |img: &mut image::RgbaImage| {
+            let mut out = Vec::new();
+            image::DynamicImage::ImageRgba8(img.clone())
+                .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+                .unwrap();
+            out
+        };
+        let a = encode(&mut a_img);
+        let b = encode(&mut b_img);
+        let out = visual_diff(&a, &b).expect("diff ok");
+        assert!(out.same_dims);
+        assert!(
+            (out.diff_ratio - 0.25).abs() < 1e-9,
+            "ratio={}",
+            out.diff_ratio
+        );
+    }
 
     #[test]
     fn right_click_command_serializes_button_right() {

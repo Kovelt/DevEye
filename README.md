@@ -10,17 +10,17 @@ Conçu pour les apps Dioxus desktop, il se branche aussi sur n'importe quelle ci
 
 ## Caractéristiques clés
 
-### 21 outils MCP, en six familles
+### 28 outils MCP, en six familles
 
 | Famille | Outils |
 |---|---|
-| **Capture** | `screenshot` |
-| **Interaction** | `click`, `right_click`, `hover`, `drag_drop`, `click_selector`, `click_text`, `type_text` |
-| **Inspection DOM / state** | `dom`, `find_element`, `assert_selector`, `eval_js`, `state`, `collect_console_errors`, `list_windows` |
+| **Capture** | `screenshot`, `screenshot_region`, `assert_visual` |
+| **Interaction** | `click`, `right_click`, `hover`, `drag_drop`, `click_selector`, `click_text`, `type_text`, `press_key`, `key_combo`, `scroll`, `navigate` |
+| **Inspection DOM / state** | `dom`, `find_element`, `assert_selector`, `eval_js`, `state`, `collect_console_errors`, `list_windows`, `target_info` |
 | **Logs** | `logs_tail` |
-| **Attente / conditions** | `wait_for_selector`, `wait_condition`, `wait_ready` |
+| **Attente / conditions** | `wait_for_selector` (+ `negate` = wait_for_gone), `wait_condition`, `wait_ready` |
 | **Commandes logiques** | `list_commands`, `invoke_command` |
-| *(à venir)* | `scroll`, `resize` |
+| *(à venir)* | `resize` |
 
 Détail complet des paramètres et valeurs de retour : [docs/usage.md](docs/usage.md).
 

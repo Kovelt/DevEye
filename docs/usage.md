@@ -85,24 +85,31 @@ dx serve --platform desktop --features deveye
 claude
 ```
 
-Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **21 outils sont disponibles** (2 _(à venir)_ pas encore implémentés) :
+Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **28 outils sont disponibles** (1 _(à venir)_ : `resize`) :
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|
 | `screenshot` | aucun | image PNG (contenu image natif MCP, affichée par le client) | « prends un screenshot » |
+| `screenshot_region` | `{x, y, width, height}` | image PNG recadrée | « capture la zone (0, 0, 320, 200) » (vérif ciblée, moins de tokens ; seule vérif visuelle de composant en kwin-eis) |
+| `assert_visual` | `{baseline_path, threshold?, x?, y?, width?, height?}` | JSON `{ok, diff_ratio, threshold, same_dims, ...}` | « compare au golden `ref.png` » (crée la baseline si absente ; `isError` si > seuil ; **seule assertion déterministe en kwin-eis**) |
 | `click` | `{x, y}` | `"ok"` | « clique sur 50, 200 » (envoie `mouseMoved` + sleep 60 ms + press/release) |
 | `right_click` | `{x, y}` | `"ok"` | « clic droit à 50, 200 » (ouvre les menus contextuels — émet `contextmenu`) |
 | `hover` | `{x, y}` | `"ok"` | « hover sur 10, 375 » (ouvre une zone rétractable sans cliquer) |
 | `click_selector` | `{selector}` | JSON `{ok, reason?}` | « clique sur `button.btn-primary` » (robuste aux décalages de coords) |
 | `click_text` | `{text}` | JSON `{ok, reason?}` | « clique sur le bouton "Valider" » (matche `button/a/[role=button]` par `innerText` exact) |
 | `type_text` | `{text}` | `"ok"` | « tape "Bonjour" dans le champ focus » |
+| `press_key` | `{key}` | `"ok"` | « presse Enter » (Tab/Escape/ArrowDown… ; marche en kwin-eis. Noms W3C en CDP, XKB en kwin-eis) |
+| `key_combo` | `{modifiers, key}` | `"ok"` | « Ctrl+S » (`modifiers`: ctrl/shift/alt/meta ; seul moyen d'envoyer Ctrl+Z/C/V) |
+| `navigate` | `{route}` | `"ok"` | « navigue vers `Agenda` » (routeur du SDK opt-in ; indispo en kwin-eis) |
+| `scroll` | `{x?, y?, dx?, dy?}` | `"ok"` | « scrolle vers le bas de 600 px » (`dy > 0` = bas ; ancrage au centre par défaut ; cible le bon conteneur) |
 | `eval_js` | `{expression}` | JSON sérialisé | « renvoie `document.querySelectorAll('button').length` » (Promise awaitée) |
 | `dom` | aucun | JSON du DOM courant | « renvoie le DOM courant » |
 | `state` | aucun | JSON `{ ... }` | « quel est l'état applicatif courant ? » |
+| `target_info` | aucun | JSON `{target, eyes, hands, eval_js, dom, state, console_errors, list_windows, notes}` | « quelles capacités a la cible ? » (à appeler en premier ; dit si `eval_js`/`dom` répondront) |
 | `logs_tail` | aucun | JSON `[{ level, target, message, ... }]` | « affiche les derniers logs » |
 | `find_element` | `{selector}` | JSON `{found, tag, text, rect, visible, disabled, attributes}` | « inspecte le premier `#save-btn` » (alternatif léger à `dom`) |
 | `assert_selector` | `{selector, expected_text?, expected_count?}` | JSON `{ok, selector, actual_count, actual_text?}` | « vérifie qu'il y a exactement 3 `.card` » (`isError` si l'assertion échoue) |
-| `wait_for_selector` | `{selector, timeout_ms?, visible?}` | JSON `{found, elapsed_ms}` | « attends que `#result` soit présent (max 5 s) » (sans sleep arbitraire) |
+| `wait_for_selector` | `{selector, timeout_ms?, visible?, negate?}` | JSON `{found, elapsed_ms}` | « attends que `#result` soit présent » ; avec `negate=true` : « attends que `.spinner` disparaisse » (wait_for_gone) |
 | `wait_condition` | `{predicate, timeout_ms?}` | JSON `{satisfied, elapsed_ms, detail}` | « attends que `count` vaille 3 dans le state » (dom-selector / state-key / screenshot-stable) |
 | `wait_ready` | `{timeout_ms}` | JSON `{ready, waited_ms}` | « attends que l'app soit prête » (state non vide ; poll 200 ms ; `isError` si timeout) |
 | `drag_drop` | `{from_x, from_y, to_x, to_y}` | `"ok"` | « glisse de (10, 20) vers (100, 200) » |
@@ -110,7 +117,6 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `list_commands` | aucun | JSON `[{name, description}]` | « quelles commandes l'app expose-t-elle ? » |
 | `collect_console_errors` | aucun | JSON `[{level, text, url?, line?, timestamp}]` | « y a-t-il eu des erreurs JS depuis la dernière vérification ? » |
 | `list_windows` | aucun | JSON `[{id, title, url, kind}]` | « liste les onglets/fenêtres de la cible CDP » |
-| `scroll` _(à venir)_ | `{dx?, dy?, x?, y?}` | `"ok"` | « scrolle vers le bas de 600 px » (`dy` positif = bas ; ancrage par défaut au centre) |
 | `resize` _(à venir)_ | `{width, height}` | `"ok"` | « passe en 375×812 » (émule le rendu responsive, pas la fenêtre OS) |
 
 **Conseils d'usage** :
@@ -118,8 +124,10 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 - Pour les UI qui dépendent d'un hover (sidebar rétractable, menus contextuels), envoyer `hover(x, y)` d'abord, puis `click_text` / `click_selector` pour cibler l'élément révélé.
 - Préférer `click_text` / `click_selector` aux coordonnées brutes : elles ne cassent pas quand le layout bouge (responsive, animations, refactor CSS) et déclenchent un vrai clic CDP (`mousedown`/`mouseup`/`pointer`), au même titre que `click(x, y)`.
 - `eval_js` est le couteau-suisse pour tout cas non couvert : lire un `getBoundingClientRect`, sonder un état frontend, déclencher du JS interne au framework, ou injecter des événements clavier (`new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })`).
-- **Touche clavier** : pas d'outil `press_key` dédié — utiliser `eval_js` pour dispatcher un `KeyboardEvent` sur `document.activeElement` (ex. `Enter`, `Tab`, `Escape`, `ArrowDown`). Exemple : `eval_js({ expression: "document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))" })`.
-- **Navigation** : utiliser `invoke_command` si l'app expose une route logique (ex. `set-page`) ; sinon `eval_js` avec le hook routeur du SDK (`window.__deveye_router__`).
+- **Touche clavier** : `press_key({ key })` pour une touche unique (`Enter`, `Tab`, `Escape`, `ArrowDown`…), `key_combo({ modifiers, key })` pour une combinaison (`Ctrl+S`, `Ctrl+Shift+P`). Les deux marchent en kwin-eis (events OS-level), là où `eval_js` est indisponible. Nuance de nommage : noms W3C en CDP (`Enter`, `ArrowDown`), noms XKB en kwin-eis (`Return`, `Down`) ; les noms communs (`Tab`, `Escape`, `F5`) passent partout.
+- **Navigation** : `navigate({ route })` (routeur du SDK opt-in, interface découvrable) ; ou `invoke_command` si l'app expose une route logique métier (ex. `set-page`). Indisponible en kwin-eis (pas de routeur applicatif OS-level).
+- **Découverte de cible** : appeler `target_info` en début de session dit quelles capacités répondront (ex. `eval_js`/`dom` = false en kwin-eis) — évite de tester un outil pour découvrir qu'il renvoie `Unsupported`.
+- **Disparition d'un élément** : `wait_for_selector({ selector, negate: true })` attend qu'un spinner/toast/modale disparaisse (pas de sleep arbitraire).
 - Le buffer logs est **drainé** à chaque appel `logs_tail` : un second appel ne renverra que les events arrivés entre-temps. Pour attendre de nouveaux logs après une action, utiliser une boucle `logs_tail` ou `wait_condition` avec un prédicat `state-key`.
 - Pour éviter tout sleep arbitraire après une action asynchrone, préférer `wait_for_selector` (attend un sélecteur CSS) ou `wait_condition` (prédicats : `dom-selector`, `state-key`, `screenshot-stable`).
 - Pour piloter l'app par sa **logique métier** plutôt que par l'UI : l'app expose des routes via `deveye_sdk::expose_route("set-page", "Change la page", |payload| { ... })` (en `cfg(debug_assertions)`) ; l'agent les découvre avec `list_commands` puis les déclenche avec `invoke_command`. Plus robuste qu'une cascade de clics pour mettre l'app dans un état donné.
@@ -160,7 +168,8 @@ dotnet run --project src/Atlas.App -f net10.0-desktop -c Debug
 cargo run -p deveye-server -- --serve-mcp --target kwin-eis
 ```
 
-- **Mains** : clics, survols, saisies et touche clavier passent par KWin EIS (événements OS-level vrais, identiques à la souris et au clavier physiques).
+- **Mains** : clics, survols, saisies, touche unique (`press_key`), combinaisons (`key_combo` — Ctrl+S, Ctrl+Z…) et défilement (`scroll`) passent par KWin EIS (événements OS-level vrais, identiques à la souris et au clavier physiques). `navigate` reste indisponible (routeur applicatif).
+- **Assertions visuelles** : faute de DOM, `screenshot_region` (vérif ciblée à bas coût) et `assert_visual` (golden) sont les seules vérifications déterministes ; `target_info` confirme les capacités absentes (`eval_js`/`dom` = false).
 - **Yeux** : screencap de la fenêtre (`--screencap-window <sous-chaîne>`) ou plein écran sans ce flag. Sous KDE/Wayland, `--screencap-backend kwin` (défaut auto) ; ailleurs, xcap avec `GDK_BACKEND=x11`.
 - **DOM / JS / state** : indisponibles (rendu natif, pas de WebView). `dom`, `eval_js`, `wait_for_selector`, `find_element` renvoient `PortError::Unsupported`.
 - **Prérequis** : `KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1` dans l'environnement de session KWin (cf. [architecture.md](./architecture.md)) ; la connexion D-Bus qui initie EIS doit rester ouverte pendant toute la session — DevEye la maintient.

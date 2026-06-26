@@ -193,6 +193,51 @@ fn keypress_snippet(key: &str) -> String {
     )
 }
 
+/// Vrai si `modifiers` contient l'un des alias donnes (insensible a la casse).
+fn has_modifier(modifiers: &[String], aliases: &[&str]) -> bool {
+    modifiers
+        .iter()
+        .any(|m| aliases.iter().any(|a| m.eq_ignore_ascii_case(a)))
+}
+
+fn keycombo_snippet(modifiers: &[String], key: &str) -> String {
+    let key = serde_json::to_string(key).expect("string serialise");
+    let ctrl = has_modifier(modifiers, &["ctrl", "control"]);
+    let shift = has_modifier(modifiers, &["shift"]);
+    let alt = has_modifier(modifiers, &["alt"]);
+    let meta = has_modifier(modifiers, &["meta", "super", "cmd", "command"]);
+    // KeyboardEvent synthetique avec les booleens de modificateurs : c'est ce
+    // que lisent les frameworks (e.ctrlKey, e.shiftKey...). Moins fidele qu'un
+    // vrai event OS (les raccourcis du moteur ne se declenchent pas), mais
+    // suffisant pour les handlers applicatifs.
+    format!(
+        "(function(){{ const el = document.activeElement || document.body; \
+         const opts = {{ key: {key}, ctrlKey: {ctrl}, shiftKey: {shift}, altKey: {alt}, metaKey: {meta}, \
+                         bubbles: true, cancelable: true }}; \
+         el.dispatchEvent(new KeyboardEvent('keydown', opts)); \
+         el.dispatchEvent(new KeyboardEvent('keyup', opts)); \
+         return {{ ok: true }}; }})()"
+    )
+}
+
+fn scroll_snippet(position: Position, dx: i32, dy: i32) -> String {
+    let (x, y) = (position.x, position.y);
+    // Piege connu (usage.md) : le scroll de l'app vit souvent dans un conteneur
+    // (.shell__content), pas dans window. On remonte les ancetres a la recherche
+    // du premier element reellement scrollable sous le point ; sinon window.
+    format!(
+        "(function(){{ let n = document.elementFromPoint({x}, {y}); \
+         const scrollable = (e) => {{ while (e && e !== document.body && e !== document.documentElement) {{ \
+           const s = getComputedStyle(e); \
+           if (/(auto|scroll)/.test((s.overflowY || '') + (s.overflowX || '')) \
+               && (e.scrollHeight > e.clientHeight || e.scrollWidth > e.clientWidth)) return e; \
+           e = e.parentElement; }} return null; }}; \
+         const t = scrollable(n); \
+         if (t) t.scrollBy({dx}, {dy}); else window.scrollBy({dx}, {dy}); \
+         return {{ ok: true }}; }})()"
+    )
+}
+
 fn navigate_snippet(route: &str) -> String {
     let route = serde_json::to_string(route).expect("string serialise");
     // Le hook routeur `__deveye_router__` est injecté par le SDK opt-in.
@@ -235,11 +280,17 @@ impl InteractionSink for JsInteraction {
             InteractionCommand::Hover { position } => self.run(hover_snippet(position)).await,
             InteractionCommand::Type { text } => self.run(type_snippet(&text)).await,
             InteractionCommand::KeyPress { key } => self.run(keypress_snippet(&key)).await,
+            InteractionCommand::KeyCombo { modifiers, key } => {
+                self.run(keycombo_snippet(&modifiers, &key)).await
+            }
             InteractionCommand::Navigate { route } => {
                 // Meme contrat que le chemin CDP : le hook routeur du SDK.
                 self.run(navigate_snippet(&route)).await
             }
             InteractionCommand::DragDrop { from, to } => self.run(dragdrop_snippet(from, to)).await,
+            InteractionCommand::Scroll { position, dx, dy } => {
+                self.run(scroll_snippet(position, dx, dy)).await
+            }
         }
     }
 }
@@ -332,6 +383,34 @@ mod tests {
         // Cle pathologique : verifier que serde_json echappe correctement.
         let js = keypress_snippet("a\"b");
         assert!(js.contains(r#""a\"b""#));
+    }
+
+    #[test]
+    fn scroll_snippet_cible_le_conteneur_scrollable_sinon_window() {
+        let js = scroll_snippet(Position::new(42, 77), 0, 600);
+        assert!(js.contains("elementFromPoint(42, 77)"));
+        assert!(js.contains("scrollBy(0, 600)"));
+        assert!(js.contains("window.scrollBy(0, 600)"));
+        assert!(js.contains("scrollHeight"));
+    }
+
+    #[test]
+    fn keycombo_snippet_active_les_bons_modificateurs() {
+        let js = keycombo_snippet(&["Ctrl".to_string(), "shift".to_string()], "KeyP");
+        assert!(js.contains("ctrlKey: true"));
+        assert!(js.contains("shiftKey: true"));
+        assert!(js.contains("altKey: false"));
+        assert!(js.contains("metaKey: false"));
+        assert!(js.contains("\"KeyP\""));
+        assert!(js.contains("keydown"));
+        assert!(js.contains("keyup"));
+    }
+
+    #[test]
+    fn has_modifier_est_insensible_a_la_casse_et_aux_alias() {
+        let mods = vec!["SUPER".to_string()];
+        assert!(has_modifier(&mods, &["meta", "super", "cmd"]));
+        assert!(!has_modifier(&mods, &["ctrl", "control"]));
     }
 
     #[test]
