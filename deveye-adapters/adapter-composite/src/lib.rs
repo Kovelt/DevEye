@@ -16,9 +16,10 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
-use deveye_core::{ConsoleError, DomTree, StateDump, WaitOutcome, WaitPredicate};
+use deveye_core::{ConsoleError, DomTree, LogLevel, StateDump, WaitOutcome, WaitPredicate};
 use deveye_ports::{
-    AppInspector, ConsoleErrorSource, JsEvaluator, PortError, PortResult, Renderer, WaitCondition,
+    AppInspector, ConsoleErrorSource, JsEvaluator, LogSource, PortError, PortResult, Renderer,
+    WaitCondition,
 };
 
 // ── ConsoleErrorSource ────────────────────────────────────────────────────────
@@ -130,6 +131,28 @@ pub struct CompositeWaitCondition {
     pub evaluator: Arc<dyn JsEvaluator>,
     pub inspector: Arc<dyn AppInspector>,
     pub renderer: Arc<dyn Renderer>,
+    pub log_source: Arc<dyn LogSource>,
+}
+
+/// Hache les pixels RGBA d'une **region** d'un PNG (decode + crop_imm), bornee
+/// aux dimensions reelles. Sert au predicat `ScreenshotRegionStable` : on hashe
+/// les pixels bruts plutot que de re-encoder un PNG a chaque iteration.
+fn hash_region(png: &[u8], x: u32, y: u32, width: u32, height: u32) -> PortResult<u64> {
+    use image::GenericImageView;
+    let img = image::load_from_memory(png)
+        .map_err(|e| PortError::Render(format!("decode PNG region : {e}")))?;
+    let (iw, ih) = img.dimensions();
+    if x >= iw || y >= ih {
+        return Err(PortError::Render(format!(
+            "region hors capture : ({x}, {y}) hors {iw}x{ih}"
+        )));
+    }
+    let cw = width.min(iw - x).max(1);
+    let ch = height.min(ih - y).max(1);
+    let cropped = img.crop_imm(x, y, cw, ch).to_rgba8();
+    let mut h = DefaultHasher::new();
+    cropped.as_raw().hash(&mut h);
+    Ok(h.finish())
 }
 
 impl CompositeWaitCondition {
@@ -186,6 +209,34 @@ impl CompositeWaitCondition {
                 let second = self.renderer.screenshot().await?;
                 let hash_second = hash_screenshot_bytes(&second.bytes);
                 Ok(hash_first == hash_second)
+            }
+            WaitPredicate::ScreenshotRegionStable {
+                x,
+                y,
+                width,
+                height,
+                threshold_ms,
+            } => {
+                let capped = (*threshold_ms).min(MAX_SCREENSHOT_STABLE_THRESHOLD_MS);
+                let first = self.renderer.screenshot().await?;
+                let hash_first = hash_region(&first.bytes, *x, *y, *width, *height)?;
+                tokio::time::sleep(Duration::from_millis(capped)).await;
+                let second = self.renderer.screenshot().await?;
+                let hash_second = hash_region(&second.bytes, *x, *y, *width, *height)?;
+                Ok(hash_first == hash_second)
+            }
+            WaitPredicate::LogMessage {
+                contains,
+                level_min,
+            } => {
+                // Draine le buffer de logs et teste chaque evenement. Le drain
+                // consomme les logs (cf. doc du predicat) : un match dans cette
+                // iteration suffit a satisfaire l'attente.
+                let events = self.log_source.poll().await?;
+                let min = level_min.unwrap_or(LogLevel::Trace);
+                Ok(events
+                    .iter()
+                    .any(|e| e.level >= min && e.message.contains(contains.as_str())))
             }
         }
     }
@@ -248,12 +299,164 @@ impl AppInspector for CompositeInspector {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use deveye_core::{ConsoleLevel, Screenshot, Size};
+    use deveye_core::{ConsoleLevel, LogEvent, Screenshot, Size};
     use deveye_ports::PortError;
 
     // Timestamp RFC3339 fixe utilise dans les donnees de test (evite le besoin
     // d'une dependance directe a `chrono` dans le binaire).
     const TS: &str = "2026-01-01T00:00:00Z";
+
+    /// `LogSource` stub : buffer vide. Permet de construire un
+    /// `CompositeWaitCondition` dans les tests qui n'exercent pas le predicat
+    /// `LogMessage`.
+    struct EmptyLog;
+    #[async_trait]
+    impl LogSource for EmptyLog {
+        async fn poll(&self) -> PortResult<Vec<LogEvent>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// `LogSource` stub renvoyant une fois une liste fixe d'evenements, puis du
+    /// vide (simule un drain). Sert au test du predicat `LogMessage`.
+    struct ScriptedLog {
+        events: std::sync::Mutex<Vec<LogEvent>>,
+    }
+    #[async_trait]
+    impl LogSource for ScriptedLog {
+        async fn poll(&self) -> PortResult<Vec<LogEvent>> {
+            Ok(std::mem::take(&mut *self.events.lock().unwrap()))
+        }
+    }
+
+    // Stubs reutilisables pour les ports non exerces par un test donne.
+    struct UnusedEval;
+    #[async_trait]
+    impl JsEvaluator for UnusedEval {
+        async fn evaluate(&self, _: &str) -> PortResult<serde_json::Value> {
+            Ok(serde_json::json!(false))
+        }
+    }
+    struct UnusedInsp;
+    #[async_trait]
+    impl AppInspector for UnusedInsp {
+        async fn dom_snapshot(&self) -> PortResult<DomTree> {
+            Err(PortError::Unsupported("stub".to_string()))
+        }
+        async fn state_snapshot(&self) -> PortResult<StateDump> {
+            Err(PortError::Unsupported("stub".to_string()))
+        }
+    }
+    /// Renderer renvoyant toujours le meme PNG (capture stable).
+    struct ConstRenderer {
+        png: Vec<u8>,
+        size: Size,
+    }
+    #[async_trait]
+    impl Renderer for ConstRenderer {
+        async fn screenshot(&self) -> PortResult<Screenshot> {
+            Ok(Screenshot::new_png(self.png.clone(), self.size))
+        }
+        async fn viewport_size(&self) -> PortResult<Size> {
+            Ok(self.size)
+        }
+    }
+
+    fn solid_png(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(w, h, image::Rgba([20, 40, 60, 255]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("encode png test");
+        out
+    }
+
+    #[tokio::test]
+    async fn composite_log_message_satisfied_on_match() {
+        let log = Arc::new(ScriptedLog {
+            events: std::sync::Mutex::new(vec![LogEvent::new(
+                LogLevel::Info,
+                "app",
+                "record saved ok",
+            )]),
+        });
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(UnusedEval),
+            inspector: Arc::new(UnusedInsp),
+            renderer: Arc::new(ConstRenderer {
+                png: solid_png(2, 2),
+                size: Size::new(2, 2),
+            }),
+            log_source: log,
+        };
+        let outcome = cond
+            .wait_until(
+                WaitPredicate::LogMessage {
+                    contains: "saved".to_string(),
+                    level_min: Some(LogLevel::Info),
+                },
+                Duration::from_millis(500),
+            )
+            .await
+            .expect("wait_until ne doit pas echouer");
+        assert!(outcome.satisfied, "le log 'saved' (info) doit satisfaire");
+    }
+
+    #[tokio::test]
+    async fn composite_log_message_level_filter_excludes_lower() {
+        // Un log de niveau debug ne satisfait pas un level_min=error.
+        let log = Arc::new(ScriptedLog {
+            events: std::sync::Mutex::new(vec![LogEvent::new(LogLevel::Debug, "app", "saved")]),
+        });
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(UnusedEval),
+            inspector: Arc::new(UnusedInsp),
+            renderer: Arc::new(ConstRenderer {
+                png: solid_png(2, 2),
+                size: Size::new(2, 2),
+            }),
+            log_source: log,
+        };
+        let outcome = cond
+            .wait_until(
+                WaitPredicate::LogMessage {
+                    contains: "saved".to_string(),
+                    level_min: Some(LogLevel::Error),
+                },
+                Duration::from_millis(40),
+            )
+            .await
+            .expect("wait_until ne doit pas echouer");
+        assert!(!outcome.satisfied, "debug < error => non satisfait");
+    }
+
+    #[tokio::test]
+    async fn composite_screenshot_region_stable_satisfied_for_constant_capture() {
+        let png = solid_png(20, 20);
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(UnusedEval),
+            inspector: Arc::new(UnusedInsp),
+            renderer: Arc::new(ConstRenderer {
+                png,
+                size: Size::new(20, 20),
+            }),
+            log_source: Arc::new(EmptyLog),
+        };
+        let outcome = cond
+            .wait_until(
+                WaitPredicate::ScreenshotRegionStable {
+                    x: 2,
+                    y: 2,
+                    width: 8,
+                    height: 8,
+                    threshold_ms: 10,
+                },
+                Duration::from_millis(500),
+            )
+            .await
+            .expect("wait_until ne doit pas echouer");
+        assert!(outcome.satisfied, "capture constante => region stable");
+    }
 
     // ----- M5 : drain element-par-element -----
 
@@ -374,6 +577,7 @@ mod tests {
             evaluator: Arc::new(FalseEval),
             inspector: Arc::new(StubInspector),
             renderer: Arc::new(StubRenderer),
+            log_source: Arc::new(EmptyLog),
         };
         let outcome = cond
             .wait_until(
@@ -437,6 +641,7 @@ mod tests {
             evaluator: Arc::clone(&spy) as Arc<dyn JsEvaluator>,
             inspector: Arc::new(NoopInspector2),
             renderer: Arc::new(NoopRenderer2),
+            log_source: Arc::new(EmptyLog),
         };
         let outcome = cond
             .wait_until(
@@ -492,6 +697,7 @@ mod tests {
             evaluator: Arc::new(AbsentEval),
             inspector: Arc::new(NoopInsp),
             renderer: Arc::new(NoopRend),
+            log_source: Arc::new(EmptyLog),
         };
         let outcome = cond
             .wait_until(
@@ -550,6 +756,7 @@ mod tests {
             evaluator: Arc::new(NetworkEval),
             inspector: Arc::new(NoopInspector3),
             renderer: Arc::new(NoopRenderer3),
+            log_source: Arc::new(EmptyLog),
         };
         let result = cond
             .wait_until(
@@ -609,6 +816,7 @@ mod tests {
             evaluator: Arc::new(TransientEval),
             inspector: Arc::new(NoopInspector4),
             renderer: Arc::new(NoopRenderer4),
+            log_source: Arc::new(EmptyLog),
         };
         let outcome = cond
             .wait_until(

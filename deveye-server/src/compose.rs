@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use adapter_cdp_webview::CdpClient;
+use adapter_clipboard_wayland::WaylandClipboard;
 use adapter_commands_http::SdkCommandRouter;
 use adapter_composite::{
     CompositeInspector, CompositeWaitCondition, JsConsoleErrorSource, NoopConsoleErrorSource,
@@ -16,17 +17,20 @@ use adapter_dioxus_signals::{
 use adapter_interaction_kwin_eis::KwinEisInteraction;
 use adapter_logs_tracing::SdkTracingLogSource;
 use adapter_mcp_server::{DeveyeMcpServer, DeveyePorts, TargetInfo};
-use adapter_screencap_kwin::KwinRenderer;
+use adapter_screencap_kwin::{KwinRenderer, KwinWindowManager};
 use adapter_screencap_xcap::{MonitorRenderer, XcapRenderer};
 use deveye_ports::{
-    AppInspector, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator, LogSource,
-    Renderer, WaitCondition, WindowLister,
+    AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
+    LogSource, Renderer, WaitCondition, WindowLister, WindowManager,
 };
 
 use crate::cdp::{build_cdp_filter, try_initial_cdp, LazyCdp};
 use crate::cli::{Args, ScreencapBackend, TargetMode};
 use crate::fallback::{FallbackDom, FallbackEvaluator, FallbackInteraction, FallbackRenderer};
-use crate::stubs::{EmptyWindowLister, UnsupportedEvaluator, UnsupportedInspector};
+use crate::stubs::{
+    EmptyWindowLister, UnsupportedClipboard, UnsupportedEvaluator, UnsupportedInspector,
+    UnsupportedWindowManager,
+};
 
 /// Le quintet pilotant : yeux, mains, DOM, évaluateur JS, liste des fenêtres.
 type Pilotage = (
@@ -116,6 +120,39 @@ async fn resolve_kwin_origin(title: Option<&str>, backend: ScreencapBackend) -> 
             );
             (0, 0)
         }
+    }
+}
+
+/// Vrai si la session est Wayland (`wl-copy`/`wl-paste` exploitables).
+fn is_wayland() -> bool {
+    std::env::var("XDG_SESSION_TYPE")
+        .map(|v| v.eq_ignore_ascii_case("wayland"))
+        .unwrap_or(false)
+        || std::env::var("WAYLAND_DISPLAY").is_ok()
+}
+
+/// Construit le presse-papiers (outils `clipboard_get`/`clipboard_set`).
+/// `WaylandClipboard` sous Wayland, stub `Unsupported` sinon.
+fn build_clipboard() -> Arc<dyn Clipboard> {
+    if is_wayland() {
+        Arc::new(WaylandClipboard::new())
+    } else {
+        Arc::new(UnsupportedClipboard)
+    }
+}
+
+/// Construit le gestionnaire de fenetres (outil `focus_window`). Disponible
+/// uniquement quand le screencap passe par KWin (KDE/Wayland) et qu'un titre de
+/// fenetre est fourni ; sinon stub `Unsupported`.
+fn build_window_manager(title: Option<&str>, backend: ScreencapBackend) -> Arc<dyn WindowManager> {
+    let use_kwin = match backend {
+        ScreencapBackend::Kwin => true,
+        ScreencapBackend::Xcap => false,
+        ScreencapBackend::Auto => is_kde_wayland(),
+    };
+    match (use_kwin, title) {
+        (true, Some(t)) => Arc::new(KwinWindowManager::new(t)),
+        _ => Arc::new(UnsupportedWindowManager),
     }
 }
 
@@ -296,6 +333,7 @@ pub(crate) async fn build_mcp(args: &Args) -> DeveyeMcpServer {
         evaluator: evaluator.clone(),
         inspector: inspector.clone(),
         renderer: renderer.clone(),
+        log_source: log_source.clone(),
     });
 
     DeveyeMcpServer::new(DeveyePorts {
@@ -308,6 +346,8 @@ pub(crate) async fn build_mcp(args: &Args) -> DeveyeMcpServer {
         window_lister,
         console_errors,
         wait_condition,
+        window_manager: build_window_manager(screencap_title.as_deref(), args.screencap_backend),
+        clipboard: build_clipboard(),
         target_info: build_target_info(args.target),
     })
 }

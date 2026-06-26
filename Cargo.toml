@@ -26,6 +26,7 @@ members = [
     "deveye-adapters/adapter-interaction-kwin-eis",
     "deveye-adapters/adapter-mcp-server",
     "deveye-adapters/adapter-composite",
+    "deveye-adapters/adapter-clipboard-wayland",
 ]
 
 # Dépendances partagées (versions reprises telles quelles du workspace Chronos).

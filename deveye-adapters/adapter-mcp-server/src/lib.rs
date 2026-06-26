@@ -2,12 +2,14 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Vingt-huit outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Trente-huit outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `screenshot_region` : capture puis recadre sur (x, y, width, height)
+//! - `screenshot_element` : capture recadrée sur le rect d'un sélecteur CSS
 //! - `assert_visual` : compare le viewport (ou une région) à un PNG baseline
 //!   (golden) ; crée la baseline si absente
 //! - `click` : clic à `(x, y)` (bouton gauche)
+//! - `double_click` : double-clic gauche à `(x, y)`
 //! - `right_click` : clic droit à `(x, y)` (ouvre les menus contextuels)
 //! - `hover` : déplace le pointeur à `(x, y)` sans presser (déclenche
 //!   `mouseover`/`mouseenter`)
@@ -23,8 +25,13 @@
 //! - `key_combo` : combinaison avec modificateurs (Ctrl+S, Ctrl+Shift+P…)
 //! - `navigate` : navigue vers une route logique (routeur du SDK opt-in)
 //! - `scroll` : défile de (dx, dy) pixels, ancré (centre par défaut)
+//! - `handle_dialog` : répond à un dialog JS (alert/confirm/prompt) — CDP
+//! - `upload_file` : renseigne un input[type=file] (DOM.setFileInputFiles) — CDP
+//! - `focus_window` : donne le focus OS à une fenêtre (KWin) — kwin-eis/sdk
+//! - `clipboard_get` / `clipboard_set` : presse-papiers OS-level (Wayland)
 //! - `dom` : sérialise le DOM de l'app cible
 //! - `state` : sérialise le state opt-in poussé par le SDK
+//! - `assert_state` : vérifie des clés du state SDK (`isError` si divergence)
 //! - `logs_tail` : draine et renvoie le buffer de logs accumulé
 //! - `invoke_command` : invoque une commande logique exposée par l'app
 //!   (route déclarée via `deveye_sdk::expose_route`)
@@ -39,7 +46,9 @@
 //!   unhandledrejection, console.error)
 //! - `list_windows` : liste les fenêtres/onglets de la cible (CDP ; vide en SDK)
 //! - `wait_condition` : attend un prédicat (dom-selector / state-key /
-//!   screenshot-stable) avec timeout
+//!   screenshot-stable / screenshot-region-stable / log-message) avec timeout
+//! - `wait_for_log` : attend un log applicatif (contains + level_min)
+//! - `wait_screenshot_region` : attend la stabilité visuelle d'une région
 //! - `wait_ready` : attend que l'app publie un state non vide (app prête)
 //! - `target_info` : décrit la cible active et ses capacités (eval_js, dom…)
 //!
@@ -71,10 +80,10 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use deveye_core::{InteractionCommand, MouseButton, Position, WaitPredicate};
+use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, WaitPredicate};
 use deveye_ports::{
-    AppInspector, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator, LogSource,
-    Renderer, WaitCondition, WindowLister,
+    AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
+    LogSource, Renderer, WaitCondition, WindowLister, WindowManager,
 };
 
 /// Description statique de la cible active et de ses capacites, renvoyee par
@@ -117,6 +126,8 @@ pub struct DeveyePorts {
     pub window_lister: Arc<dyn WindowLister>,
     pub console_errors: Arc<dyn ConsoleErrorSource>,
     pub wait_condition: Arc<dyn WaitCondition>,
+    pub window_manager: Arc<dyn WindowManager>,
+    pub clipboard: Arc<dyn Clipboard>,
     pub target_info: TargetInfo,
 }
 
@@ -135,6 +146,8 @@ pub struct DeveyeMcpServer {
     window_lister: Arc<dyn WindowLister>,
     console_errors: Arc<dyn ConsoleErrorSource>,
     wait_condition: Arc<dyn WaitCondition>,
+    window_manager: Arc<dyn WindowManager>,
+    clipboard: Arc<dyn Clipboard>,
     target_info: TargetInfo,
     /// Sérialise les appels d'outils : rmcp les traite en concurrence, mais
     /// deux interactions entrelacées pendant un re-render visent le mauvais
@@ -290,6 +303,23 @@ struct ScrollParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct HandleDialogParams {
+    /// `true` pour accepter (OK), `false` pour annuler (Cancel) le dialog JS.
+    accept: bool,
+    /// Texte à saisir pour un `prompt()` (ignoré pour `alert`/`confirm`).
+    #[serde(default)]
+    prompt_text: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct UploadFileParams {
+    /// Sélecteur CSS de l'`input[type=file]` cible.
+    selector: String,
+    /// Chemins absolus des fichiers à renseigner.
+    paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct AssertSelectorParams {
     /// Sélecteur CSS à vérifier.
     selector: String,
@@ -352,6 +382,62 @@ struct AssertVisualParams {
     height: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AssertStateParams {
+    /// Objet JSON `{ clé: valeur }` : chaque clé doit exister dans le state SDK
+    /// avec exactement cette valeur. `isError` si au moins une diverge.
+    expected: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ScreenshotElementParams {
+    /// Sélecteur CSS de l'élément à capturer (le premier match). L'élément est
+    /// défilé au centre, puis la capture est recadrée sur son `BoundingClientRect`.
+    selector: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ClipboardSetParams {
+    /// Texte à placer dans le presse-papiers.
+    text: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct FocusWindowParams {
+    /// Sous-chaîne du titre de la fenêtre à activer (insensible à la casse).
+    /// Absent : la fenêtre `--screencap-window` de la session.
+    #[serde(default)]
+    title_pattern: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WaitForLogParams {
+    /// Sous-chaîne à chercher dans le message des logs `tracing` de l'app.
+    contains: String,
+    /// Niveau minimal (`trace`/`debug`/`info`/`warn`/`error`). Défaut : tous.
+    #[serde(default)]
+    level_min: Option<String>,
+    /// Timeout en millisecondes (défaut 5000, plafond 60000).
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WaitScreenshotRegionParams {
+    /// Région à surveiller : x, y du coin haut-gauche (pixels de la capture).
+    x: u32,
+    y: u32,
+    /// Région : largeur, hauteur.
+    width: u32,
+    height: u32,
+    /// Délai inter-captures pour juger de la stabilité (défaut 300, plafond 2000).
+    #[serde(default)]
+    threshold_ms: Option<u64>,
+    /// Timeout total en millisecondes (défaut 5000, plafond 60000).
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
 #[tool_router]
 impl DeveyeMcpServer {
     pub fn new(ports: DeveyePorts) -> Self {
@@ -365,6 +451,8 @@ impl DeveyeMcpServer {
             window_lister: ports.window_lister,
             console_errors: ports.console_errors,
             wait_condition: ports.wait_condition,
+            window_manager: ports.window_manager,
+            clipboard: ports.clipboard,
             target_info: ports.target_info,
             gate: Arc::new(tokio::sync::Mutex::new(())),
             tool_router: Self::tool_router(),
@@ -401,6 +489,56 @@ impl DeveyeMcpServer {
         let _serial = self.gate.lock().await;
         let shot = self.renderer.screenshot().await.map_err(internal)?;
         let cropped = crop_png(&shot.bytes, p.x, p.y, p.width, p.height).map_err(internal)?;
+        let b64 = B64.encode(&cropped);
+        Ok(CallToolResult::success(vec![Content::image(
+            b64,
+            "image/png",
+        )]))
+    }
+
+    #[tool(
+        description = "Capture un élément par sélecteur CSS : résout son rect via JS (le défile au centre), puis recadre la capture sur ce rect (mise à l'échelle DPI gérée). Renvoie le PNG (image MCP), ou `isError {found:false}` si l'élément est absent/invisible. Nécessite eval_js (cdp/sdk) ; indisponible en kwin-eis (utiliser screenshot_region)."
+    )]
+    async fn screenshot_element(
+        &self,
+        Parameters(p): Parameters<ScreenshotElementParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        // 1) Resoudre le rect de l'element (coordonnees CSS viewport).
+        let sel = serde_json::to_string(&p.selector).unwrap_or_default();
+        let snippet = format!(
+            "(function(){{ const el = document.querySelector({sel}); \
+             if (!el) return {{ found: false, reason: 'not_found' }}; \
+             el.scrollIntoView({{ block: 'center', behavior: 'instant' }}); \
+             const r = el.getBoundingClientRect(); \
+             if (r.width === 0 || r.height === 0) return {{ found: false, reason: 'not_visible' }}; \
+             return {{ found: true, x: r.left, y: r.top, width: r.width, height: r.height }}; }})()"
+        );
+        let rect = self.evaluator.evaluate(&snippet).await.map_err(internal)?;
+        if !rect.get("found").and_then(|v| v.as_bool()).unwrap_or(false) {
+            return Ok(json_error(&rect));
+        }
+        // 2) Capturer puis recadrer. Le PNG peut etre en pixels physiques
+        // (HiDPI) alors que le rect est en pixels CSS : on met a l'echelle par
+        // le ratio dimensions-PNG / viewport-logique.
+        let shot = self.renderer.screenshot().await.map_err(internal)?;
+        let (pw, ph) = png_dimensions(&shot.bytes).map_err(internal)?;
+        let scale_x = if shot.viewport.width > 0 {
+            pw as f64 / shot.viewport.width as f64
+        } else {
+            1.0
+        };
+        let scale_y = if shot.viewport.height > 0 {
+            ph as f64 / shot.viewport.height as f64
+        } else {
+            1.0
+        };
+        let get = |k: &str| rect.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let x = (get("x") * scale_x).max(0.0).round() as u32;
+        let y = (get("y") * scale_y).max(0.0).round() as u32;
+        let w = (get("width") * scale_x).round().max(1.0) as u32;
+        let h = (get("height") * scale_y).round().max(1.0) as u32;
+        let cropped = crop_png(&shot.bytes, x, y, w, h).map_err(internal)?;
         let b64 = B64.encode(&cropped);
         Ok(CallToolResult::success(vec![Content::image(
             b64,
@@ -486,6 +624,21 @@ impl DeveyeMcpServer {
             button: MouseButton::Right,
         };
         self.interaction.dispatch(cmd).await.map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(
+        description = "Double-clic gauche aux coordonnées (x, y) : édition inline, sélection de mot, ouverture d'item de liste. Émet un vrai `dblclick` (clickCount=2 en CDP). Plus fiable que deux `click` MCP successifs (intervalle imprévisible)."
+    )]
+    async fn double_click(
+        &self,
+        Parameters(p): Parameters<ClickParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        self.interaction
+            .dispatch(InteractionCommand::double_click(Position::new(p.x, p.y)))
+            .await
+            .map_err(internal)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -645,6 +798,44 @@ impl DeveyeMcpServer {
         let _serial = self.gate.lock().await;
         let dump = self.inspector.state_snapshot().await.map_err(internal)?;
         Ok(json_success(&dump.entries))
+    }
+
+    #[tool(
+        description = "Assertion sur le state SDK : `expected` est un objet `{ clé: valeur }` ; chaque clé doit exister dans le state avec exactement cette valeur. Renvoie `{ ok, mismatches: [{ key, expected, actual }] }` ; `isError` si au moins une diverge. Symétrique de assert_selector, mais sur la logique métier."
+    )]
+    async fn assert_state(
+        &self,
+        Parameters(p): Parameters<AssertStateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let expected = match p.expected.as_object() {
+            Some(map) => map,
+            None => {
+                return Ok(json_error(&serde_json::json!({
+                    "ok": false,
+                    "reason": "`expected` doit etre un objet JSON { cle: valeur }",
+                })));
+            }
+        };
+        let dump = self.inspector.state_snapshot().await.map_err(internal)?;
+        let mut mismatches = Vec::new();
+        for (key, want) in expected {
+            let actual = dump.entries.get(key);
+            if actual != Some(want) {
+                mismatches.push(serde_json::json!({
+                    "key": key,
+                    "expected": want,
+                    "actual": actual,
+                }));
+            }
+        }
+        let ok = mismatches.is_empty();
+        let payload = serde_json::json!({ "ok": ok, "mismatches": mismatches });
+        if ok {
+            Ok(json_success(&payload))
+        } else {
+            Ok(json_error(&payload))
+        }
     }
 
     #[tool(
@@ -813,6 +1004,65 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
+        description = "Attend qu'un log applicatif (tracing du SDK) dont le message contient `contains` (et de niveau >= `level_min`) soit émis. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Observe les logs Rust bufferisés, hors de portée d'eval_js. NB : pendant l'attente le buffer de logs est drainé (les logs non concernés sont consommés). Défaut 5000 ms, plafond 60000."
+    )]
+    async fn wait_for_log(
+        &self,
+        Parameters(p): Parameters<WaitForLogParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let level_min = match p.level_min {
+            Some(s) => Some(
+                serde_json::from_value::<LogLevel>(serde_json::Value::String(s)).map_err(|_| {
+                    internal("level_min invalide (trace/debug/info/warn/error attendu)")
+                })?,
+            ),
+            None => None,
+        };
+        let predicate = WaitPredicate::LogMessage {
+            contains: p.contains,
+            level_min,
+        };
+        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(60_000));
+        let outcome = self
+            .wait_condition
+            .wait_until(predicate, budget)
+            .await
+            .map_err(internal)?;
+        if outcome.satisfied {
+            Ok(json_success(&outcome))
+        } else {
+            Ok(json_error(&outcome))
+        }
+    }
+
+    #[tool(
+        description = "Comme la stabilité visuelle, mais sur une RÉGION (x, y, width, height) seulement : attend que cette zone se stabilise (deux captures identiques à `threshold_ms` d'intervalle). Ignore un curseur clignotant / une horloge ailleurs. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Défaut threshold 300 (plafond 2000), timeout 5000 (plafond 60000)."
+    )]
+    async fn wait_screenshot_region(
+        &self,
+        Parameters(p): Parameters<WaitScreenshotRegionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let predicate = WaitPredicate::ScreenshotRegionStable {
+            x: p.x,
+            y: p.y,
+            width: p.width,
+            height: p.height,
+            threshold_ms: p.threshold_ms.unwrap_or(300),
+        };
+        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(60_000));
+        let outcome = self
+            .wait_condition
+            .wait_until(predicate, budget)
+            .await
+            .map_err(internal)?;
+        if outcome.satisfied {
+            Ok(json_success(&outcome))
+        } else {
+            Ok(json_error(&outcome))
+        }
+    }
+
+    #[tool(
         description = "Glisse-dépose de (from_x, from_y) vers (to_x, to_y). En CDP : séquence souris native (press/déplacements/release) ; via le pont SDK : PointerEvent JS (support selon le framework de l'app). Renvoie \"ok\"."
     )]
     async fn drag_drop(
@@ -825,6 +1075,36 @@ impl DeveyeMcpServer {
             Position::new(p.to_x, p.to_y),
         );
         self.interaction.dispatch(cmd).await.map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(
+        description = "Répond à une boîte de dialogue JS (`alert`/`confirm`/`prompt`) : `accept` (OK/Cancel), `prompt_text` = texte pour un `prompt`. CDP-only — pendant un dialog le moteur JS est suspendu, donc `eval_js` est impossible : c'est la seule issue. Renvoie une erreur `Unsupported` en sdk/kwin-eis."
+    )]
+    async fn handle_dialog(
+        &self,
+        Parameters(p): Parameters<HandleDialogParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        self.interaction
+            .dispatch(InteractionCommand::handle_dialog(p.accept, p.prompt_text))
+            .await
+            .map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(
+        description = "Renseigne les fichiers d'un `input[type=file]` (sélecteur CSS + chemins absolus). CDP-only (`DOM.setFileInputFiles`) : la sécurité navigateur interdit de le faire en JS, donc non contournable par eval_js. Renvoie une erreur `Unsupported` en sdk/kwin-eis."
+    )]
+    async fn upload_file(
+        &self,
+        Parameters(p): Parameters<UploadFileParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        self.interaction
+            .dispatch(InteractionCommand::upload_file(p.selector, p.paths))
+            .await
+            .map_err(internal)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -879,6 +1159,45 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
+        description = "Donne le focus OS à une fenêtre (par sous-chaîne de titre, ou la fenêtre --screencap-window par défaut). Crucial en kwin-eis : KWin EIS route les événements vers la fenêtre active ; une notification ou un dialog système peut détourner les clics sans erreur. À appeler avant une séquence d'interaction. Renvoie `{ ok, title }`. Nécessite KDE/Wayland (KWin Scripting) ; `Unsupported` sinon."
+    )]
+    async fn focus_window(
+        &self,
+        Parameters(p): Parameters<FocusWindowParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let title = self
+            .window_manager
+            .activate(p.title_pattern.as_deref())
+            .await
+            .map_err(internal)?;
+        Ok(json_success(
+            &serde_json::json!({ "ok": true, "title": title }),
+        ))
+    }
+
+    #[tool(
+        description = "Lit le texte du presse-papiers de la session (OS-level via wl-paste sous Wayland). Renvoie `{ text }`. Fiable là où `navigator.clipboard.readText()` lève NotAllowedError (contexte automatisé) et en kwin-eis (pas de WebView). `Unsupported` hors Wayland."
+    )]
+    async fn clipboard_get(&self) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let text = self.clipboard.get().await.map_err(internal)?;
+        Ok(json_success(&serde_json::json!({ "text": text })))
+    }
+
+    #[tool(
+        description = "Place du texte dans le presse-papiers de la session (OS-level via wl-copy sous Wayland). Combiné à key_combo Ctrl+V, permet de saisir du texte long/Unicode sans frappe touche par touche. `Unsupported` hors Wayland."
+    )]
+    async fn clipboard_set(
+        &self,
+        Parameters(p): Parameters<ClipboardSetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        self.clipboard.set(&p.text).await.map_err(internal)?;
+        Ok(CallToolResult::success(vec![Content::text("ok")]))
+    }
+
+    #[tool(
         description = "Liste les fenêtres/onglets de la cible : `[{ id, title, url, kind }]` (type=page). En CDP via Target.getTargets ; via le pont SDK : liste vide (pas de visibilité inter-fenêtres)."
     )]
     async fn list_windows(&self) -> Result<CallToolResult, McpError> {
@@ -930,12 +1249,15 @@ impl ServerHandler for DeveyeMcpServer {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
             "DevEye MCP — observe et pilote une app vivante en dev. \
-             Outils : screenshot, screenshot_region, assert_visual, click, \
-             right_click, hover, click_selector, click_text, eval_js, \
-             type_text, press_key, key_combo, navigate, scroll, dom, state, \
-             logs_tail, invoke_command, list_commands, wait_for_selector, \
-             find_element, assert_selector, drag_drop, collect_console_errors, \
-             list_windows, wait_condition, wait_ready, target_info. \
+             Outils : screenshot, screenshot_region, screenshot_element, \
+             assert_visual, click, double_click, right_click, hover, \
+             click_selector, click_text, eval_js, type_text, press_key, \
+             key_combo, navigate, scroll, handle_dialog, upload_file, \
+             focus_window, clipboard_get, clipboard_set, dom, state, \
+             assert_state, logs_tail, invoke_command, list_commands, \
+             wait_for_selector, find_element, assert_selector, drag_drop, \
+             collect_console_errors, list_windows, wait_condition, wait_for_log, \
+             wait_screenshot_region, wait_ready, target_info. \
              Appeler target_info en premier pour connaitre les capacites de la \
              cible (eval_js/dom indisponibles en kwin-eis)."
                 .to_string(),
@@ -964,6 +1286,15 @@ fn json_error<T: Serialize>(value: &T) -> CallToolResult {
 
 fn internal<E: std::fmt::Display>(err: E) -> McpError {
     McpError::internal_error(err.to_string(), None)
+}
+
+/// Dimensions `(width, height)` d'un PNG sans le décoder entièrement en mémoire
+/// pixel (utilise le décodeur d'en-tête de `image`). Sert au calcul d'échelle
+/// DPI de `screenshot_element`.
+fn png_dimensions(png: &[u8]) -> Result<(u32, u32), String> {
+    use image::GenericImageView;
+    let img = image::load_from_memory(png).map_err(|e| format!("decode PNG : {e}"))?;
+    Ok(img.dimensions())
 }
 
 /// Recadre un PNG sur `(x, y, width, height)` et le re-encode en PNG.

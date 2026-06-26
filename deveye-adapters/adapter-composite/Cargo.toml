@@ -15,3 +15,6 @@ deveye-ports = { path = "../../deveye-ports" }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "time", "macros"] }
+# Decode/crop PNG pour le predicat ScreenshotRegionStable (hash d'une region).
+# Version alignee sur le reste du workspace (screencap-*, adapter-mcp-server).
+image = { version = "0.25", default-features = false, features = ["png"] }

@@ -1,0 +1,15 @@
+[package]
+name = "adapter-clipboard-wayland"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "LicenseRef-Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Adapter DevEye : presse-papiers Wayland via wl-copy / wl-paste (wl-clipboard)."
+
+# Metadonnees figees localement — cf. deveye-core/Cargo.toml.
+
+[dependencies]
+deveye-ports = { path = "../../deveye-ports" }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util", "rt", "macros"] }

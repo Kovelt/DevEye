@@ -10,15 +10,15 @@ Conçu pour les apps Dioxus desktop, il se branche aussi sur n'importe quelle ci
 
 ## Caractéristiques clés
 
-### 28 outils MCP, en six familles
+### 38 outils MCP, en six familles
 
 | Famille | Outils |
 |---|---|
-| **Capture** | `screenshot`, `screenshot_region`, `assert_visual` |
-| **Interaction** | `click`, `right_click`, `hover`, `drag_drop`, `click_selector`, `click_text`, `type_text`, `press_key`, `key_combo`, `scroll`, `navigate` |
-| **Inspection DOM / state** | `dom`, `find_element`, `assert_selector`, `eval_js`, `state`, `collect_console_errors`, `list_windows`, `target_info` |
+| **Capture** | `screenshot`, `screenshot_region`, `screenshot_element`, `assert_visual` |
+| **Interaction** | `click`, `double_click`, `right_click`, `hover`, `drag_drop`, `click_selector`, `click_text`, `type_text`, `press_key`, `key_combo`, `scroll`, `navigate`, `handle_dialog`, `upload_file`, `focus_window`, `clipboard_get`, `clipboard_set` |
+| **Inspection DOM / state** | `dom`, `find_element`, `assert_selector`, `assert_state`, `eval_js`, `state`, `collect_console_errors`, `list_windows`, `target_info` |
 | **Logs** | `logs_tail` |
-| **Attente / conditions** | `wait_for_selector` (+ `negate` = wait_for_gone), `wait_condition`, `wait_ready` |
+| **Attente / conditions** | `wait_for_selector` (+ `negate` = wait_for_gone), `wait_condition`, `wait_for_log`, `wait_screenshot_region`, `wait_ready` |
 | **Commandes logiques** | `list_commands`, `invoke_command` |
 | *(à venir)* | `resize` |
 
@@ -35,7 +35,7 @@ Détail complet des paramètres et valeurs de retour : [docs/usage.md](docs/usag
 
 ### Architecture hexagonale
 
-9 ports (traits Rust purs dans `deveye-ports`), un adapter par technologie, un binaire orchestrateur (`deveye-server`) qui les compose selon les options CLI. Ajouter une cible = nouvel adapter, pas de refonte.
+11 ports (traits Rust purs dans `deveye-ports`), un adapter par technologie, un binaire orchestrateur (`deveye-server`) qui les compose selon les options CLI. Ajouter une cible = nouvel adapter, pas de refonte.
 
 ---
 
@@ -145,10 +145,10 @@ Client MCP (Claude Code)
 └────────────┬────────────────────┘
              │
      ┌───────┴────────┐
-     │  adapter-mcp-  │  expose les 21 outils MCP
+     │  adapter-mcp-  │  expose les 38 outils MCP
      │  server        │  (sérialise les appels — 1 à la fois)
      └───────┬────────┘
-             │ implémente les 9 ports (traits deveye-ports)
+             │ implémente les 11 ports (traits deveye-ports)
     ┌────────┼────────────────────┐
     │        │                    │
     ▼        ▼                    ▼
@@ -166,7 +166,7 @@ App WebView                App native
     (HTTP :31337)
 ```
 
-Les 9 ports : `Renderer`, `AppInspector`, `InteractionSink`, `JsEvaluator`, `LogSource`, `CommandRouter`, `ConsoleErrorSource`, `WaitCondition`, `WindowLister`.
+Les 11 ports : `Renderer`, `AppInspector`, `InteractionSink`, `JsEvaluator`, `LogSource`, `CommandRouter`, `ConsoleErrorSource`, `WaitCondition`, `WindowLister`, `WindowManager`, `Clipboard`.
 
 Architecture détaillée (hexagonale, ports, robustesse CDP, reconnexion paresseuse) : [docs/architecture.md](docs/architecture.md).
 
@@ -184,12 +184,13 @@ DevEye/
 ├── deveye-adapters/
 │   ├── adapter-cdp-webview/      # Renderer + Interaction + Inspector + JsEval via CDP (Chromium/WebView2)
 │   ├── adapter-screencap-xcap/   # Renderer OS-level (X11 / XWayland / Wayland non-KDE)
-│   ├── adapter-screencap-kwin/   # Renderer KDE Wayland natif (org.kde.KWin.ScreenShot2 D-Bus)
+│   ├── adapter-screencap-kwin/   # Renderer + WindowManager (focus_window) KDE Wayland (KWin D-Bus)
 │   ├── adapter-dioxus-signals/   # Inspector + JsEval via le pont natif SDK (Dioxus signals)
 │   ├── adapter-logs-tracing/     # LogSource via le subscriber tracing du SDK opt-in
 │   ├── adapter-commands-http/    # CommandRouter via POST /devtools/command + GET /devtools/commands
 │   ├── adapter-interaction-kwin-eis/ # InteractionSink OS-level Wayland natif (KWin EIS)
-│   ├── adapter-mcp-server/       # Consomme les 9 ports, expose les 21 outils MCP via rmcp/stdio
+│   ├── adapter-clipboard-wayland/ # Clipboard OS-level via wl-copy / wl-paste (Wayland)
+│   ├── adapter-mcp-server/       # Consomme les 11 ports, expose les 38 outils MCP via rmcp/stdio
 │   └── adapter-composite/        # Adapters composites génériques (ConsoleErrorSource JS, WaitCondition, Inspector)
 └── docs/
     ├── architecture.md           # Ports, adapters, robustesse CDP, sécurité
@@ -217,7 +218,7 @@ Les tests live KWin/EIS (session Wayland requise) sont marqués `#[ignore]` et e
 
 ## Statut / contexte
 
-Jalons **M0 à M7 livrés** (25 juin 2026) : infrastructure hexagonale, 9 ports, 21 outils MCP, adapter CDP avec reconnexion paresseuse, pont natif SDK Linux, capture KWin Wayland, injection KWin EIS, CI GitLab.
+Jalons **M0 à M7 livrés** (25 juin 2026) : infrastructure hexagonale, adapter CDP avec reconnexion paresseuse, pont natif SDK Linux, capture KWin Wayland, injection KWin EIS, CI GitLab. Surface étendue ensuite à **11 ports / 38 outils MCP** (sprints d'outils, juin 2026 — cf. [docs/tools-backlog-2026-06-26.md](docs/tools-backlog-2026-06-26.md)).
 
 Audit post-M7 (108 constats priorisés, dont le gate MCP T1/M1 bloquant) : [docs/audit-2026-06-25.md](docs/audit-2026-06-25.md).
 

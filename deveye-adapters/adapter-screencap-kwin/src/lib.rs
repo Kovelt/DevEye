@@ -27,6 +27,8 @@
 mod error;
 mod proxy;
 mod renderer;
+mod window_manager;
 
 pub use error::KwinScreencapError;
 pub use renderer::KwinRenderer;
+pub use window_manager::KwinWindowManager;

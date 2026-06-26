@@ -57,6 +57,22 @@ pub enum InteractionCommand {
         dx: i32,
         dy: i32,
     },
+    /// Double-clic gauche à une position absolue (édition inline, sélection de
+    /// mot, ouverture d'item de liste…).
+    DoubleClick { position: Position },
+    /// Répond à une boîte de dialogue JS (`alert`/`confirm`/`prompt`) : `accept`
+    /// pour OK/annuler, `prompt_text` = texte saisi pour un `prompt`. CDP-only
+    /// (le moteur JS est suspendu : `eval_js` est impossible pendant un dialog).
+    HandleDialog {
+        accept: bool,
+        prompt_text: Option<String>,
+    },
+    /// Renseigne les fichiers d'un `input[type=file]` (le verrou de sécurité
+    /// navigateur interdit de le faire en JS). CDP-only (`DOM.setFileInputFiles`).
+    UploadFile {
+        selector: String,
+        paths: Vec<String>,
+    },
 }
 
 /// Description d'une commande logique exposée par l'app cible, listée par
@@ -114,6 +130,24 @@ impl InteractionCommand {
     pub fn scroll(position: Position, dx: i32, dy: i32) -> Self {
         Self::Scroll { position, dx, dy }
     }
+
+    pub fn double_click(position: Position) -> Self {
+        Self::DoubleClick { position }
+    }
+
+    pub fn handle_dialog(accept: bool, prompt_text: Option<String>) -> Self {
+        Self::HandleDialog {
+            accept,
+            prompt_text,
+        }
+    }
+
+    pub fn upload_file(selector: impl Into<String>, paths: Vec<String>) -> Self {
+        Self::UploadFile {
+            selector: selector.into(),
+            paths,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -158,6 +192,37 @@ mod tests {
                 "from": { "x": 10, "y": 20 },
                 "to": { "x": 100, "y": 200 }
             })
+        );
+    }
+
+    #[test]
+    fn double_click_serializes_with_kind_tag() {
+        let cmd = InteractionCommand::double_click(Position::new(5, 6));
+        let v = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(
+            v,
+            json!({ "kind": "double-click", "position": { "x": 5, "y": 6 } })
+        );
+    }
+
+    #[test]
+    fn handle_dialog_serializes_with_kind_tag() {
+        let cmd = InteractionCommand::handle_dialog(true, Some("hello".to_string()));
+        let v = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(
+            v,
+            json!({ "kind": "handle-dialog", "accept": true, "prompt_text": "hello" })
+        );
+    }
+
+    #[test]
+    fn upload_file_serializes_with_kind_tag() {
+        let cmd =
+            InteractionCommand::upload_file("input[type=file]", vec!["/tmp/a.png".to_string()]);
+        let v = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(
+            v,
+            json!({ "kind": "upload-file", "selector": "input[type=file]", "paths": ["/tmp/a.png"] })
         );
     }
 

@@ -79,6 +79,9 @@ pub(crate) enum EisAction {
         dx: f64,
         dy: f64,
     },
+    DoubleClick {
+        abs: (f64, f64),
+    },
 }
 
 /// Un travail soumis au worker : l'action + le canal de réponse.
@@ -206,6 +209,7 @@ async fn run_action(session: &mut EisSession, action: EisAction) -> Result<(), E
         EisAction::KeyPress { key } => session.key_press(&key).await,
         EisAction::KeyCombo { modifiers, key } => session.key_combo(&modifiers, &key).await,
         EisAction::Scroll { dx, dy } => session.scroll(dx, dy).await,
+        EisAction::DoubleClick { abs } => session.double_click(abs).await,
     }
 }
 

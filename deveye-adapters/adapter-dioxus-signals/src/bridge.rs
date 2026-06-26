@@ -220,6 +220,24 @@ fn keycombo_snippet(modifiers: &[String], key: &str) -> String {
     )
 }
 
+fn doubleclick_snippet(position: Position) -> String {
+    let (x, y) = (position.x, position.y);
+    // Deux clicks + un dblclick synthetiques sur l'element sous le point.
+    format!(
+        "(function(){{ const el = document.elementFromPoint({x}, {y}); \
+         if (!el) return {{ ok: false, reason: 'aucun élément à ({x}, {y})' }}; \
+         const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, \
+                         clientX: {x}, clientY: {y}, button: 0, buttons: 1 }}; \
+         for (let i = 0; i < 2; i++) {{ \
+           el.dispatchEvent(new MouseEvent('mousedown', opts)); \
+           el.dispatchEvent(new MouseEvent('mouseup', opts)); \
+           el.dispatchEvent(new MouseEvent('click', {{ ...opts, detail: i + 1 }})); \
+         }} \
+         el.dispatchEvent(new MouseEvent('dblclick', {{ ...opts, detail: 2 }})); \
+         return {{ ok: true }}; }})()"
+    )
+}
+
 fn scroll_snippet(position: Position, dx: i32, dy: i32) -> String {
     let (x, y) = (position.x, position.y);
     // Piege connu (usage.md) : le scroll de l'app vit souvent dans un conteneur
@@ -291,6 +309,22 @@ impl InteractionSink for JsInteraction {
             InteractionCommand::Scroll { position, dx, dy } => {
                 self.run(scroll_snippet(position, dx, dy)).await
             }
+            InteractionCommand::DoubleClick { position } => {
+                self.run(doubleclick_snippet(position)).await
+            }
+            // CDP-only : un dialog JS suspend la pompe eval (eval_js impossible),
+            // et la securite navigateur interdit de remplir un input fichier en
+            // JS — il n'y a pas d'equivalent synthetique honnete via le pont SDK.
+            InteractionCommand::HandleDialog { .. } => Err(PortError::Unsupported(
+                "handle_dialog nécessite CDP (Page.handleJavaScriptDialog) ; \
+                 indisponible via le pont SDK"
+                    .to_string(),
+            )),
+            InteractionCommand::UploadFile { .. } => Err(PortError::Unsupported(
+                "upload_file nécessite CDP (DOM.setFileInputFiles) ; la sécurité \
+                 navigateur interdit de remplir un input fichier en JS"
+                    .to_string(),
+            )),
         }
     }
 }
@@ -383,6 +417,16 @@ mod tests {
         // Cle pathologique : verifier que serde_json echappe correctement.
         let js = keypress_snippet("a\"b");
         assert!(js.contains(r#""a\"b""#));
+    }
+
+    #[test]
+    fn doubleclick_snippet_emet_deux_clicks_et_un_dblclick() {
+        let js = doubleclick_snippet(Position::new(12, 34));
+        assert!(js.contains("elementFromPoint(12, 34)"));
+        assert!(js.contains("'click'"));
+        assert!(js.contains("'dblclick'"));
+        assert!(js.contains("mousedown"));
+        assert!(js.contains("mouseup"));
     }
 
     #[test]

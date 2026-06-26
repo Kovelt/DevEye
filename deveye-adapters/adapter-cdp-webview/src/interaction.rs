@@ -109,6 +109,65 @@ impl InteractionSink for CdpClient {
                     .await
                     .map_err(PortError::from)?;
             }
+            InteractionCommand::DoubleClick { position } => {
+                // mouseMoved + deux press/release ; le 2e a clickCount=2 (c'est
+                // ce qui declenche l'evenement `dblclick` cote page).
+                mouse_event(self, "mouseMoved", position, "left").await?;
+                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                mouse_event_cc(self, "mousePressed", position, "left", 1).await?;
+                mouse_event_cc(self, "mouseReleased", position, "left", 1).await?;
+                mouse_event_cc(self, "mousePressed", position, "left", 2).await?;
+                mouse_event_cc(self, "mouseReleased", position, "left", 2).await?;
+            }
+            InteractionCommand::HandleDialog {
+                accept,
+                prompt_text,
+            } => {
+                let mut payload = json!({ "accept": accept });
+                if let Some(text) = prompt_text {
+                    payload["promptText"] = json!(text);
+                }
+                let _: Value = self
+                    .call("Page.handleJavaScriptDialog", payload)
+                    .await
+                    .map_err(PortError::from)?;
+            }
+            InteractionCommand::UploadFile { selector, paths } => {
+                // DOM.getDocument -> querySelector -> setFileInputFiles : seule
+                // voie valide (la politique de securite interdit de setter
+                // input[type=file].value en JS).
+                let doc: Value = self
+                    .call("DOM.getDocument", json!({}))
+                    .await
+                    .map_err(PortError::from)?;
+                let root_id = doc
+                    .get("root")
+                    .and_then(|r| r.get("nodeId"))
+                    .and_then(|v| v.as_i64())
+                    .ok_or_else(|| {
+                        PortError::Protocol("DOM.getDocument sans root.nodeId".to_string())
+                    })?;
+                let found: Value = self
+                    .call(
+                        "DOM.querySelector",
+                        json!({ "nodeId": root_id, "selector": selector }),
+                    )
+                    .await
+                    .map_err(PortError::from)?;
+                let node_id = found.get("nodeId").and_then(|v| v.as_i64()).unwrap_or(0);
+                if node_id == 0 {
+                    return Err(PortError::Interaction(format!(
+                        "input fichier introuvable : {selector}"
+                    )));
+                }
+                let _: Value = self
+                    .call(
+                        "DOM.setFileInputFiles",
+                        json!({ "nodeId": node_id, "files": paths }),
+                    )
+                    .await
+                    .map_err(PortError::from)?;
+            }
             InteractionCommand::DragDrop { from, to } => {
                 // Séquence souris native : hover -> press -> déplacements
                 // intermédiaires (certains frameworks exigent ≥1 mousemove
@@ -136,12 +195,24 @@ async fn mouse_event(
     position: Position,
     button: &str,
 ) -> PortResult<()> {
+    mouse_event_cc(client, kind, position, button, 1).await
+}
+
+/// Variante avec `clickCount` explicite (2 pour le second press/release d'un
+/// double-clic — c'est ce qui declenche `dblclick`).
+async fn mouse_event_cc(
+    client: &CdpClient,
+    kind: &str,
+    position: Position,
+    button: &str,
+    click_count: u32,
+) -> PortResult<()> {
     let payload = json!({
         "type": kind,
         "x": position.x,
         "y": position.y,
         "button": button,
-        "clickCount": 1,
+        "clickCount": click_count,
     });
     let _: Value = client
         .call("Input.dispatchMouseEvent", payload)

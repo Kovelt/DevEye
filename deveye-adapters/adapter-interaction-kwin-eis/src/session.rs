@@ -254,6 +254,32 @@ impl EisSession {
         self.flush()
     }
 
+    /// Double-clic gauche : déplacement absolu puis deux press/release du
+    /// bouton gauche, dans une seule séquence (le compositeur les corrèle en
+    /// double-clic via leur proximité temporelle).
+    pub(crate) async fn double_click(&mut self, abs: (f64, f64)) -> Result<(), EisError> {
+        let (serial, seq) = self.begin_emit()?;
+        let device = &self.devices[self.pointer_index()?];
+        let pa = device
+            .interface::<ei::PointerAbsolute>()
+            .ok_or_else(|| EisError::Eis("pas d'interface pointeur absolu".into()))?;
+        let btn = device
+            .interface::<ei::Button>()
+            .ok_or_else(|| EisError::Eis("pas d'interface bouton".into()))?;
+        let proto = device.device();
+        proto.start_emulating(serial, seq);
+        pa.motion_absolute(abs.0 as f32, abs.1 as f32);
+        proto.frame(serial, monotonic_us());
+        for _ in 0..2 {
+            btn.button(BTN_LEFT, ei::button::ButtonState::Press);
+            proto.frame(serial, monotonic_us());
+            btn.button(BTN_LEFT, ei::button::ButtonState::Released);
+            proto.frame(serial, monotonic_us());
+        }
+        proto.stop_emulating(serial);
+        self.flush()
+    }
+
     /// Glisser-déposer : press en `from`, déplacements intermédiaires, release
     /// en `to` (bouton gauche maintenu).
     pub(crate) async fn drag(&mut self, from: (f64, f64), to: (f64, f64)) -> Result<(), EisError> {

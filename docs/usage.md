@@ -85,14 +85,16 @@ dx serve --platform desktop --features deveye
 claude
 ```
 
-Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **28 outils sont disponibles** (1 _(à venir)_ : `resize`) :
+Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **38 outils sont disponibles** (1 _(à venir)_ : `resize`) :
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|
 | `screenshot` | aucun | image PNG (contenu image natif MCP, affichée par le client) | « prends un screenshot » |
 | `screenshot_region` | `{x, y, width, height}` | image PNG recadrée | « capture la zone (0, 0, 320, 200) » (vérif ciblée, moins de tokens ; seule vérif visuelle de composant en kwin-eis) |
+| `screenshot_element` | `{selector}` | image PNG recadrée (ou `isError {found:false}`) | « capture `#facture` » (résout le rect par JS, gère le DPI ; cdp/sdk) |
 | `assert_visual` | `{baseline_path, threshold?, x?, y?, width?, height?}` | JSON `{ok, diff_ratio, threshold, same_dims, ...}` | « compare au golden `ref.png` » (crée la baseline si absente ; `isError` si > seuil ; **seule assertion déterministe en kwin-eis**) |
 | `click` | `{x, y}` | `"ok"` | « clique sur 50, 200 » (envoie `mouseMoved` + sleep 60 ms + press/release) |
+| `double_click` | `{x, y}` | `"ok"` | « double-clic sur 50, 200 » (édition inline, sélection de mot ; émet `dblclick`) |
 | `right_click` | `{x, y}` | `"ok"` | « clic droit à 50, 200 » (ouvre les menus contextuels — émet `contextmenu`) |
 | `hover` | `{x, y}` | `"ok"` | « hover sur 10, 375 » (ouvre une zone rétractable sans cliquer) |
 | `click_selector` | `{selector}` | JSON `{ok, reason?}` | « clique sur `button.btn-primary` » (robuste aux décalages de coords) |
@@ -102,15 +104,23 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `key_combo` | `{modifiers, key}` | `"ok"` | « Ctrl+S » (`modifiers`: ctrl/shift/alt/meta ; seul moyen d'envoyer Ctrl+Z/C/V) |
 | `navigate` | `{route}` | `"ok"` | « navigue vers `Agenda` » (routeur du SDK opt-in ; indispo en kwin-eis) |
 | `scroll` | `{x?, y?, dx?, dy?}` | `"ok"` | « scrolle vers le bas de 600 px » (`dy > 0` = bas ; ancrage au centre par défaut ; cible le bon conteneur) |
+| `handle_dialog` | `{accept, prompt_text?}` | `"ok"` | « accepte la confirmation » (CDP : pendant un `alert`/`confirm`/`prompt`, `eval_js` est impossible) |
+| `upload_file` | `{selector, paths}` | `"ok"` | « charge `/tmp/a.png` dans `input[type=file]` » (CDP `DOM.setFileInputFiles` ; non faisable en JS) |
+| `focus_window` | `{title_pattern?}` | JSON `{ok, title}` | « donne le focus à la fenêtre `atlas` » (KWin ; crucial avant une séquence kwin-eis) |
+| `clipboard_get` | aucun | JSON `{text}` | « lis le presse-papiers » (Wayland `wl-paste` ; fiable en contexte automatisé) |
+| `clipboard_set` | `{text}` | `"ok"` | « mets ce texte dans le presse-papiers » (Wayland `wl-copy` ; combiner à `key_combo` Ctrl+V) |
 | `eval_js` | `{expression}` | JSON sérialisé | « renvoie `document.querySelectorAll('button').length` » (Promise awaitée) |
 | `dom` | aucun | JSON du DOM courant | « renvoie le DOM courant » |
 | `state` | aucun | JSON `{ ... }` | « quel est l'état applicatif courant ? » |
+| `assert_state` | `{expected}` | JSON `{ok, mismatches}` | « vérifie `{count: 3, page: "Agenda"}` dans le state » (`isError` si divergence) |
 | `target_info` | aucun | JSON `{target, eyes, hands, eval_js, dom, state, console_errors, list_windows, notes}` | « quelles capacités a la cible ? » (à appeler en premier ; dit si `eval_js`/`dom` répondront) |
 | `logs_tail` | aucun | JSON `[{ level, target, message, ... }]` | « affiche les derniers logs » |
 | `find_element` | `{selector}` | JSON `{found, tag, text, rect, visible, disabled, attributes}` | « inspecte le premier `#save-btn` » (alternatif léger à `dom`) |
 | `assert_selector` | `{selector, expected_text?, expected_count?}` | JSON `{ok, selector, actual_count, actual_text?}` | « vérifie qu'il y a exactement 3 `.card` » (`isError` si l'assertion échoue) |
 | `wait_for_selector` | `{selector, timeout_ms?, visible?, negate?}` | JSON `{found, elapsed_ms}` | « attends que `#result` soit présent » ; avec `negate=true` : « attends que `.spinner` disparaisse » (wait_for_gone) |
-| `wait_condition` | `{predicate, timeout_ms?}` | JSON `{satisfied, elapsed_ms, detail}` | « attends que `count` vaille 3 dans le state » (dom-selector / state-key / screenshot-stable) |
+| `wait_condition` | `{predicate, timeout_ms?}` | JSON `{satisfied, elapsed_ms, detail}` | « attends que `count` vaille 3 » (prédicats : dom-selector / state-key / screenshot-stable / screenshot-region-stable / log-message) |
+| `wait_for_log` | `{contains, level_min?, timeout_ms?}` | JSON `{satisfied, elapsed_ms, detail}` | « attends un log contenant "saved" » (logs `tracing` du SDK ; draine le buffer pendant l'attente) |
+| `wait_screenshot_region` | `{x, y, width, height, threshold_ms?, timeout_ms?}` | JSON `{satisfied, elapsed_ms, detail}` | « attends que la zone (0,0,320,200) se stabilise » (ignore curseur/horloge ailleurs) |
 | `wait_ready` | `{timeout_ms}` | JSON `{ready, waited_ms}` | « attends que l'app soit prête » (state non vide ; poll 200 ms ; `isError` si timeout) |
 | `drag_drop` | `{from_x, from_y, to_x, to_y}` | `"ok"` | « glisse de (10, 20) vers (100, 200) » |
 | `invoke_command` | `{name, args?}` | JSON (résultat de la commande) | « invoque `set-page` avec `{page:"Agenda"}` » (route exposée par l'app) |

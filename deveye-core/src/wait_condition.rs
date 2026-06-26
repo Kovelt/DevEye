@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::LogLevel;
+
 /// Prédicat évalué périodiquement par le port `WaitCondition`.
 ///
 /// Chaque variante est exprimable par l'agent Claude en JSON (`{ "kind": ... }`) ;
@@ -34,6 +36,26 @@ pub enum WaitPredicate {
     /// Deux captures consécutives (séparées de `threshold_ms`) sont identiques
     /// octet pour octet — stabilité visuelle (fin d'animation, page au repos).
     ScreenshotStable { threshold_ms: u64 },
+    /// Comme `ScreenshotStable`, mais sur une **région** (x, y, width, height)
+    /// uniquement : ignore un curseur clignotant ou une horloge ailleurs dans
+    /// le viewport. Bornée aux dimensions de la capture.
+    ScreenshotRegionStable {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        threshold_ms: u64,
+    },
+    /// Un log applicatif dont le message contient `contains` (et de niveau au
+    /// moins `level_min` si fourni) a été émis. Observe les logs `tracing`
+    /// bufferisés par le SDK — hors de portée de `eval_js`. Note : pendant
+    /// l'attente, le buffer de logs est drainé (les logs non concernés sont
+    /// consommés, donc invisibles à un `logs_tail` ultérieur).
+    LogMessage {
+        contains: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        level_min: Option<LogLevel>,
+    },
 }
 
 /// Résultat d'une attente conditionnelle.
@@ -142,5 +164,43 @@ mod tests {
             serde_json::to_value(&p).unwrap(),
             json!({ "kind": "screenshot-stable", "threshold_ms": 300 })
         );
+    }
+
+    #[test]
+    fn screenshot_region_stable_serializes() {
+        let p = WaitPredicate::ScreenshotRegionStable {
+            x: 10,
+            y: 20,
+            width: 100,
+            height: 50,
+            threshold_ms: 300,
+        };
+        assert_eq!(
+            serde_json::to_value(&p).unwrap(),
+            json!({ "kind": "screenshot-region-stable", "x": 10, "y": 20, "width": 100, "height": 50, "threshold_ms": 300 })
+        );
+    }
+
+    #[test]
+    fn log_message_serializes_and_omits_absent_level() {
+        let p = WaitPredicate::LogMessage {
+            contains: "saved".to_string(),
+            level_min: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&p).unwrap(),
+            json!({ "kind": "log-message", "contains": "saved" })
+        );
+        let p2 = WaitPredicate::LogMessage {
+            contains: "boom".to_string(),
+            level_min: Some(LogLevel::Error),
+        };
+        let v = serde_json::to_value(&p2).unwrap();
+        assert_eq!(
+            v,
+            json!({ "kind": "log-message", "contains": "boom", "level_min": "error" })
+        );
+        let back: WaitPredicate = serde_json::from_value(v).unwrap();
+        assert_eq!(back, p2);
     }
 }

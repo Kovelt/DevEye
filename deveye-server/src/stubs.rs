@@ -1,10 +1,12 @@
 //! Impls stub/noop locales au binaire : `EmptyWindowLister`, `UnsupportedInspector`,
-//! `UnsupportedEvaluator`.
+//! `UnsupportedEvaluator`, `UnsupportedWindowManager`.
 
 use async_trait::async_trait;
 
 use deveye_core::{DomTree, StateDump, WindowInfo};
-use deveye_ports::{AppInspector, JsEvaluator, PortError, PortResult, WindowLister};
+use deveye_ports::{
+    AppInspector, Clipboard, JsEvaluator, PortError, PortResult, WindowLister, WindowManager,
+};
 
 /// `WindowLister` du pont natif (cible `sdk`) : aucune visibilite
 /// inter-fenetres — renvoie une liste vide plutot qu'une erreur.
@@ -43,6 +45,37 @@ impl JsEvaluator for UnsupportedEvaluator {
     async fn evaluate(&self, _expression: &str) -> PortResult<serde_json::Value> {
         Err(PortError::Unsupported(
             "eval JS indisponible en mode kwin-eis (rendu natif, pas de WebView)".to_string(),
+        ))
+    }
+}
+
+/// Gestion de fenetres indisponible : cible CDP (webview, pas de fenetre OS a
+/// activer) ou session hors KDE/Wayland (pas de KWin Scripting).
+pub(crate) struct UnsupportedWindowManager;
+
+#[async_trait]
+impl WindowManager for UnsupportedWindowManager {
+    async fn activate(&self, _title_substring: Option<&str>) -> PortResult<String> {
+        Err(PortError::Unsupported(
+            "focus_window nécessite KDE/Wayland (KWin Scripting) avec --screencap-window"
+                .to_string(),
+        ))
+    }
+}
+
+/// Presse-papiers indisponible : session hors Wayland (pas de wl-clipboard).
+pub(crate) struct UnsupportedClipboard;
+
+#[async_trait]
+impl Clipboard for UnsupportedClipboard {
+    async fn get(&self) -> PortResult<String> {
+        Err(PortError::Unsupported(
+            "presse-papiers indisponible hors session Wayland".to_string(),
+        ))
+    }
+    async fn set(&self, _text: &str) -> PortResult<()> {
+        Err(PortError::Unsupported(
+            "presse-papiers indisponible hors session Wayland".to_string(),
         ))
     }
 }

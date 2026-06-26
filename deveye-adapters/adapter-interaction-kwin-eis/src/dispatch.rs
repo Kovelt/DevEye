@@ -36,6 +36,21 @@ impl InteractionSink for KwinEisInteraction {
                 dx: dx as f64,
                 dy: dy as f64,
             },
+            InteractionCommand::DoubleClick { position } => EisAction::DoubleClick {
+                abs: to_abs(position),
+            },
+            // CDP-only : un dialog JS et le remplissage d'input fichier n'ont
+            // pas de sens OS-level (pas de WebView en kwin-eis).
+            InteractionCommand::HandleDialog { .. } => {
+                return Err(PortError::Unsupported(
+                    "handle_dialog nécessite CDP ; indisponible en kwin-eis".to_string(),
+                ));
+            }
+            InteractionCommand::UploadFile { .. } => {
+                return Err(PortError::Unsupported(
+                    "upload_file nécessite CDP ; indisponible en kwin-eis".to_string(),
+                ));
+            }
             InteractionCommand::Type { text } => EisAction::Type { text },
             InteractionCommand::KeyPress { key } => EisAction::KeyPress { key },
             InteractionCommand::KeyCombo { modifiers, key } => {
