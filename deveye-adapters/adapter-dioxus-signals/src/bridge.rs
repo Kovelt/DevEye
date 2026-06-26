@@ -30,11 +30,7 @@ impl SdkEvaluator {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            http: reqwest::Client::builder()
-                .connect_timeout(super::CONNECT_TIMEOUT)
-                .timeout(super::REQUEST_TIMEOUT)
-                .build()
-                .expect("client reqwest (TLS rustls indisponible)"),
+            http: deveye_sdk_client::client(),
         }
     }
 }

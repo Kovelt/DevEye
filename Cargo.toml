@@ -15,6 +15,7 @@ members = [
     "deveye-core",
     "deveye-ports",
     "deveye-sdk",
+    "deveye-sdk-client",
     "deveye-server",
     "deveye-adapters/adapter-cdp-webview",
     "deveye-adapters/adapter-screencap-xcap",
@@ -24,6 +25,7 @@ members = [
     "deveye-adapters/adapter-screencap-kwin",
     "deveye-adapters/adapter-interaction-kwin-eis",
     "deveye-adapters/adapter-mcp-server",
+    "deveye-adapters/adapter-composite",
 ]
 
 # Dépendances partagées (versions reprises telles quelles du workspace Chronos).

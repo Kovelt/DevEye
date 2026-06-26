@@ -14,19 +14,11 @@ mod bridge;
 
 pub use bridge::{EvalDomInspector, JsInteraction, SdkEvaluator};
 
-use std::time::Duration;
-
 use async_trait::async_trait;
 use serde::Deserialize;
 
 use deveye_core::{DomTree, StateDump};
 use deveye_ports::{AppInspector, PortError, PortResult};
-
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// URL par défaut où le SDK opt-in expose son endpoint state.
-pub const DEFAULT_SDK_URL: &str = "http://127.0.0.1:31337";
 
 #[derive(Clone, Debug)]
 pub struct DioxusSignalsInspector {
@@ -38,16 +30,12 @@ impl DioxusSignalsInspector {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            http: reqwest::Client::builder()
-                .connect_timeout(CONNECT_TIMEOUT)
-                .timeout(REQUEST_TIMEOUT)
-                .build()
-                .expect("client reqwest (TLS rustls indisponible)"),
+            http: deveye_sdk_client::client(),
         }
     }
 
     pub fn with_default_url() -> Self {
-        Self::new(DEFAULT_SDK_URL)
+        Self::new(deveye_sdk_client::DEFAULT_SDK_URL)
     }
 }
 

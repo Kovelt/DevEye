@@ -24,6 +24,7 @@ adapter-commands-http = { path = "../deveye-adapters/adapter-commands-http" }
 adapter-screencap-kwin = { path = "../deveye-adapters/adapter-screencap-kwin" }
 adapter-interaction-kwin-eis = { path = "../deveye-adapters/adapter-interaction-kwin-eis" }
 adapter-mcp-server = { path = "../deveye-adapters/adapter-mcp-server" }
+adapter-composite = { path = "../deveye-adapters/adapter-composite" }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std"] }

@@ -1,0 +1,17 @@
+[package]
+name = "adapter-composite"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "LicenseRef-Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Adapter DevEye : types composites generiques (ConsoleErrorSource, WaitCondition, AppInspector)."
+
+# Metadonnees figees localement — cf. deveye-core/Cargo.toml.
+
+[dependencies]
+deveye-core = { path = "../../deveye-core" }
+deveye-ports = { path = "../../deveye-ports" }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time", "macros"] }
