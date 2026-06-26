@@ -63,7 +63,7 @@ use serde::{Deserialize, Serialize};
 use deveye_core::{InteractionCommand, MouseButton, Position, WaitPredicate};
 use deveye_ports::{
     AppInspector, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator, LogSource,
-    PortError, Renderer, WaitCondition, WindowLister,
+    Renderer, WaitCondition, WindowLister,
 };
 
 /// Ports passes a [`DeveyeMcpServer::new`] — evite les 9 arguments positionnels
@@ -450,50 +450,33 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<WaitForSelectorParams>,
     ) -> Result<CallToolResult, McpError> {
-        // M1 : le gate est locke PAR ITERATION (evaluate atomique), pas pour
-        // toute la boucle. Le sleep de 100 ms s'ecoule gate relache, ce qui
-        // laisse les autres outils MCP s'executer pendant le polling.
-        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(30_000));
-        let deadline = Instant::now() + budget;
-        let start = Instant::now();
-        let sel = serde_json::to_string(&p.selector).unwrap_or_default();
-        let snippet = if p.visible.unwrap_or(false) {
-            format!(
-                "(function(){{ const el = document.querySelector({sel}); if (!el) return false; \
-                 const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }})()"
-            )
-        } else {
-            format!("!!document.querySelector({sel})")
+        // L14 : delegation au port WaitCondition (supprime la boucle dupliquee).
+        // Le port gere le polling (200 ms), les snippets visible/querySelector,
+        // et la distinction transport-mort / erreur-JS-transitoire (M4).
+        // Le gate n'est PAS tenu : observationnel, comme wait_condition apres M1
+        // — le tenir bloquerait tous les outils pendant jusqu'a 30 s.
+        let predicate = WaitPredicate::DomSelector {
+            selector: p.selector,
+            visible: p.visible.unwrap_or(false),
         };
-        loop {
-            let eval_result = {
-                let _serial = self.gate.lock().await;
-                self.evaluator.evaluate(&snippet).await
-            };
-            let present = match eval_result {
-                // M4 : transport mort → sortie immediate en erreur MCP, pas 30 s
-                // de silence puis {found:false} trompeur.
-                Err(e @ PortError::Network(_)) => return Err(internal(e)),
-                // Erreur JS transitoire (selecteur absent, exception benigne) :
-                // le selecteur n'existe pas encore, continuer le polling.
-                Err(_) => false,
-                Ok(v) => v.as_bool().unwrap_or(false),
-            };
-            if present {
-                return Ok(json_success(&serde_json::json!({
-                    "found": true,
-                    "elapsed_ms": start.elapsed().as_millis() as u64
-                })));
-            }
-            if Instant::now() >= deadline {
-                // L13 : timeout = echec semantique → isError=true (coherent avec
-                // wait_condition).
-                return Ok(json_error(&serde_json::json!({
-                    "found": false,
-                    "elapsed_ms": start.elapsed().as_millis() as u64
-                })));
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(30_000));
+        let outcome = self
+            .wait_condition
+            .wait_until(predicate, budget)
+            .await
+            .map_err(internal)?;
+        if outcome.satisfied {
+            Ok(json_success(&serde_json::json!({
+                "found": true,
+                "elapsed_ms": outcome.elapsed_ms,
+            })))
+        } else {
+            // L13 : timeout = echec semantique => isError=true (coherent avec
+            // wait_condition).
+            Ok(json_error(&serde_json::json!({
+                "found": false,
+                "elapsed_ms": outcome.elapsed_ms,
+            })))
         }
     }
 

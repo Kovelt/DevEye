@@ -18,7 +18,7 @@ use async_trait::async_trait;
 
 use deveye_core::{ConsoleError, DomTree, StateDump, WaitOutcome, WaitPredicate};
 use deveye_ports::{
-    AppInspector, ConsoleErrorSource, JsEvaluator, PortResult, Renderer, WaitCondition,
+    AppInspector, ConsoleErrorSource, JsEvaluator, PortError, PortResult, Renderer, WaitCondition,
 };
 
 // ── ConsoleErrorSource ────────────────────────────────────────────────────────
@@ -135,13 +135,28 @@ pub struct CompositeWaitCondition {
 impl CompositeWaitCondition {
     async fn check(&self, predicate: &WaitPredicate) -> PortResult<bool> {
         match predicate {
-            WaitPredicate::DomSelector { selector } => {
+            WaitPredicate::DomSelector { selector, visible } => {
                 let sel = serde_json::to_string(selector).unwrap_or_default();
-                let value = self
-                    .evaluator
-                    .evaluate(&format!("!!document.querySelector({sel})"))
-                    .await?;
-                Ok(value.as_bool().unwrap_or(false))
+                // (a) VISIBLE : snippet adapte selon le mode demande.
+                let snippet = if *visible {
+                    format!(
+                        "(function(){{ const el = document.querySelector({sel}); \
+                         if (!el) return false; \
+                         const r = el.getBoundingClientRect(); \
+                         return r.width > 0 && r.height > 0; }})()"
+                    )
+                } else {
+                    format!("!!document.querySelector({sel})")
+                };
+                // (b) M4 : distingue transport mort (Network) des erreurs JS
+                // transitoires. Un selecteur pas-encore-present peut lever une
+                // exception JS benigne — on la traite comme `false` (continuer
+                // le polling). Seule une erreur de transport interrompt l'attente.
+                match self.evaluator.evaluate(&snippet).await {
+                    Ok(value) => Ok(value.as_bool().unwrap_or(false)),
+                    Err(e @ PortError::Network(_)) => Err(e),
+                    Err(_) => Ok(false),
+                }
             }
             WaitPredicate::StateKey { key, expected } => {
                 let dump = self.inspector.state_snapshot().await?;
@@ -351,11 +366,194 @@ mod tests {
             .wait_until(
                 WaitPredicate::DomSelector {
                     selector: ".never".to_string(),
+                    visible: false,
                 },
                 Duration::from_millis(50),
             )
             .await
             .expect("wait_until ne doit pas renvoyer Err");
         assert!(!outcome.satisfied, "le predicat ne peut etre satisfait");
+    }
+
+    /// DomSelector visible=true : le snippet passe a evaluate doit contenir
+    /// `getBoundingClientRect` (semantique de visibilite). On verifie via un
+    /// evaluateur spy qui capture le dernier snippet recu.
+    #[tokio::test]
+    async fn composite_dom_selector_visible_snippet_contains_bounding_rect() {
+        struct SpyEval {
+            captured: std::sync::Mutex<String>,
+        }
+
+        #[async_trait]
+        impl JsEvaluator for SpyEval {
+            async fn evaluate(&self, snippet: &str) -> PortResult<serde_json::Value> {
+                *self.captured.lock().unwrap() = snippet.to_string();
+                // Renvoie true => predicat satisfait immediatement.
+                Ok(serde_json::json!(true))
+            }
+        }
+
+        struct NoopInspector2;
+        struct NoopRenderer2;
+
+        #[async_trait]
+        impl AppInspector for NoopInspector2 {
+            async fn dom_snapshot(&self) -> PortResult<DomTree> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+            async fn state_snapshot(&self) -> PortResult<StateDump> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+        }
+
+        #[async_trait]
+        impl Renderer for NoopRenderer2 {
+            async fn screenshot(&self) -> PortResult<Screenshot> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+            async fn viewport_size(&self) -> PortResult<Size> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+        }
+
+        let spy = Arc::new(SpyEval {
+            captured: std::sync::Mutex::new(String::new()),
+        });
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::clone(&spy) as Arc<dyn JsEvaluator>,
+            inspector: Arc::new(NoopInspector2),
+            renderer: Arc::new(NoopRenderer2),
+        };
+        let outcome = cond
+            .wait_until(
+                WaitPredicate::DomSelector {
+                    selector: "#btn".to_string(),
+                    visible: true,
+                },
+                Duration::from_millis(500),
+            )
+            .await
+            .expect("wait_until ne doit pas echouer");
+        assert!(outcome.satisfied, "le predicat doit etre satisfait");
+        let snippet = spy.captured.lock().unwrap().clone();
+        assert!(
+            snippet.contains("getBoundingClientRect"),
+            "snippet visible doit contenir getBoundingClientRect, recu: {snippet}"
+        );
+    }
+
+    /// M4 — une erreur `PortError::Network` dans l'evaluateur doit se propager
+    /// hors de `wait_until` (transport mort = vrai echec, pas un transitoire).
+    #[tokio::test]
+    async fn composite_dom_selector_network_error_propagates() {
+        struct NetworkEval;
+
+        #[async_trait]
+        impl JsEvaluator for NetworkEval {
+            async fn evaluate(&self, _: &str) -> PortResult<serde_json::Value> {
+                Err(PortError::Network("connexion perdue".to_string()))
+            }
+        }
+
+        struct NoopInspector3;
+        struct NoopRenderer3;
+
+        #[async_trait]
+        impl AppInspector for NoopInspector3 {
+            async fn dom_snapshot(&self) -> PortResult<DomTree> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+            async fn state_snapshot(&self) -> PortResult<StateDump> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+        }
+
+        #[async_trait]
+        impl Renderer for NoopRenderer3 {
+            async fn screenshot(&self) -> PortResult<Screenshot> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+            async fn viewport_size(&self) -> PortResult<Size> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+        }
+
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(NetworkEval),
+            inspector: Arc::new(NoopInspector3),
+            renderer: Arc::new(NoopRenderer3),
+        };
+        let result = cond
+            .wait_until(
+                WaitPredicate::DomSelector {
+                    selector: ".x".to_string(),
+                    visible: false,
+                },
+                Duration::from_millis(100),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(PortError::Network(_))),
+            "une erreur Network doit se propager, recu: {result:?}"
+        );
+    }
+
+    /// M4 — une erreur non-Network dans l'evaluateur (erreur JS transitoire)
+    /// est traitee comme `false` : le polling continue jusqu'au timeout, sans
+    /// remonter d'erreur.
+    #[tokio::test]
+    async fn composite_dom_selector_transient_error_treated_as_false() {
+        struct TransientEval;
+
+        #[async_trait]
+        impl JsEvaluator for TransientEval {
+            async fn evaluate(&self, _: &str) -> PortResult<serde_json::Value> {
+                // Simule une exception JS benigne (ex. : sélecteur inconnu).
+                Err(PortError::Protocol("exception JS benigne".to_string()))
+            }
+        }
+
+        struct NoopInspector4;
+        struct NoopRenderer4;
+
+        #[async_trait]
+        impl AppInspector for NoopInspector4 {
+            async fn dom_snapshot(&self) -> PortResult<DomTree> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+            async fn state_snapshot(&self) -> PortResult<StateDump> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+        }
+
+        #[async_trait]
+        impl Renderer for NoopRenderer4 {
+            async fn screenshot(&self) -> PortResult<Screenshot> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+            async fn viewport_size(&self) -> PortResult<Size> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+        }
+
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(TransientEval),
+            inspector: Arc::new(NoopInspector4),
+            renderer: Arc::new(NoopRenderer4),
+        };
+        let outcome = cond
+            .wait_until(
+                WaitPredicate::DomSelector {
+                    selector: ".transient".to_string(),
+                    visible: false,
+                },
+                Duration::from_millis(50),
+            )
+            .await
+            .expect("erreur transitoire ne doit pas propager d'Err");
+        assert!(
+            !outcome.satisfied,
+            "timeout apres erreurs transitoires => satisfied=false"
+        );
     }
 }
