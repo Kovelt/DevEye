@@ -1,0 +1,139 @@
+//! Helpers CDP : filtre de selection de cible et facade paresseuse `LazyCdp`.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
+use adapter_cdp_webview::{CdpClient, TargetFilter};
+use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump, WindowInfo};
+use deveye_ports::{
+    AppInspector, InteractionSink, JsEvaluator, PortError, PortResult, Renderer, WindowLister,
+};
+
+use crate::cli::{Args, TargetMode};
+
+/// Construit le filtre de selection de la page CDP cible a partir des arguments
+/// CLI. Sans flag explicite, applique le filtre par defaut Dioxus
+/// (retro-compatible). Des qu'un filtre est fourni, `accept_blank` suit
+/// --cdp-accept-blank (false par defaut) pour ne pas s'attacher a la page
+/// about:blank transitoire d'une tete WASM avant son chargement.
+pub(crate) fn build_cdp_filter(args: &Args) -> TargetFilter {
+    if args.cdp_target_filter_url.is_none() && args.cdp_target_filter_title.is_none() {
+        TargetFilter::default()
+    } else {
+        TargetFilter {
+            url_contains: args.cdp_target_filter_url.clone(),
+            title_contains: args.cdp_target_filter_title.clone(),
+            accept_blank: args.cdp_accept_blank,
+        }
+    }
+}
+
+/// Tente la connexion initiale au CDP. Renvoie `None` si la cible est `sdk` ou
+/// `kwin-eis` (pas de navigateur), ou si le CDP est injoignable au demarrage
+/// (erreur non fatale — la reconnexion se fera au premier appel d'outil).
+pub(crate) async fn try_initial_cdp(
+    url: &str,
+    filter: TargetFilter,
+    target: TargetMode,
+) -> Option<Arc<CdpClient>> {
+    if matches!(target, TargetMode::Sdk | TargetMode::KwinEis) {
+        return None;
+    }
+    match CdpClient::connect(url, filter).await {
+        Ok(client) => Some(Arc::new(client)),
+        Err(e) => {
+            eprintln!(
+                "deveye-server : CDP injoignable au demarrage ({e}) — \
+                 reconnexion automatique au premier appel d'outil."
+            );
+            None
+        }
+    }
+}
+
+/// Facade paresseuse sur le CDP : (re)connecte **a la demande** au lieu
+/// d'exiger le navigateur au demarrage. Survit aussi a sa fermeture en cours
+/// de session (relance de `just ui-eyes`) : un client dont le WebSocket est
+/// mort (`is_closed`) est jete et remplace au prochain appel d'outil.
+pub(crate) struct LazyCdp {
+    url: String,
+    filter: TargetFilter,
+    slot: tokio::sync::Mutex<Option<Arc<CdpClient>>>,
+}
+
+impl LazyCdp {
+    pub(crate) fn new(url: String, filter: TargetFilter, initial: Option<Arc<CdpClient>>) -> Self {
+        Self {
+            url,
+            filter,
+            slot: tokio::sync::Mutex::new(initial),
+        }
+    }
+
+    /// Le client courant s'il est vivant, sinon une (re)connexion. L'echec
+    /// est une erreur d'outil ordinaire — jamais la mort du serveur MCP.
+    async fn client(&self) -> PortResult<Arc<CdpClient>> {
+        let mut slot = self.slot.lock().await;
+        if let Some(client) = slot.as_ref() {
+            if !client.is_closed() {
+                return Ok(client.clone());
+            }
+        }
+        match CdpClient::connect(&self.url, self.filter.clone()).await {
+            Ok(client) => {
+                let client = Arc::new(client);
+                *slot = Some(client.clone());
+                Ok(client)
+            }
+            Err(e) => Err(PortError::Network(format!(
+                "CDP injoignable sur {} ({e}) — lancer le navigateur cible \
+                 (`just ui-eyes`) puis rappeler l'outil",
+                self.url
+            ))),
+        }
+    }
+}
+
+#[async_trait]
+impl Renderer for LazyCdp {
+    async fn screenshot(&self) -> PortResult<Screenshot> {
+        self.client().await?.screenshot().await
+    }
+
+    async fn viewport_size(&self) -> PortResult<Size> {
+        self.client().await?.viewport_size().await
+    }
+}
+
+#[async_trait]
+impl InteractionSink for LazyCdp {
+    async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
+        self.client().await?.dispatch(command).await
+    }
+}
+
+#[async_trait]
+impl AppInspector for LazyCdp {
+    async fn dom_snapshot(&self) -> PortResult<DomTree> {
+        self.client().await?.dom_snapshot().await
+    }
+
+    async fn state_snapshot(&self) -> PortResult<StateDump> {
+        self.client().await?.state_snapshot().await
+    }
+}
+
+#[async_trait]
+impl JsEvaluator for LazyCdp {
+    async fn evaluate(&self, expression: &str) -> PortResult<serde_json::Value> {
+        self.client().await?.evaluate(expression).await
+    }
+}
+
+#[async_trait]
+impl WindowLister for LazyCdp {
+    async fn list_windows(&self) -> PortResult<Vec<WindowInfo>> {
+        self.client().await?.list_windows().await
+    }
+}

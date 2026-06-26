@@ -12,6 +12,7 @@ description = "Adapter DevEye : CommandRouter via POST /devtools/command et GET 
 [dependencies]
 deveye-core = { path = "../../deveye-core" }
 deveye-ports = { path = "../../deveye-ports" }
+deveye-sdk-client = { path = "../../deveye-sdk-client" }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

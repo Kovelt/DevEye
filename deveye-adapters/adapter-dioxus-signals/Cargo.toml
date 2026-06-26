@@ -12,6 +12,7 @@ description = "Adapter DevEye : AppInspector::state_snapshot via le SDK opt-in (
 [dependencies]
 deveye-core = { path = "../../deveye-core" }
 deveye-ports = { path = "../../deveye-ports" }
+deveye-sdk-client = { path = "../../deveye-sdk-client" }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

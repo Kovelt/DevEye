@@ -1,8 +1,13 @@
-//! Orchestration : types composites et logique de repli (fallback).
+#![forbid(unsafe_code)]
+//! Adapter `adapter-composite` — types composites generiques.
 //!
-//! Ce module centralise les briques d'orchestration qui vivaient dans `main.rs` :
-//! sources d'erreurs console, condition d'attente composite, wrappers de repli
-//! (`Fallback*`) et inspecteur composite.  Ils sont ici testables sans I/O reelle.
+//! Ce crate centralise les briques d'orchestration testables sans I/O reelle :
+//! sources d'erreurs console JS, condition d'attente multi-predicats,
+//! inspecteur composant DOM + state. Ces types fonctionnent pour toutes les
+//! cibles sans impl par adapter.
+//!
+//! Issu de `deveye-server::orchestration` (refacto hexagonale lot C) :
+//! les adapters composites n'ont pas leur place dans le binaire orchestrateur.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -11,13 +16,9 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
-use deveye_core::{
-    ConsoleError, DomTree, InteractionCommand, Screenshot, Size, StateDump, WaitOutcome,
-    WaitPredicate,
-};
+use deveye_core::{ConsoleError, DomTree, StateDump, WaitOutcome, WaitPredicate};
 use deveye_ports::{
-    AppInspector, ConsoleErrorSource, InteractionSink, JsEvaluator, PortError, PortResult,
-    Renderer, WaitCondition,
+    AppInspector, ConsoleErrorSource, JsEvaluator, PortResult, Renderer, WaitCondition,
 };
 
 // ── ConsoleErrorSource ────────────────────────────────────────────────────────
@@ -28,7 +29,7 @@ use deveye_ports::{
 /// de WebView). Ce n'est pas une erreur — `PortError::Unsupported` serait
 /// trompeur ; l'absence de webview ne produit tout simplement aucune erreur
 /// console a drainer.
-pub(crate) struct NoopConsoleErrorSource;
+pub struct NoopConsoleErrorSource;
 
 #[async_trait]
 impl ConsoleErrorSource for NoopConsoleErrorSource {
@@ -64,8 +65,8 @@ const CONSOLE_ERRORS_SNIPPET: &str = r#"(function(){
 /// `ConsoleErrorSource` générique : injecte un collecteur JS via l'évaluateur
 /// (CDP ou pompe SDK) et draine les erreurs typées. La capture CDP-native
 /// (`Runtime.consoleAPICalled`) reste un raffinement futur derrière ce même port.
-pub(crate) struct JsConsoleErrorSource {
-    pub(crate) evaluator: Arc<dyn JsEvaluator>,
+pub struct JsConsoleErrorSource {
+    pub evaluator: Arc<dyn JsEvaluator>,
 }
 
 #[async_trait]
@@ -125,10 +126,10 @@ fn hash_screenshot_bytes(bytes: &[u8]) -> u64 {
 /// `WaitCondition` composite : boucle de polling sur les ports déjà composés
 /// (évaluateur pour `DomSelector`, inspecteur pour `StateKey`, renderer pour
 /// `ScreenshotStable`). Marche pour toutes les cibles sans impl par adapter.
-pub(crate) struct CompositeWaitCondition {
-    pub(crate) evaluator: Arc<dyn JsEvaluator>,
-    pub(crate) inspector: Arc<dyn AppInspector>,
-    pub(crate) renderer: Arc<dyn Renderer>,
+pub struct CompositeWaitCondition {
+    pub evaluator: Arc<dyn JsEvaluator>,
+    pub inspector: Arc<dyn AppInspector>,
+    pub renderer: Arc<dyn Renderer>,
 }
 
 impl CompositeWaitCondition {
@@ -192,101 +193,14 @@ impl WaitCondition for CompositeWaitCondition {
     }
 }
 
-// ── Logique de repli (mode `auto`) ───────────────────────────────────────────
-
-/// Vrai si l'erreur signale un problème de **liaison** (cible injoignable)
-/// plutôt qu'un échec de l'opération elle-même — le seul cas où le mode
-/// `auto` bascule sur le pont natif.
-fn is_liaison_error(e: &PortError) -> bool {
-    matches!(e, PortError::Network(_))
-}
-
-/// Repli par appel pour les yeux : CDP d'abord, xcap si la liaison manque.
-pub(crate) struct FallbackRenderer {
-    pub(crate) primary: Arc<dyn Renderer>,
-    pub(crate) fallback: Arc<dyn Renderer>,
-}
-
-#[async_trait]
-impl Renderer for FallbackRenderer {
-    async fn screenshot(&self) -> PortResult<Screenshot> {
-        match self.primary.screenshot().await {
-            Err(e) if is_liaison_error(&e) => self.fallback.screenshot().await,
-            other => other,
-        }
-    }
-
-    async fn viewport_size(&self) -> PortResult<Size> {
-        match self.primary.viewport_size().await {
-            Err(e) if is_liaison_error(&e) => self.fallback.viewport_size().await,
-            other => other,
-        }
-    }
-}
-
-/// Repli par appel pour les mains : CDP d'abord, événements JS via le SDK.
-pub(crate) struct FallbackInteraction {
-    pub(crate) primary: Arc<dyn InteractionSink>,
-    pub(crate) fallback: Arc<dyn InteractionSink>,
-}
-
-#[async_trait]
-impl InteractionSink for FallbackInteraction {
-    async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
-        match self.primary.dispatch(command.clone()).await {
-            Err(e) if is_liaison_error(&e) => self.fallback.dispatch(command).await,
-            other => other,
-        }
-    }
-}
-
-/// Repli par appel pour le DOM : CDP d'abord, `outerHTML` via le SDK.
-pub(crate) struct FallbackDom {
-    pub(crate) primary: Arc<dyn AppInspector>,
-    pub(crate) fallback: Arc<dyn AppInspector>,
-}
-
-#[async_trait]
-impl AppInspector for FallbackDom {
-    async fn dom_snapshot(&self) -> PortResult<DomTree> {
-        match self.primary.dom_snapshot().await {
-            Err(e) if is_liaison_error(&e) => self.fallback.dom_snapshot().await,
-            other => other,
-        }
-    }
-
-    async fn state_snapshot(&self) -> PortResult<StateDump> {
-        match self.primary.state_snapshot().await {
-            Err(e) if is_liaison_error(&e) => self.fallback.state_snapshot().await,
-            other => other,
-        }
-    }
-}
-
-/// Repli par appel pour l'évaluateur JS : CDP d'abord, pompe SDK sinon.
-pub(crate) struct FallbackEvaluator {
-    pub(crate) primary: Arc<dyn JsEvaluator>,
-    pub(crate) fallback: Arc<dyn JsEvaluator>,
-}
-
-#[async_trait]
-impl JsEvaluator for FallbackEvaluator {
-    async fn evaluate(&self, expression: &str) -> PortResult<serde_json::Value> {
-        match self.primary.evaluate(expression).await {
-            Err(e) if is_liaison_error(&e) => self.fallback.evaluate(expression).await,
-            other => other,
-        }
-    }
-}
-
 // ── CompositeInspector ────────────────────────────────────────────────────────
 
 /// Compose un inspector DOM (typiquement CDP) avec un inspector state
 /// (typiquement le SDK opt-in). Permet de tirer le DOM d'une source et le
 /// state d'une autre derriere un meme port `AppInspector`.
-pub(crate) struct CompositeInspector {
-    pub(crate) dom: Arc<dyn AppInspector>,
-    pub(crate) state: Arc<dyn AppInspector>,
+pub struct CompositeInspector {
+    pub dom: Arc<dyn AppInspector>,
+    pub state: Arc<dyn AppInspector>,
 }
 
 #[async_trait]
@@ -306,8 +220,8 @@ impl AppInspector for CompositeInspector {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use deveye_core::ConsoleLevel;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use deveye_core::{ConsoleLevel, Screenshot, Size};
+    use deveye_ports::PortError;
 
     // Timestamp RFC3339 fixe utilise dans les donnees de test (evite le besoin
     // d'une dependance directe a `chrono` dans le binaire).
@@ -389,102 +303,8 @@ mod tests {
     }
 
     // ----- H2 : tests d'orchestration (audit lot B/C) -----
-
-    /// `is_liaison_error` doit etre vrai uniquement pour `PortError::Network`.
-    #[test]
-    fn is_liaison_error_matches_only_network() {
-        assert!(is_liaison_error(&PortError::Network(
-            "conn refused".to_string()
-        )));
-        assert!(!is_liaison_error(&PortError::Timeout(
-            "timed out".to_string()
-        )));
-        assert!(!is_liaison_error(&PortError::Render("bad".to_string())));
-        assert!(!is_liaison_error(&PortError::Inspect("bad".to_string())));
-        assert!(!is_liaison_error(&PortError::Protocol("bad".to_string())));
-        assert!(!is_liaison_error(&PortError::Unsupported(
-            "bad".to_string()
-        )));
-        assert!(!is_liaison_error(&PortError::Interaction(
-            "bad".to_string()
-        )));
-        assert!(!is_liaison_error(&PortError::Log("bad".to_string())));
-        assert!(!is_liaison_error(&PortError::Console("bad".to_string())));
-        assert!(!is_liaison_error(&PortError::Route {
-            route: "r".to_string(),
-            message: "m".to_string(),
-        }));
-    }
-
-    /// Un `FallbackEvaluator` dont le primaire echoue avec `Network` doit appeler
-    /// le repli et renvoyer son resultat.
-    #[tokio::test]
-    async fn fallback_triggers_on_network_error_only() {
-        struct NetworkFailEval;
-        struct OkEval;
-
-        #[async_trait]
-        impl JsEvaluator for NetworkFailEval {
-            async fn evaluate(&self, _: &str) -> PortResult<serde_json::Value> {
-                Err(PortError::Network("down".to_string()))
-            }
-        }
-
-        #[async_trait]
-        impl JsEvaluator for OkEval {
-            async fn evaluate(&self, _: &str) -> PortResult<serde_json::Value> {
-                Ok(serde_json::json!(42))
-            }
-        }
-
-        let fe = FallbackEvaluator {
-            primary: Arc::new(NetworkFailEval),
-            fallback: Arc::new(OkEval),
-        };
-        let result = fe.evaluate("x").await.expect("le repli doit reussir");
-        assert_eq!(result, serde_json::json!(42));
-    }
-
-    /// Un `FallbackEvaluator` dont le primaire echoue avec `Timeout` ne doit PAS
-    /// appeler le repli : l'erreur est propagee telle quelle.
-    #[tokio::test]
-    async fn fallback_does_not_trigger_on_timeout() {
-        struct TimeoutEval;
-        struct TrackingEval(Arc<AtomicBool>);
-
-        #[async_trait]
-        impl JsEvaluator for TimeoutEval {
-            async fn evaluate(&self, _: &str) -> PortResult<serde_json::Value> {
-                Err(PortError::Timeout("took too long".to_string()))
-            }
-        }
-
-        #[async_trait]
-        impl JsEvaluator for TrackingEval {
-            async fn evaluate(&self, _: &str) -> PortResult<serde_json::Value> {
-                self.0.store(true, Ordering::SeqCst);
-                Ok(serde_json::json!(99))
-            }
-        }
-
-        let called = Arc::new(AtomicBool::new(false));
-        let fe = FallbackEvaluator {
-            primary: Arc::new(TimeoutEval),
-            fallback: Arc::new(TrackingEval(called.clone())),
-        };
-        let err = fe
-            .evaluate("x")
-            .await
-            .expect_err("le timeout doit se propager");
-        assert!(
-            matches!(err, PortError::Timeout(_)),
-            "type d'erreur inattendu : {err:?}"
-        );
-        assert!(
-            !called.load(Ordering::SeqCst),
-            "le repli ne doit pas etre invoque sur Timeout"
-        );
-    }
+    // Les tests du predicat `is_liaison_error` et des structs `Fallback*` sont
+    // dans `deveye-server::fallback` (crate::fallback::tests).
 
     /// Un `CompositeWaitCondition` dont le predicat n'est jamais satisfait doit
     /// renvoyer `WaitOutcome { satisfied: false }` apres expiration du timeout

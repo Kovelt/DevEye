@@ -1,0 +1,13 @@
+[package]
+name = "deveye-sdk-client"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+license = "LicenseRef-Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Client HTTP partage pour les adapters DevEye communiquant avec le SDK opt-in."
+
+# Metadonnees figees localement — cf. deveye-core/Cargo.toml.
+
+[dependencies]
+reqwest = { workspace = true }
