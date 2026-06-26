@@ -103,3 +103,125 @@ impl CommandRouter for SdkCommandRouter {
             .map_err(|e| PortError::Network(format!("decode JSON commandes {url} : {e}")))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SdkCommandRouter;
+    use deveye_ports::{CommandRouter, PortError};
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // ---- invoke ---------------------------------------------------------------
+
+    /// POST /devtools/command 200 + corps JSON => valeur retournee.
+    #[tokio::test]
+    async fn invoke_ok_returns_json_value() {
+        let server = MockServer::start().await;
+        let expected_body = serde_json::json!({ "route": "say-hello", "payload": {} });
+        Mock::given(method("POST"))
+            .and(path("/devtools/command"))
+            .and(body_json(expected_body))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })),
+            )
+            .mount(&server)
+            .await;
+
+        let adapter = SdkCommandRouter::new(server.uri());
+        let result = adapter
+            .invoke("say-hello", serde_json::json!({}))
+            .await
+            .expect("should succeed on 200");
+        assert_eq!(result, serde_json::json!({ "ok": true }));
+    }
+
+    /// POST /devtools/command 404 + `{ "error": "..." }` => PortError::Route
+    /// avec le message extrait du champ `error`.
+    #[tokio::test]
+    async fn invoke_404_json_error_field_is_forwarded() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/devtools/command"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(serde_json::json!({ "error": "route inconnue" })),
+            )
+            .mount(&server)
+            .await;
+
+        let adapter = SdkCommandRouter::new(server.uri());
+        let err = adapter
+            .invoke("unknown", serde_json::json!(null))
+            .await
+            .expect_err("should fail on 404");
+        match err {
+            PortError::Route { route, message } => {
+                assert_eq!(route, "unknown");
+                assert_eq!(message, "route inconnue");
+            }
+            other => panic!("expected PortError::Route, got {other:?}"),
+        }
+    }
+
+    /// POST /devtools/command 500 corps texte brut => PortError::Route
+    /// (message contient le statut et le corps).
+    #[tokio::test]
+    async fn invoke_500_plain_text_returns_route_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/devtools/command"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .mount(&server)
+            .await;
+
+        let adapter = SdkCommandRouter::new(server.uri());
+        let err = adapter
+            .invoke("any", serde_json::json!(null))
+            .await
+            .expect_err("should fail on 500");
+        assert!(
+            matches!(err, PortError::Route { .. }),
+            "expected PortError::Route, got {err:?}"
+        );
+    }
+
+    // ---- list -----------------------------------------------------------------
+
+    /// GET /devtools/commands 200 + tableau JSON => Vec<CommandDescriptor> deserialise.
+    #[tokio::test]
+    async fn list_ok_returns_descriptors() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/devtools/commands"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "name": "say-hello", "description": "Salue l'utilisateur" },
+                { "name": "clear-data", "description": "Efface les donnees" }
+            ])))
+            .mount(&server)
+            .await;
+
+        let adapter = SdkCommandRouter::new(server.uri());
+        let list = adapter.list().await.expect("should succeed on 200");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name, "say-hello");
+        assert_eq!(list[1].name, "clear-data");
+    }
+
+    /// GET /devtools/commands 503 => PortError::Network (probleme de liaison SDK).
+    #[tokio::test]
+    async fn list_503_returns_network_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/devtools/commands"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let adapter = SdkCommandRouter::new(server.uri());
+        let err = adapter.list().await.expect_err("should fail on 503");
+        assert!(
+            matches!(err, PortError::Network(_)),
+            "expected PortError::Network, got {err:?}"
+        );
+    }
+}

@@ -443,3 +443,38 @@ fn xkb_name_to_evdev(keymap: &xkb::Keymap, name: &str) -> Option<u32> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- button_code : mapping MouseButton -> code evdev ----------------------
+    //
+    // Verrouille les valeurs attendues par KWin EIS.  Toute regression sur les
+    // constantes BTN_* ou sur les branches du match sera detectee ici sans avoir
+    // besoin d'une session KWin active.
+
+    /// Les constantes BTN_* doivent correspondre aux valeurs de
+    /// linux/input-event-codes.h (inchangees depuis le kernel 2.6).
+    #[test]
+    fn btn_constants_match_linux_input_event_codes() {
+        assert_eq!(BTN_LEFT, 0x110);
+        assert_eq!(BTN_RIGHT, 0x111);
+        assert_eq!(BTN_MIDDLE, 0x112);
+    }
+
+    #[test]
+    fn button_code_left_maps_to_btn_left() {
+        assert_eq!(button_code(MouseButton::Left), BTN_LEFT);
+    }
+
+    #[test]
+    fn button_code_right_maps_to_btn_right() {
+        assert_eq!(button_code(MouseButton::Right), BTN_RIGHT);
+    }
+
+    #[test]
+    fn button_code_middle_maps_to_btn_middle() {
+        assert_eq!(button_code(MouseButton::Middle), BTN_MIDDLE);
+    }
+}

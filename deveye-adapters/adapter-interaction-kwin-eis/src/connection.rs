@@ -111,9 +111,18 @@ impl KwinEisInteraction {
         })
     }
 
-    /// Origine écran courante de la fenêtre cible.
+    /// Origine ecran courante de la fenetre cible.
     pub(crate) async fn origin(&self) -> (i32, i32) {
         *self.window_origin.lock().await
+    }
+
+    /// Met a jour l'origine ecran de la fenetre cible (x, y absolus).
+    ///
+    /// Appelee par `deveye-server` apres resolution de la geometrie au
+    /// demarrage, ou lors d'un repositionnement de la fenetre. Tous les clics
+    /// EIS suivants utilisent la nouvelle origine immediatement.
+    pub async fn set_window_origin(&self, origin: (i32, i32)) {
+        *self.window_origin.lock().await = origin;
     }
 
     /// Soumet une action au worker et attend son résultat.
@@ -187,5 +196,35 @@ async fn run_action(session: &mut EisSession, action: EisAction) -> Result<(), E
         EisAction::Drag { from, to } => session.drag(from, to).await,
         EisAction::Type { text } => session.type_text(&text).await,
         EisAction::KeyPress { key } => session.key_press(&key).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// set_window_origin met bien a jour la valeur renvoyee par origin().
+    #[tokio::test]
+    async fn set_and_read_origin_roundtrip() {
+        let eis = KwinEisInteraction::new((0, 0)).expect("creation KwinEisInteraction");
+        assert_eq!(eis.origin().await, (0, 0));
+        eis.set_window_origin((120, 340)).await;
+        assert_eq!(eis.origin().await, (120, 340));
+    }
+
+    /// La translation viewport -> absolu est correcte avant et apres mise a
+    /// jour de l'origine (simule le comportement de dispatch.rs sans session
+    /// KWin reelle).
+    #[tokio::test]
+    async fn origin_drives_coordinate_translation() {
+        let eis = KwinEisInteraction::new((10, 20)).expect("creation KwinEisInteraction");
+        let (ox, oy) = eis.origin().await;
+        // Position viewport (5, 5) + origine (10, 20) => absolu (15, 25).
+        assert_eq!((5 + ox, 5 + oy), (15, 25));
+
+        eis.set_window_origin((100, 200)).await;
+        let (ox2, oy2) = eis.origin().await;
+        // Apres mise a jour : (5, 5) + (100, 200) => (105, 205).
+        assert_eq!((5 + ox2, 5 + oy2), (105, 205));
     }
 }
