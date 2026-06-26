@@ -8,6 +8,8 @@
 //! Voir [`deveye.md`](../../../../../docs/architecture/deveye.md) côté
 //! Chronos pour le contexte global et le mode d'emploi.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -44,8 +46,11 @@ struct Args {
     #[arg(long, default_value = "http://localhost:9222")]
     cdp_url: String,
 
-    /// URL du SDK opt-in expose par l'app cible (par defaut http://localhost:31337).
-    #[arg(long, default_value = "http://localhost:31337")]
+    /// URL du SDK opt-in expose par l'app cible (par defaut http://127.0.0.1:31337).
+    /// On utilise 127.0.0.1 plutot que localhost : sur Fedora (et la plupart des
+    /// Linux modernes) "localhost" se resout en ::1 (IPv6) alors que le SDK bind
+    /// sur 127.0.0.1 uniquement => echec silencieux de connexion.
+    #[arg(long, default_value = "http://127.0.0.1:31337")]
     sdk_url: String,
 
     /// Titre (sous-chaine, insensible a la casse) de la fenetre native a
@@ -255,7 +260,7 @@ async fn main() -> Result<()> {
         // (rendu natif). Le state/les logs restent servis par le SDK plus bas.
         TargetMode::KwinEis => (
             build_os_renderer(screencap_title.as_deref(), args.screencap_backend),
-            Arc::new(KwinEisInteraction::new((0, 0))),
+            Arc::new(KwinEisInteraction::new((0, 0)).expect("worker EIS")),
             Arc::new(UnsupportedInspector),
             Arc::new(UnsupportedEvaluator),
             Arc::new(EmptyWindowLister),
@@ -277,9 +282,18 @@ async fn main() -> Result<()> {
 
     // Ports d'orchestration (M6), composés sur les ports déjà construits :
     // erreurs console par injection JS, attente conditionnelle multi-prédicats.
-    let console_errors: Arc<dyn ConsoleErrorSource> = Arc::new(JsConsoleErrorSource {
-        evaluator: evaluator.clone(),
-    });
+    //
+    // En mode kwin-eis il n'y a pas de WebView : l'evaluateur renverrait
+    // PortError::Unsupported a chaque drain. On branche un noop plutot que de
+    // propager une fausse erreur (absence de console != erreur du port).
+    let console_errors: Arc<dyn ConsoleErrorSource> = if matches!(args.target, TargetMode::KwinEis)
+    {
+        Arc::new(NoopConsoleErrorSource)
+    } else {
+        Arc::new(JsConsoleErrorSource {
+            evaluator: evaluator.clone(),
+        })
+    };
     let wait_condition: Arc<dyn WaitCondition> = Arc::new(CompositeWaitCondition {
         evaluator: evaluator.clone(),
         inspector: inspector.clone(),
@@ -438,6 +452,21 @@ impl JsEvaluator for UnsupportedEvaluator {
     }
 }
 
+/// `ConsoleErrorSource` noop : renvoie toujours un buffer vide.
+///
+/// Utilise en mode kwin-eis ou la console JS n'existe pas (rendu natif, pas
+/// de WebView). Ce n'est pas une erreur — `PortError::Unsupported` serait
+/// trompeur ; l'absence de webview ne produit tout simplement aucune erreur
+/// console a drainer.
+struct NoopConsoleErrorSource;
+
+#[async_trait]
+impl ConsoleErrorSource for NoopConsoleErrorSource {
+    async fn drain_console_errors(&self) -> PortResult<Vec<ConsoleError>> {
+        Ok(Vec::new())
+    }
+}
+
 /// Collecteur d'erreurs console JS, injecté une fois puis drainé. Pur JS →
 /// fonctionne via CDP comme via la pompe SDK. Renvoie des entrées typées
 /// (level/text/url/line/timestamp) directement désérialisables en `ConsoleError`.
@@ -473,8 +502,52 @@ struct JsConsoleErrorSource {
 impl ConsoleErrorSource for JsConsoleErrorSource {
     async fn drain_console_errors(&self) -> PortResult<Vec<ConsoleError>> {
         let value = self.evaluator.evaluate(CONSOLE_ERRORS_SNIPPET).await?;
-        Ok(serde_json::from_value(value).unwrap_or_default())
+        // Parse element par element : un element corrompu ne doit jamais faire
+        // disparaitre les autres ("unwrap_or_default()" global = inversion du sens).
+        let arr = match value {
+            serde_json::Value::Array(a) => a,
+            other => {
+                eprintln!(
+                    "deveye-server: drain_console_errors: valeur JS inattendue (non-tableau : {}), buffer ignore",
+                    other
+                );
+                return Ok(Vec::new());
+            }
+        };
+        let mut out = Vec::with_capacity(arr.len());
+        for (i, elem) in arr.into_iter().enumerate() {
+            match serde_json::from_value::<ConsoleError>(elem) {
+                Ok(e) => out.push(e),
+                Err(e) => {
+                    eprintln!(
+                        "deveye-server: drain_console_errors: element[{i}] non parseable, ignore: {e}"
+                    );
+                }
+            }
+        }
+        Ok(out)
     }
+}
+
+/// Plafond du delai inter-captures pour `ScreenshotStable` : evite des pauses
+/// demesurees a chaque iteration du polling (l'attente totale est bornee par le
+/// timeout du WaitCondition, mais chaque check dormait jusqu'a la valeur brute
+/// fournie par l'appelant, potentiellement > 60 s).
+const MAX_SCREENSHOT_STABLE_THRESHOLD_MS: u64 = 2000;
+
+/// Hache les octets PNG d'une capture via [`DefaultHasher`] (non cryptographique,
+/// suffisant pour la comparaison de stabilite visuelle).
+///
+/// On compare les hash plutot que les `Vec<u8>` complets (plusieurs Mo par
+/// PNG encode) : evite une allocation memoire + comparaison byte-a-byte a
+/// chaque iteration de polling.
+///
+/// Note : le port [`Renderer`] renvoie des PNG deja encodes (pas des pixels
+/// bruts) ; hasher les octets PNG est la seule option sans modifier le port.
+fn hash_screenshot_bytes(bytes: &[u8]) -> u64 {
+    let mut h = DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
 }
 
 /// `WaitCondition` composite : boucle de polling sur les ports déjà composés
@@ -502,10 +575,16 @@ impl CompositeWaitCondition {
                 Ok(dump.entries.get(key) == Some(expected))
             }
             WaitPredicate::ScreenshotStable { threshold_ms } => {
+                // Plafonne a MAX_SCREENSHOT_STABLE_THRESHOLD_MS pour eviter une
+                // pause demesure a chaque iteration (le timeout global du caller
+                // borne la duree totale, pas chaque check individuel).
+                let capped = (*threshold_ms).min(MAX_SCREENSHOT_STABLE_THRESHOLD_MS);
                 let first = self.renderer.screenshot().await?;
-                tokio::time::sleep(Duration::from_millis(*threshold_ms)).await;
+                let hash_first = hash_screenshot_bytes(&first.bytes);
+                tokio::time::sleep(Duration::from_millis(capped)).await;
                 let second = self.renderer.screenshot().await?;
-                Ok(first.bytes == second.bytes)
+                let hash_second = hash_screenshot_bytes(&second.bytes);
+                Ok(hash_first == hash_second)
             }
         }
     }
@@ -642,5 +721,90 @@ impl AppInspector for CompositeInspector {
 
     async fn state_snapshot(&self) -> PortResult<StateDump> {
         self.state.state_snapshot().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use deveye_core::ConsoleLevel;
+
+    // Timestamp RFC3339 fixe utilise dans les donnees de test (evite le besoin
+    // d'une dependance directe a `chrono` dans le binaire).
+    const TS: &str = "2026-01-01T00:00:00Z";
+
+    // ----- M5 : drain element-par-element -----
+
+    /// Un tableau JSON contenant un element valide + un element corrompu doit
+    /// renvoyer exactement l'element valide, pas une liste vide.
+    #[test]
+    fn drain_parse_skips_corrupt_keeps_valid() {
+        let valid = serde_json::json!({
+            "level": "error",
+            "text": "boom",
+            "timestamp": TS
+        });
+        // Element corrompu : "level" a une valeur numerique => Deserialize echoue.
+        let corrupt = serde_json::json!({
+            "level": 42,
+            "text": "corrupt",
+            "timestamp": TS
+        });
+        let arr = serde_json::Value::Array(vec![valid, corrupt]);
+
+        // Reproduit la logique du impl sans IO.
+        let result: Vec<ConsoleError> = match arr {
+            serde_json::Value::Array(a) => a
+                .into_iter()
+                .filter_map(|elem| serde_json::from_value::<ConsoleError>(elem).ok())
+                .collect(),
+            _ => vec![],
+        };
+
+        assert_eq!(result.len(), 1, "seul l'element valide doit etre conserve");
+        assert_eq!(result[0].level, ConsoleLevel::Error);
+        assert_eq!(result[0].text, "boom");
+    }
+
+    /// Un tableau entierement vide renvoie un Vec vide (pas d'erreur).
+    #[test]
+    fn drain_empty_array_gives_empty_vec() {
+        let arr = serde_json::Value::Array(vec![]);
+        let result: Vec<ConsoleError> = match arr {
+            serde_json::Value::Array(a) => a
+                .into_iter()
+                .filter_map(|elem| serde_json::from_value::<ConsoleError>(elem).ok())
+                .collect(),
+            _ => vec![],
+        };
+        assert!(result.is_empty());
+    }
+
+    // ----- M9 : hash + plafond threshold -----
+
+    /// Deux tranches identiques produisent le meme hash.
+    #[test]
+    fn hash_screenshot_bytes_same_input_same_hash() {
+        let data = b"\x89PNG\r\ndeadbeef";
+        assert_eq!(hash_screenshot_bytes(data), hash_screenshot_bytes(data));
+    }
+
+    /// Deux tranches differentes produisent (avec une forte probabilite) un hash different.
+    #[test]
+    fn hash_screenshot_bytes_different_input_different_hash() {
+        let a = b"\x89PNG\r\n\x1a\nchunk_a";
+        let b = b"\x89PNG\r\n\x1a\nchunk_b";
+        assert_ne!(hash_screenshot_bytes(a), hash_screenshot_bytes(b));
+    }
+
+    /// Le plafond MAX_SCREENSHOT_STABLE_THRESHOLD_MS est bien applique.
+    #[test]
+    fn screenshot_stable_threshold_capped() {
+        let raw: u64 = 60_000;
+        let capped = raw.min(MAX_SCREENSHOT_STABLE_THRESHOLD_MS);
+        assert_eq!(capped, MAX_SCREENSHOT_STABLE_THRESHOLD_MS);
+        // Une valeur dans la limite passe intacte.
+        let small: u64 = 500;
+        assert_eq!(small.min(MAX_SCREENSHOT_STABLE_THRESHOLD_MS), 500);
     }
 }

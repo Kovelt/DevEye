@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use deveye_core::{DomTree, StateDump};
-use deveye_ports::{AppInspector, PortResult};
+use deveye_ports::{AppInspector, PortError, PortResult};
 
 use crate::client::CdpClient;
 
@@ -18,7 +18,7 @@ impl AppInspector for CdpClient {
         let result: DocumentResult = self
             .call("DOM.getDocument", json!({ "depth": -1, "pierce": true }))
             .await
-            .map_err(Into::<deveye_ports::PortError>::into)?;
+            .map_err(PortError::from)?;
         Ok(DomTree::new(result.root))
     }
 

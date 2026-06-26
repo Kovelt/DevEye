@@ -119,7 +119,7 @@ Le SDK expose cinq routes. Toutes retournent `Content-Type: application/json`.
 
 **Sémantique** : lecture non destructive. Plusieurs appels successifs retournent le dernier état connu. L'app cible met à jour `entries` via `set_state(name, value)` (écrasement, dernière écriture gagne).
 
-Ref. code : `deveye-sdk/src/lib.rs:72-75` (struct `StatePayload`), `:232-239` (handler `state_handler`). Côté client : `adapter-dioxus-signals/src/bridge.rs` consomme `entries` via `SdkEvaluator` → `GET /devtools/eval` (chemin différent), mais la forme `{ "entries": {...} }` est validée par les tests `:305-312` du SDK.
+Ref. code : `deveye-sdk/src/lib.rs:72-75` (struct `StatePayload`), `:232-239` (handler `state_handler`). Côté client : `adapter-dioxus-signals/src/lib.rs` (`DioxusSignalsInspector`) consomme `entries` via `GET /devtools/state` — la forme `{ "entries": {...} }` est validée par les tests `:305-312` du SDK. À ne pas confondre avec `SdkEvaluator` (`adapter-dioxus-signals/src/bridge.rs`) qui emprunte un chemin distinct : `POST /devtools/eval` avec corps `{ "expression": "..." }` (section 3.3).
 
 Exemple :
 

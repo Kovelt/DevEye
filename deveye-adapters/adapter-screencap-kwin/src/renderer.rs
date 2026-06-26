@@ -87,14 +87,24 @@ impl KwinRenderer {
             .map_err(|e| KwinScreencapError::Dbus(format!("object_server.at : {e}")))?;
 
         let plugin = format!("deveye-screencap-{}-{}", std::process::id(), next_id());
-        let path = std::env::temp_dir().join(format!("{plugin}.js"));
-        std::fs::write(&path, build_script(&self.title_substring, &dest))
+        // L11: tempfile cree le fichier avec O_EXCL + nom aleatoire — evite le
+        // TOCTOU d'un chemin predictible sous /tmp.
+        let temp = tempfile::Builder::new()
+            .prefix("deveye-screencap-")
+            .suffix(".js")
+            .tempfile()
+            .map_err(|e| KwinScreencapError::Dbus(format!("tempfile creation : {e}")))?;
+        // N1: ecriture asynchrone via tokio::fs pour ne pas bloquer le runtime.
+        tokio::fs::write(temp.path(), build_script(&self.title_substring, &dest))
+            .await
             .map_err(|e| KwinScreencapError::Dbus(format!("ecriture script KWin : {e}")))?;
 
-        let result = self.run_script(conn, &path, &plugin, rx).await;
+        let result = self.run_script(conn, temp.path(), &plugin, rx).await;
 
-        // Nettoyage best-effort (ne pas masquer l'erreur principale).
-        let _ = std::fs::remove_file(&path);
+        // Nettoyage best-effort : NamedTempFile supprime le fichier a sa destruction
+        // (drop). La lecture du pipe (std::fs::File::from(read_fd)) se passe dans
+        // spawn_blocking — hors hot-path async, pas de changement necessaire.
+        drop(temp);
         let _ = conn.object_server().remove::<Bridge, _>(BRIDGE_PATH).await;
 
         let (uuid, geometry) = result?;
@@ -248,9 +258,22 @@ fn meta_u32(meta: &HashMap<String, OwnedValue>, key: &str) -> Option<u32> {
 
 /// Convertit un buffer brut BGRA (ARGB32 little-endian de KWin) — éventuellement
 /// avec un `stride` > `width*4` — en RGBA compact attendu par l'encodeur PNG.
-fn bgra_to_rgba(raw: &[u8], width: u32, height: u32, stride: u32) -> Vec<u8> {
-    let row_bytes = width as usize * 4;
+///
+/// L1 : retourne une erreur si `stride < width * 4` (evite une panique dans la
+/// slice sur les lignes).
+fn bgra_to_rgba(
+    raw: &[u8],
+    width: u32,
+    height: u32,
+    stride: u32,
+) -> Result<Vec<u8>, KwinScreencapError> {
+    let row_bytes = (width as usize).saturating_mul(4);
     let stride = stride as usize;
+    if stride < row_bytes {
+        return Err(KwinScreencapError::Decode(format!(
+            "stride ({stride}) inferieur a width*4 ({row_bytes})"
+        )));
+    }
     let mut rgba = vec![0u8; row_bytes * height as usize];
     for y in 0..height as usize {
         let src = &raw[y * stride..y * stride + row_bytes];
@@ -262,7 +285,7 @@ fn bgra_to_rgba(raw: &[u8], width: u32, height: u32, stride: u32) -> Vec<u8> {
             d[3] = s[3]; // A
         }
     }
-    rgba
+    Ok(rgba)
 }
 
 /// Décode le dict de métadonnées + les pixels bruts du pipe en PNG.
@@ -286,7 +309,7 @@ fn encode_capture(
         )));
     }
 
-    let rgba = bgra_to_rgba(raw, width, height, stride);
+    let rgba = bgra_to_rgba(raw, width, height, stride)?;
     let mut png = Vec::new();
     image::codecs::png::PngEncoder::new(&mut png)
         .write_image(&rgba, width, height, ExtendedColorType::Rgba8)
@@ -321,7 +344,7 @@ mod tests {
     fn bgra_to_rgba_swaps_red_blue() {
         // 1x1 BGRA rouge pur -> RGBA rouge pur.
         let raw = [0u8, 0, 255, 255];
-        assert_eq!(bgra_to_rgba(&raw, 1, 1, 4), vec![255, 0, 0, 255]);
+        assert_eq!(bgra_to_rgba(&raw, 1, 1, 4).unwrap(), vec![255, 0, 0, 255]);
     }
 
     #[test]
@@ -332,8 +355,16 @@ mod tests {
             0, 255, 0, 255, 9, 9, 9, 9, // ligne 1 : vert + padding
         ];
         assert_eq!(
-            bgra_to_rgba(&raw, 1, 2, 8),
+            bgra_to_rgba(&raw, 1, 2, 8).unwrap(),
             vec![255, 0, 0, 255, 0, 255, 0, 255]
         );
+    }
+
+    #[test]
+    fn bgra_to_rgba_rejects_stride_too_small() {
+        // stride 3 < width 1 * 4 = 4 : doit retourner une erreur Decode.
+        let raw = [0u8; 4];
+        let err = bgra_to_rgba(&raw, 1, 1, 3).unwrap_err();
+        assert!(matches!(err, KwinScreencapError::Decode(_)));
     }
 }

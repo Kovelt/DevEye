@@ -32,7 +32,7 @@ impl WindowLister for CdpClient {
         let result: GetTargetsResult = self
             .send_browser("Target.getTargets", json!({}))
             .await
-            .map_err(Into::<PortError>::into)?;
+            .map_err(PortError::from)?;
         Ok(result
             .target_infos
             .into_iter()

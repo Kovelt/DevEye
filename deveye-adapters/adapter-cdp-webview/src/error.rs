@@ -31,6 +31,13 @@ impl From<CdpError> for PortError {
             CdpError::Connect(msg) | CdpError::Send(msg) | CdpError::Receive(msg) => {
                 PortError::Network(msg)
             }
+            // Erreurs de protocole JSON-RPC / CDP : semantique distincte du
+            // rendu ; le fallback CDP->SDK se declenche sur Protocol, pas Render.
+            CdpError::Decode(msg) | CdpError::Unexpected(msg) => PortError::Protocol(msg),
+            CdpError::Remote { code, message } => {
+                PortError::Protocol(format!("réponse CDP en erreur ({code}) : {message}"))
+            }
+            // Remaining variant : Base64 (erreur de decodage image capturée).
             other => PortError::Render(other.to_string()),
         }
     }

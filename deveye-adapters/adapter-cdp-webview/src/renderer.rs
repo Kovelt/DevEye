@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use deveye_core::{Screenshot, Size};
-use deveye_ports::{PortResult, Renderer};
+use deveye_ports::{PortError, PortResult, Renderer};
 
 use crate::client::CdpClient;
 use crate::error::CdpError;
@@ -37,11 +37,11 @@ impl Renderer for CdpClient {
                 json!({ "format": "png", "captureBeyondViewport": false }),
             )
             .await
-            .map_err(Into::<deveye_ports::PortError>::into)?;
+            .map_err(PortError::from)?;
         let bytes = B64
             .decode(captured.data.as_bytes())
             .map_err(|e| CdpError::Base64(e.to_string()))
-            .map_err(Into::<deveye_ports::PortError>::into)?;
+            .map_err(PortError::from)?;
         let viewport = self.viewport_size().await?;
         Ok(Screenshot::new_png(bytes, viewport))
     }
@@ -50,7 +50,7 @@ impl Renderer for CdpClient {
         let metrics: LayoutMetrics = self
             .call("Page.getLayoutMetrics", json!({}))
             .await
-            .map_err(Into::<deveye_ports::PortError>::into)?;
+            .map_err(PortError::from)?;
         Ok(Size::new(
             metrics.css_layout_viewport.client_width.max(0.0) as u32,
             metrics.css_layout_viewport.client_height.max(0.0) as u32,

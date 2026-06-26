@@ -30,7 +30,11 @@ impl SdkEvaluator {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .build()
+                .expect("client reqwest (TLS rustls indisponible)"),
         }
     }
 }
@@ -193,6 +197,17 @@ fn keypress_snippet(key: &str) -> String {
     )
 }
 
+fn navigate_snippet(route: &str) -> String {
+    let route = serde_json::to_string(route).expect("string serialise");
+    // Le hook routeur `__deveye_router__` est injecté par le SDK opt-in.
+    format!(
+        "(function(){{ if (!window.__deveye_router__) \
+         return {{ ok: false, reason: 'hook routeur absent' }}; \
+         window.__deveye_router__.invoke('navigate', {{ route: {route} }}); \
+         return {{ ok: true }}; }})()"
+    )
+}
+
 /// Glisser-déposer en événements pointer/souris synthétiques (fallback SDK,
 /// sans CDP). Moins fidèle que la séquence souris native CDP — un widget qui
 /// n'écoute que le drag-drop HTML5 natif (`dragstart`/`drop`) ne réagira pas.
@@ -225,15 +240,8 @@ impl InteractionSink for JsInteraction {
             InteractionCommand::Type { text } => self.run(type_snippet(&text)).await,
             InteractionCommand::KeyPress { key } => self.run(keypress_snippet(&key)).await,
             InteractionCommand::Navigate { route } => {
-                // Même contrat que le chemin CDP : le hook routeur du SDK.
-                let route = serde_json::to_string(&route).expect("string serialise");
-                let snippet = format!(
-                    "(function(){{ if (!window.__deveye_router__) \
-                     return {{ ok: false, reason: 'hook routeur absent' }}; \
-                     window.__deveye_router__.invoke('navigate', {{ route: {route} }}); \
-                     return {{ ok: true }}; }})()"
-                );
-                self.run(snippet).await
+                // Meme contrat que le chemin CDP : le hook routeur du SDK.
+                self.run(navigate_snippet(&route)).await
             }
             InteractionCommand::DragDrop { from, to } => self.run(dragdrop_snippet(from, to)).await,
         }
@@ -300,5 +308,48 @@ mod tests {
         assert!(js.contains("elementFromPoint(100, 200)"));
         assert!(js.contains("pointerdown"));
         assert!(js.contains("pointerup"));
+    }
+
+    #[test]
+    fn hover_snippet_contient_coordonnees_et_evenements() {
+        let js = hover_snippet(Position::new(42, 77));
+        assert!(js.contains("elementFromPoint(42, 77)"));
+        assert!(js.contains("pointerover"));
+        assert!(js.contains("mouseover"));
+        assert!(js.contains("pointermove"));
+        assert!(js.contains("mousemove"));
+        // aucun click ne doit etre genere
+        assert!(!js.contains("click"));
+        assert!(!js.contains("pointerdown"));
+    }
+
+    #[test]
+    fn keypress_snippet_echappe_la_cle_et_dispatch_keydown_keyup() {
+        let js = keypress_snippet("Enter");
+        assert!(js.contains("\"Enter\""));
+        assert!(js.contains("keydown"));
+        assert!(js.contains("keyup"));
+    }
+
+    #[test]
+    fn keypress_snippet_echappe_guillemets_dans_la_cle() {
+        // Cle pathologique : verifier que serde_json echappe correctement.
+        let js = keypress_snippet("a\"b");
+        assert!(js.contains(r#""a\"b""#));
+    }
+
+    #[test]
+    fn navigate_snippet_contient_route_et_hook() {
+        let js = navigate_snippet("/accueil");
+        assert!(js.contains("__deveye_router__"));
+        assert!(js.contains("navigate"));
+        assert!(js.contains("\"/accueil\""));
+    }
+
+    #[test]
+    fn navigate_snippet_echappe_route_avec_guillemets() {
+        let js = navigate_snippet("/path?q=\"x\"");
+        // serde_json doit echapper les guillemets internes
+        assert!(js.contains(r#""/path?q=\"x\"""#));
     }
 }

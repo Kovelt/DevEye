@@ -44,7 +44,7 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 use deveye_core::CommandDescriptor;
 
@@ -113,10 +113,9 @@ pub struct EvalRequest {
 /// handler est responsable de sa propre gestion d'erreur (le contrat
 /// n'impose pas d'enveloppe de retour).
 ///
-/// **Contrainte** : le handler tourne sur le runtime dédié du SDK (un seul
-/// thread). Il doit rester **court et non bloquant** — pas de `block_on`, pas
-/// de `std::thread::sleep`, pas de verrou std à forte contention — sous peine
-/// de figer le micro-serveur de debug.
+/// Le handler s'exécute dans `tokio::task::spawn_blocking` (thread de pool
+/// dédié, hors du runtime SDK) : il peut être bloquant sans figer le
+/// micro-serveur. Il ne doit pas appeler `block_on` sur le runtime SDK.
 type CommandHandler = Arc<dyn Fn(serde_json::Value) -> serde_json::Value + Send + Sync>;
 
 /// Une commande logique exposée par l'app : sa description (pour la
@@ -127,30 +126,36 @@ struct Route {
 }
 
 /// Registry globale partagée entre l'app cible et le mini-serveur axum.
+///
+/// `state` et `routes` utilisent `std::sync::RwLock` (synchrone) pour que
+/// [`set_state`] et [`expose_route`] écrivent **immédiatement** sans passer
+/// par un spawn tokio. `eval_tx` reste un `tokio::sync::RwLock` car il est
+/// lu depuis des handlers async (son API nécessite `.await`).
 pub(crate) struct Registry {
-    pub(crate) state: RwLock<BTreeMap<String, serde_json::Value>>,
+    pub(crate) state: std::sync::RwLock<BTreeMap<String, serde_json::Value>>,
     pub(crate) logs: Mutex<VecDeque<deveye_core::LogEvent>>,
     /// Émetteur vers la pompe d'évaluation de l'app (None tant que l'app
     /// n'a pas appelé [`take_eval_requests`]).
-    pub(crate) eval_tx: RwLock<Option<tokio::sync::mpsc::UnboundedSender<EvalRequest>>>,
+    pub(crate) eval_tx:
+        tokio::sync::RwLock<Option<tokio::sync::mpsc::UnboundedSender<EvalRequest>>>,
     /// Commandes logiques exposées par l'app via [`expose_route`], servies
     /// par `POST /devtools/command` et `GET /devtools/commands`.
-    pub(crate) routes: RwLock<HashMap<String, Route>>,
+    pub(crate) routes: std::sync::RwLock<HashMap<String, Route>>,
 }
 
 impl Default for Registry {
     fn default() -> Self {
         Self {
-            state: RwLock::new(BTreeMap::new()),
+            state: std::sync::RwLock::new(BTreeMap::new()),
             logs: Mutex::new(VecDeque::with_capacity(LOG_BUFFER_CAPACITY)),
-            eval_tx: RwLock::new(None),
-            routes: RwLock::new(HashMap::new()),
+            eval_tx: tokio::sync::RwLock::new(None),
+            routes: std::sync::RwLock::new(HashMap::new()),
         }
     }
 }
 
-pub(crate) static REGISTRY: once_cell::sync::Lazy<Arc<Registry>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Registry::default()));
+pub(crate) static REGISTRY: std::sync::LazyLock<Arc<Registry>> =
+    std::sync::LazyLock::new(|| Arc::new(Registry::default()));
 
 /// Runtime tokio **dédié au SDK** (1 thread, démarré au premier usage).
 ///
@@ -159,13 +164,13 @@ pub(crate) static REGISTRY: once_cell::sync::Lazy<Arc<Registry>> =
 /// contexte tokio — un `tokio::spawn` nu y paniquerait. Idem pour la couche
 /// tracing, dont les événements arrivent de threads arbitraires.
 pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
-    static RT: once_cell::sync::Lazy<tokio::runtime::Runtime> = once_cell::sync::Lazy::new(|| {
+    static RT: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("deveye-sdk")
             .enable_all()
             .build()
-            .expect("runtime deveye-sdk")
+            .expect("echec de creation du runtime tokio du SDK DevEye (dev-only)")
     });
     &RT
 }
@@ -198,17 +203,23 @@ pub fn init(config: Config) {
                 .route("/devtools/eval", post(eval_handler))
                 .route("/devtools/command", post(command_handler))
                 .route("/devtools/commands", get(commands_handler))
-                // axum applique les `.layer()` de droite à gauche : `add_protocol_version`
-                // (dernier appelé) est la couche EXTERNE, `guard_local_host` l'INTERNE.
-                // Ainsi le 403 de la garde retraverse `add_protocol_version` et reçoit
-                // le header de version — *chaque* réponse le porte.
+                // Chaque `.layer()` enveloppe le routeur courant par l'EXTERIEUR :
+                // le DERNIER appelé est donc la couche la plus EXTERNE. Ici
+                // `add_protocol_version` (dernier) est EXTERNE, `guard_local_host`
+                // INTERNE. Ainsi le 403 de la garde (interne) ressort en retraversant
+                // `add_protocol_version` (externe) et reçoit le header de version —
+                // *chaque* réponse le porte.
                 .layer(middleware::from_fn(guard_local_host))
                 .layer(middleware::from_fn(add_protocol_version))
                 .with_state(registry);
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], config.port));
             match tokio::net::TcpListener::bind(addr).await {
                 Ok(listener) => {
-                    let _ = axum::serve(listener, app).await;
+                    if let Err(e) = axum::serve(listener, app).await {
+                        tracing::error!(
+                            "deveye-sdk: le serveur HTTP s'est arrete avec une erreur: {e}"
+                        );
+                    }
                 }
                 Err(_e) => {
                     // En dev on choisit de rester silencieux : un port déjà pris
@@ -221,19 +232,19 @@ pub fn init(config: Config) {
 
 /// Pose une entrée nommée dans le registry. Écrase la valeur précédente
 /// si la clé existe déjà.
+///
+/// L'écriture est **synchrone** (verrou std) : une lecture immédiatement
+/// après le retour de cette fonction verra la nouvelle valeur.
 pub fn set_state(name: impl Into<String>, value: serde_json::Value) {
-    let name = name.into();
-    let registry = REGISTRY.clone();
-    runtime().spawn(async move {
-        let mut guard = registry.state.write().await;
-        guard.insert(name, value);
-    });
+    REGISTRY.state.write().unwrap().insert(name.into(), value);
 }
 
 async fn state_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
-    let guard = registry.state.read().await;
-    let payload = StatePayload {
-        entries: guard.clone(),
+    let payload = {
+        let guard = registry.state.read().unwrap();
+        StatePayload {
+            entries: guard.clone(),
+        }
     };
     (StatusCode::OK, Json(payload))
 }
@@ -337,9 +348,8 @@ async fn eval_handler(
 /// `POST /devtools/command` (`invoke_command`). Un second appel sur le même
 /// `name` remplace le handler précédent.
 ///
-/// L'enregistrement est **asynchrone** (posé sur le runtime du SDK) : la route
-/// peut n'être pas visible instantanément au retour. En pratique l'app appelle
-/// `expose_route` à l'init, bien avant qu'un agent n'invoque la commande.
+/// L'enregistrement est **synchrone** (verrou std) : la route est visible
+/// immédiatement au retour de cette fonction.
 ///
 /// ```ignore
 /// deveye_sdk::expose_route("set-page", "Change la page affichee", |payload| {
@@ -355,16 +365,13 @@ where
     let name = name.into();
     let description = description.into();
     let handler: CommandHandler = Arc::new(handler);
-    let registry = REGISTRY.clone();
-    runtime().spawn(async move {
-        registry.routes.write().await.insert(
-            name,
-            Route {
-                description,
-                handler,
-            },
-        );
-    });
+    REGISTRY.routes.write().unwrap().insert(
+        name,
+        Route {
+            description,
+            handler,
+        },
+    );
 }
 
 /// Corps de `POST /devtools/command`.
@@ -379,16 +386,27 @@ async fn command_handler(
     State(registry): State<Arc<Registry>>,
     Json(body): Json<CommandRequest>,
 ) -> impl IntoResponse {
-    // On clone l'Arc du handler sous le verrou puis on relâche : le handler
-    // s'exécute hors verrou (il pourrait lui-même solliciter le registry).
+    // Clone l'Arc du handler sous le verrou std puis relache immediatement :
+    // le handler s'execute hors verrou dans spawn_blocking (il peut solliciter
+    // le registry sans risque de deadlock, et ne bloque pas le runtime SDK).
     let handler = registry
         .routes
         .read()
-        .await
+        .unwrap()
         .get(&body.route)
         .map(|route| route.handler.clone());
     match handler {
-        Some(handler) => (StatusCode::OK, Json(handler(body.payload))).into_response(),
+        Some(handler) => {
+            let payload = body.payload;
+            match tokio::task::spawn_blocking(move || handler(payload)).await {
+                Ok(result) => (StatusCode::OK, Json(result)).into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("handler panique: {e}") })),
+                )
+                    .into_response(),
+            }
+        }
         None => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({
@@ -401,7 +419,7 @@ async fn command_handler(
 
 async fn commands_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
     let mut descriptors: Vec<CommandDescriptor> = {
-        let guard = registry.routes.read().await;
+        let guard = registry.routes.read().unwrap();
         guard
             .iter()
             .map(|(name, route)| CommandDescriptor {

@@ -99,13 +99,16 @@ pub struct KwinEisInteraction {
 impl KwinEisInteraction {
     /// Construit l'adapter et démarre le thread worker EIS. `window_origin` est
     /// l'origine écran de la fenêtre cible (0, 0 si inconnue).
-    pub fn new(window_origin: (i32, i32)) -> Self {
+    ///
+    /// Retourne une erreur si l'OS refuse la creation du thread (cas rare :
+    /// limite RLIMIT_NPROC atteinte, OOM kernel...).
+    pub fn new(window_origin: (i32, i32)) -> Result<Self, PortError> {
         let (tx, rx) = mpsc::channel::<Job>(32);
-        spawn_worker(rx);
-        Self {
+        spawn_worker(rx)?;
+        Ok(Self {
             jobs: tx,
             window_origin: Arc::new(Mutex::new(window_origin)),
-        }
+        })
     }
 
     /// Origine écran courante de la fenêtre cible.
@@ -134,7 +137,8 @@ impl KwinEisInteraction {
 
 /// Démarre le thread worker : runtime current-thread + `LocalSet` pour héberger
 /// la session EI non-`Send`, traite les jobs en série (un seul device virtuel).
-fn spawn_worker(mut rx: mpsc::Receiver<Job>) {
+/// Retourne une erreur si l'OS refuse la creation du thread.
+fn spawn_worker(mut rx: mpsc::Receiver<Job>) -> Result<(), EisError> {
     std::thread::Builder::new()
         .name("deveye-eis".to_string())
         .spawn(move || {
@@ -172,7 +176,8 @@ fn spawn_worker(mut rx: mpsc::Receiver<Job>) {
                 }
             });
         })
-        .expect("démarrage du thread worker EIS");
+        .map_err(|e| EisError::Eis(format!("impossible de demarrer le thread worker EIS : {e}")))?;
+    Ok(())
 }
 
 async fn run_action(session: &mut EisSession, action: EisAction) -> Result<(), EisError> {

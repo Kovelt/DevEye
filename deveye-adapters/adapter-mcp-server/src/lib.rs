@@ -57,12 +57,12 @@ use rmcp::{
     ErrorData as McpError, ServerHandler,
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use deveye_core::{InteractionCommand, MouseButton, Position, WaitPredicate};
 use deveye_ports::{
     AppInspector, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator, LogSource,
-    Renderer, WaitCondition, WindowLister,
+    PortError, Renderer, WaitCondition, WindowLister,
 };
 
 /// Serveur MCP DevEye.
@@ -329,8 +329,7 @@ impl DeveyeMcpServer {
             .evaluate(&p.expression)
             .await
             .map_err(internal)?;
-        let json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(json_success(&value))
     }
 
     #[tool(
@@ -373,8 +372,9 @@ impl DeveyeMcpServer {
         let value = self.evaluator.evaluate(snippet).await.map_err(internal)?;
         let found = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
         if !found {
-            let json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
-            return Ok(CallToolResult::success(vec![Content::text(json)]));
+            // H1 : element absent ou invisible — erreur semantique (isError=true)
+            // pour ne pas masquer l'echec ni induire un retry trompeur.
+            return Ok(json_error(&value));
         }
         let x = value.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let y = value.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
@@ -382,24 +382,23 @@ impl DeveyeMcpServer {
             .dispatch(InteractionCommand::click(Position::new(x, y)))
             .await
             .map_err(internal)?;
-        let json = serde_json::json!({ "ok": true, "x": x, "y": y }).to_string();
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(json_success(
+            &serde_json::json!({ "ok": true, "x": x, "y": y }),
+        ))
     }
 
     #[tool(description = "Récupère le DOM courant de l'app cible (JSON sérialisé).")]
     async fn dom(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
         let tree = self.inspector.dom_snapshot().await.map_err(internal)?;
-        let json = serde_json::to_string(&tree.tree).unwrap_or_else(|_| "null".to_string());
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(json_success(&tree.tree))
     }
 
     #[tool(description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé).")]
     async fn state(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
         let dump = self.inspector.state_snapshot().await.map_err(internal)?;
-        let json = serde_json::to_string(&dump.entries).unwrap_or_else(|_| "{}".to_string());
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(json_success(&dump.entries))
     }
 
     #[tool(
@@ -408,8 +407,7 @@ impl DeveyeMcpServer {
     async fn logs_tail(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
         let events = self.log_source.poll().await.map_err(internal)?;
-        let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(json_success(&events))
     }
 
     #[tool(
@@ -425,8 +423,7 @@ impl DeveyeMcpServer {
             .invoke(&p.name, p.args)
             .await
             .map_err(internal)?;
-        let json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(json_success(&value))
     }
 
     #[tool(
@@ -435,8 +432,7 @@ impl DeveyeMcpServer {
     async fn list_commands(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
         let descriptors = self.command_router.list().await.map_err(internal)?;
-        let json = serde_json::to_string(&descriptors).unwrap_or_else(|_| "[]".to_string());
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(json_success(&descriptors))
     }
 
     #[tool(
@@ -446,7 +442,9 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<WaitForSelectorParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
+        // M1 : le gate est locke PAR ITERATION (evaluate atomique), pas pour
+        // toute la boucle. Le sleep de 100 ms s'ecoule gate relache, ce qui
+        // laisse les autres outils MCP s'executer pendant le polling.
         let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(30_000));
         let deadline = Instant::now() + budget;
         let start = Instant::now();
@@ -460,20 +458,32 @@ impl DeveyeMcpServer {
             format!("!!document.querySelector({sel})")
         };
         loop {
-            let present = self
-                .evaluator
-                .evaluate(&snippet)
-                .await
-                .ok()
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let eval_result = {
+                let _serial = self.gate.lock().await;
+                self.evaluator.evaluate(&snippet).await
+            };
+            let present = match eval_result {
+                // M4 : transport mort → sortie immediate en erreur MCP, pas 30 s
+                // de silence puis {found:false} trompeur.
+                Err(e @ PortError::Network(_)) => return Err(internal(e)),
+                // Erreur JS transitoire (selecteur absent, exception benigne) :
+                // le selecteur n'existe pas encore, continuer le polling.
+                Err(_) => false,
+                Ok(v) => v.as_bool().unwrap_or(false),
+            };
             if present {
-                let json = serde_json::json!({ "found": true, "elapsed_ms": start.elapsed().as_millis() as u64 }).to_string();
-                return Ok(CallToolResult::success(vec![Content::text(json)]));
+                return Ok(json_success(&serde_json::json!({
+                    "found": true,
+                    "elapsed_ms": start.elapsed().as_millis() as u64
+                })));
             }
             if Instant::now() >= deadline {
-                let json = serde_json::json!({ "found": false, "elapsed_ms": start.elapsed().as_millis() as u64 }).to_string();
-                return Ok(CallToolResult::success(vec![Content::text(json)]));
+                // L13 : timeout = echec semantique → isError=true (coherent avec
+                // wait_condition).
+                return Ok(json_error(&serde_json::json!({
+                    "found": false,
+                    "elapsed_ms": start.elapsed().as_millis() as u64
+                })));
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -501,8 +511,7 @@ impl DeveyeMcpServer {
                attributes: attrs }}; }})()"
         );
         let value = self.evaluator.evaluate(&snippet).await.map_err(internal)?;
-        let json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(json_success(&value))
     }
 
     #[tool(
@@ -539,11 +548,10 @@ impl DeveyeMcpServer {
             "actual_count": actual_count,
             "actual_text": actual_text,
         });
-        let json = serde_json::to_string(&payload).unwrap_or_else(|_| "{\"ok\":false}".to_string());
         if ok {
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            Ok(json_success(&payload))
         } else {
-            Ok(CallToolResult::error(vec![Content::text(json)]))
+            Ok(json_error(&payload))
         }
     }
 
@@ -556,7 +564,10 @@ impl DeveyeMcpServer {
     ) -> Result<CallToolResult, McpError> {
         const DEFAULT_MS: u64 = 5_000;
         const MAX_MS: u64 = 60_000;
-        let _serial = self.gate.lock().await;
+        // M1 : le gate n'est PAS tenu pendant wait_until (boucle de polling
+        // jusqu'a MAX_MS). wait_until est purement observationnel (aucune
+        // interaction UI) — le tenir bloquerait tous les autres outils MCP
+        // pendant jusqu'a 60 s.
         let predicate: WaitPredicate = serde_json::from_value(p.predicate).map_err(internal)?;
         let timeout = Duration::from_millis(p.timeout_ms.unwrap_or(DEFAULT_MS).min(MAX_MS));
         let outcome = self
@@ -564,11 +575,10 @@ impl DeveyeMcpServer {
             .wait_until(predicate, timeout)
             .await
             .map_err(internal)?;
-        let json = serde_json::to_string(&outcome).unwrap_or_else(|_| "{}".to_string());
         if outcome.satisfied {
-            Ok(CallToolResult::success(vec![Content::text(json)]))
+            Ok(json_success(&outcome))
         } else {
-            Ok(CallToolResult::error(vec![Content::text(json)]))
+            Ok(json_error(&outcome))
         }
     }
 
@@ -598,8 +608,7 @@ impl DeveyeMcpServer {
             .drain_console_errors()
             .await
             .map_err(internal)?;
-        let json = serde_json::to_string(&errors).unwrap_or_else(|_| "[]".to_string());
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(json_success(&errors))
     }
 
     #[tool(
@@ -608,8 +617,7 @@ impl DeveyeMcpServer {
     async fn list_windows(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
         let windows = self.window_lister.list_windows().await.map_err(internal)?;
-        let json = serde_json::to_string(&windows).unwrap_or_else(|_| "[]".to_string());
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(json_success(&windows))
     }
 }
 
@@ -631,6 +639,24 @@ impl ServerHandler for DeveyeMcpServer {
         );
         info
     }
+}
+
+/// Serialise `value` en texte JSON et emballe dans un [`CallToolResult`] succes.
+/// La serialisation ne peut echouer sur les types utilises ici (tous implementent
+/// `Serialize` correctement) ; le fallback `"null"` est purement defensif. N14.
+fn json_success<T: Serialize>(value: &T) -> CallToolResult {
+    CallToolResult::success(vec![Content::text(
+        serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
+    )])
+}
+
+/// Idem mais renvoie un [`CallToolResult`] erreur (`isError = true`).
+/// Utilise pour les echecs semantiques (element absent H1, timeout L13) qui ne
+/// doivent pas etre confondus avec un succes par le client MCP.
+fn json_error<T: Serialize>(value: &T) -> CallToolResult {
+    CallToolResult::error(vec![Content::text(
+        serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
+    )])
 }
 
 fn internal<E: std::fmt::Display>(err: E) -> McpError {

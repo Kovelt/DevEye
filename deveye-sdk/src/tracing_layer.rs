@@ -18,11 +18,17 @@ use crate::{LOG_BUFFER_CAPACITY, REGISTRY};
 /// **À appeler une seule fois**, idéalement juste après `init`. Si un autre
 /// subscriber est déjà installé, cet appel échoue silencieusement (le runtime
 /// global tracing ne supporte qu'un seul subscriber actif).
+///
+/// En build **release**, cette fonction est un no-op — cohérent avec le fait
+/// que le SDK est entièrement inactif hors `debug_assertions`.
 pub fn install_tracing_layer() {
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::Registry;
-    let subscriber = Registry::default().with(DeveyeLayer);
-    let _ = tracing::subscriber::set_global_default(subscriber);
+    #[cfg(debug_assertions)]
+    {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::Registry;
+        let subscriber = Registry::default().with(DeveyeLayer);
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    }
 }
 
 /// Niveau minimal capturé. INFO par défaut : sans filtre, le buffer se noie
@@ -30,7 +36,7 @@ pub fn install_tracing_layer() {
 /// 2026 : 500+ événements de bruit au boot, zéro log applicatif visible).
 /// Surchargeable par `DEVEYE_LOG_LEVEL` (`trace`…`error`).
 fn min_level() -> Level {
-    static LVL: once_cell::sync::Lazy<Level> = once_cell::sync::Lazy::new(|| {
+    static LVL: std::sync::LazyLock<Level> = std::sync::LazyLock::new(|| {
         std::env::var("DEVEYE_LOG_LEVEL")
             .ok()
             .and_then(|s| s.parse().ok())

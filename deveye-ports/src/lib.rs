@@ -1,8 +1,19 @@
 //! Ports DevEye — traits asynchrones consommés par le binaire orchestrateur
 //! et le serveur MCP, implémentés par les crates `deveye-adapters/*`.
 //!
-//! Voir [`deveye.md`](../../../../../docs/architecture/deveye.md) (côté
-//! Chronos) — section « Les 5 ports en détail ».
+//! 9 ports définis :
+//! - [`CommandRouter`] — envoi de commandes à l'app cible
+//! - [`ConsoleErrorSource`] — drain des erreurs console webview
+//! - [`AppInspector`] — inspection de l'arbre de composants
+//! - [`InteractionSink`] — injection d'événements clavier/souris
+//! - [`JsEvaluator`] — évaluation JS dans le webview
+//! - [`LogSource`] — collecte des logs applicatifs
+//! - [`Renderer`] — capture d'écran / rendu visuel
+//! - [`WaitCondition`] — attente de conditions asynchrones
+//! - [`WindowLister`] — énumération des fenêtres de l'app cible
+//!
+//! Voir [`deveye.md`](../../../../../docs/architecture/deveye.md) pour le
+//! détail de l'architecture.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]

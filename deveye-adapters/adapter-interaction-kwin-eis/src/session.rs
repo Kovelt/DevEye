@@ -28,6 +28,9 @@ const BTN_RIGHT: u32 = 0x111;
 const BTN_MIDDLE: u32 = 0x112;
 /// `KEY_LEFTSHIFT` evdev — pour les caractères de niveau 1 (majuscules, etc.).
 const KEY_LEFTSHIFT: u32 = 42;
+/// Decalage de keycode entre la numerotation XKB (base 8) et evdev (base 0).
+/// Voir : https://xkbcommon.org/doc/current/group__keycodes.html
+const XKB_TO_EVDEV_OFFSET: u32 = 8;
 /// Délai d'attente d'un device pointeur resumed après le handshake.
 const RESUME_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -135,14 +138,46 @@ impl EisSession {
         })
     }
 
-    /// Draine les événements prêts sans bloquer : rafraîchit le serial suivi par
-    /// `EiConvertEventStream` et laisse la couche répondre aux pings.
-    fn pump(&mut self) {
-        while self.events.next().now_or_never().flatten().is_some() {}
+    /// Draine les evenements prets sans bloquer : rafraichit le serial suivi
+    /// par `EiConvertEventStream` et laisse la couche repondre aux pings.
+    /// Retourne `Err` si une deconnexion ou une erreur de flux est detectee
+    /// — la session doit alors etre invalidee par l'appelant.
+    fn pump(&mut self) -> Result<(), EisError> {
+        loop {
+            match self.events.next().now_or_never() {
+                None => break, // pas d'evenement pret
+                Some(None) => {
+                    return Err(EisError::Eis(
+                        "flux EIS ferme (deconnexion detectee en pump)".into(),
+                    ));
+                }
+                Some(Some(Ok(_))) => {} // evenement consomme normalement
+                Some(Some(Err(e))) => {
+                    return Err(EisError::Eis(format!(
+                        "erreur flux EIS (deconnexion/device retire) : {e}"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Boilerplate commun aux methodes d'emission : pompe les evenements en
+    /// attente et renvoie (serial, seq) a passer a `start_emulating`. La
+    /// session est invalidee si pump detecte une deconnexion.
+    fn begin_emit(&mut self) -> Result<(u32, u32), EisError> {
+        self.pump()?;
+        let serial = self.connection.serial();
+        let seq = self.next_seq();
+        Ok((serial, seq))
     }
 
     fn next_seq(&mut self) -> u32 {
-        self.sequence += 1;
+        // wrapping_add : le debordement est volontaire et inoffensif. Apres
+        // 2^32 emissions le compteur repart de 1 ; seq est purement informatif
+        // cote KWin (pas cryptographique), une collision lointaine est sans
+        // consequence.
+        self.sequence = self.sequence.wrapping_add(1);
         self.sequence
     }
 
@@ -168,9 +203,7 @@ impl EisSession {
 
     /// Déplace le pointeur (hover) en (x, y) absolu écran.
     pub(crate) async fn hover(&mut self, abs: (f64, f64)) -> Result<(), EisError> {
-        self.pump();
-        let serial = self.connection.serial();
-        let seq = self.next_seq();
+        let (serial, seq) = self.begin_emit()?;
         let device = &self.devices[self.pointer_index()?];
         let pa = device
             .interface::<ei::PointerAbsolute>()
@@ -189,9 +222,7 @@ impl EisSession {
         abs: (f64, f64),
         button: MouseButton,
     ) -> Result<(), EisError> {
-        self.pump();
-        let serial = self.connection.serial();
-        let seq = self.next_seq();
+        let (serial, seq) = self.begin_emit()?;
         let device = &self.devices[self.pointer_index()?];
         let pa = device
             .interface::<ei::PointerAbsolute>()
@@ -215,9 +246,7 @@ impl EisSession {
     /// Glisser-déposer : press en `from`, déplacements intermédiaires, release
     /// en `to` (bouton gauche maintenu).
     pub(crate) async fn drag(&mut self, from: (f64, f64), to: (f64, f64)) -> Result<(), EisError> {
-        self.pump();
-        let serial = self.connection.serial();
-        let seq = self.next_seq();
+        let (serial, seq) = self.begin_emit()?;
         let device = &self.devices[self.pointer_index()?];
         let pa = device
             .interface::<ei::PointerAbsolute>()
@@ -245,9 +274,7 @@ impl EisSession {
     /// Saisit une chaîne UTF-8 : chaque caractère est résolu en keycode via le
     /// keymap KWin (avec Shift si niveau 1).
     pub(crate) async fn type_text(&mut self, text: &str) -> Result<(), EisError> {
-        self.pump();
-        let serial = self.connection.serial();
-        let seq = self.next_seq();
+        let (serial, seq) = self.begin_emit()?;
         let device = &self.devices[self.keyboard_index()?];
         let kbd = device
             .interface::<ei::Keyboard>()
@@ -281,9 +308,7 @@ impl EisSession {
 
     /// Appuie puis relâche une touche nommée XKB (« Return », « Tab », « Escape »…).
     pub(crate) async fn key_press(&mut self, name: &str) -> Result<(), EisError> {
-        self.pump();
-        let serial = self.connection.serial();
-        let seq = self.next_seq();
+        let (serial, seq) = self.begin_emit()?;
         let device = &self.devices[self.keyboard_index()?];
         let kbd = device
             .interface::<ei::Keyboard>()
@@ -321,14 +346,22 @@ fn monotonic_us() -> u64 {
 }
 
 /// Parse le keymap fourni par KWin (memfd) en `xkb::Keymap`.
+/// Chaque echec intermediaire est trace via `tracing::warn!` pour faciliter
+/// le diagnostic d'un keymap casse (fd clone, mmap, parse xkb).
 #[allow(unsafe_code)]
 fn parse_keymap(ctx: &xkb::Context, km: &reis::event::Keymap) -> Option<xkb::Keymap> {
     // `new_from_fd` prend possession du fd (il le fermera) : on duplique pour ne
     // pas voler celui de l'événement reis.
-    let fd = km.fd.try_clone().ok()?;
+    let fd = match km.fd.try_clone() {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!("parse_keymap: try_clone fd EIS echoue : {e}");
+            return None;
+        }
+    };
     // SAFETY : `fd` est un memfd valide (dupliqué de celui fourni par KWin) et
     // `km.size` sa taille exacte ; `new_from_fd` le mmap en lecture seule.
-    unsafe {
+    let result = unsafe {
         xkb::Keymap::new_from_fd(
             ctx,
             fd,
@@ -336,9 +369,20 @@ fn parse_keymap(ctx: &xkb::Context, km: &reis::event::Keymap) -> Option<xkb::Key
             xkb::KEYMAP_FORMAT_TEXT_V1,
             xkb::COMPILE_NO_FLAGS,
         )
+    };
+    match result {
+        Err(e) => {
+            tracing::warn!("parse_keymap: xkb::Keymap::new_from_fd erreur : {e}");
+            None
+        }
+        Ok(None) => {
+            tracing::warn!(
+                "parse_keymap: xkb::Keymap::new_from_fd -> None (keymap vide ou format invalide)"
+            );
+            None
+        }
+        Ok(Some(keymap)) => Some(keymap),
     }
-    .ok()
-    .flatten()
 }
 
 /// Résout un caractère Unicode en `(keycode evdev, shift requis)` via le keymap.
@@ -351,7 +395,18 @@ fn char_to_evdev(keymap: &xkb::Keymap, ch: char) -> Option<(u32, bool)> {
                 .key_get_syms_by_level(keycode, 0, level)
                 .contains(&target)
             {
-                return Some((xkb_code - 8, level == 1)); // XKB -> evdev
+                match xkb_code.checked_sub(XKB_TO_EVDEV_OFFSET) {
+                    Some(evdev) => return Some((evdev, level == 1)),
+                    None => {
+                        tracing::warn!(
+                            "char_to_evdev: xkb_code {} < XKB_TO_EVDEV_OFFSET pour {:?}, ignore",
+                            xkb_code,
+                            ch
+                        );
+                        // Poursuit la recherche sur les keycodes suivants.
+                        continue;
+                    }
+                }
             }
         }
     }
@@ -371,7 +426,18 @@ fn xkb_name_to_evdev(keymap: &xkb::Keymap, name: &str) -> Option<u32> {
                 .key_get_syms_by_level(keycode, 0, level)
                 .contains(&target)
             {
-                return Some(xkb_code - 8);
+                match xkb_code.checked_sub(XKB_TO_EVDEV_OFFSET) {
+                    Some(evdev) => return Some(evdev),
+                    None => {
+                        tracing::warn!(
+                            "xkb_name_to_evdev: xkb_code {} < XKB_TO_EVDEV_OFFSET pour {:?}, ignore",
+                            xkb_code,
+                            name
+                        );
+                        // Poursuit la recherche sur les keycodes suivants.
+                        continue;
+                    }
+                }
             }
         }
     }

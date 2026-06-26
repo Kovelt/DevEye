@@ -9,7 +9,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex, Notify};
-use tokio::time::timeout;
+use tokio::time::{timeout, timeout_at, Instant};
 use tokio_tungstenite::{tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream};
 
 use crate::error::CdpError;
@@ -235,28 +235,36 @@ impl CdpClient {
     }
 
     async fn wait_attached(&self) -> Result<SessionInfo, CdpError> {
-        if let Some(s) = self.inner.session.lock().await.clone() {
-            return Ok(s);
-        }
-        // Arme le notified AVANT de re-checker pour ne pas rater une
-        // notification qui arriverait entre le check et l'await.
-        let notified = self.inner.attached.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-        if let Some(s) = self.inner.session.lock().await.clone() {
-            return Ok(s);
-        }
-        match timeout(Duration::from_secs(10), notified).await {
-            Ok(()) => self
-                .inner
-                .session
-                .lock()
-                .await
-                .clone()
-                .ok_or_else(|| CdpError::Connect("attached notifié mais session vide".into())),
-            Err(_) => Err(CdpError::Connect(
-                "timeout en attente d'une page CDP attachable (10 s)".into(),
-            )),
+        // Deadline commune a toutes les iterations de la boucle : 10 s au total.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(s) = self.inner.session.lock().await.clone() {
+                return Ok(s);
+            }
+            // Arme le notified AVANT de re-checker pour ne pas rater une
+            // notification qui arriverait entre le check et l'await.
+            let notified = self.inner.attached.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(s) = self.inner.session.lock().await.clone() {
+                return Ok(s);
+            }
+            match timeout_at(deadline, notified).await {
+                Ok(()) => {
+                    // Re-verifier apres la notification : un hot-reload peut
+                    // avoir efface la session entre notify_waiters() et cette
+                    // lecture. Si elle est vide on reboucle jusqu'a la deadline.
+                    if let Some(s) = self.inner.session.lock().await.clone() {
+                        return Ok(s);
+                    }
+                    // session vide apres notification (race hot-reload) : reboucle.
+                }
+                Err(_) => {
+                    return Err(CdpError::Connect(
+                        "timeout en attente d'une page CDP attachable (10 s)".into(),
+                    ));
+                }
+            }
         }
     }
 }
@@ -447,6 +455,155 @@ impl TargetFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicU64},
+        Arc,
+    };
+    use tokio::sync::{mpsc, oneshot, Mutex, Notify};
+
+    // -------------------------------------------------------------------------
+    // Helper : construit un CdpInner sans WebSocket reel (cmd_rx abandonne).
+    // -------------------------------------------------------------------------
+    fn make_inner() -> Arc<CdpInner> {
+        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel();
+        Arc::new(CdpInner {
+            next_id: AtomicU64::new(1),
+            cmd_tx,
+            pending: Mutex::new(std::collections::HashMap::new()),
+            session: Mutex::new(None),
+            attached: Notify::new(),
+            closed: AtomicBool::new(false),
+            filter: TargetFilter::default(),
+        })
+    }
+
+    // -------------------------------------------------------------------------
+    // dispatch_response
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_response_routes_result_to_oneshot() {
+        let inner = make_inner();
+        let (tx, rx) = oneshot::channel();
+        inner.pending.lock().await.insert(42, tx);
+
+        let msg = serde_json::json!({ "id": 42, "result": { "foo": "bar" } });
+        dispatch_response(&inner, 42, msg).await;
+
+        let result = rx.await.expect("sender must not be dropped");
+        let v = result.expect("should be Ok");
+        assert_eq!(v, serde_json::json!({ "foo": "bar" }));
+    }
+
+    #[tokio::test]
+    async fn dispatch_response_routes_error_to_oneshot() {
+        let inner = make_inner();
+        let (tx, rx) = oneshot::channel();
+        inner.pending.lock().await.insert(7, tx);
+
+        let msg = serde_json::json!({
+            "id": 7,
+            "error": { "code": -32601, "message": "Method not found" }
+        });
+        dispatch_response(&inner, 7, msg).await;
+
+        let result = rx.await.expect("sender must not be dropped");
+        assert!(
+            matches!(result, Err(CdpError::Remote { code: -32601, .. })),
+            "expected Remote error"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_response_ignores_unknown_id() {
+        // No pending entry for id 99 : must not panic.
+        let inner = make_inner();
+        let msg = serde_json::json!({ "id": 99, "result": {} });
+        dispatch_response(&inner, 99, msg).await;
+        // No assertion needed — absence of panic is the contract.
+    }
+
+    // -------------------------------------------------------------------------
+    // handle_event
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn handle_event_attached_to_target_sets_session() {
+        let inner = make_inner();
+        let params = serde_json::json!({
+            "sessionId": "sess-abc",
+            "targetInfo": {
+                "targetId": "tgt-001",
+                "type": "page",
+                "title": "dioxus app",
+                "url": "http://dioxus.index.html/"
+            }
+        });
+        handle_event(&inner, "Target.attachedToTarget", params).await;
+
+        let session = inner.session.lock().await.clone();
+        assert!(
+            session.is_some(),
+            "session should be set after attachedToTarget"
+        );
+        let s = session.unwrap();
+        assert_eq!(s.session_id, "sess-abc");
+        assert_eq!(s.target_id, "tgt-001");
+    }
+
+    #[tokio::test]
+    async fn handle_event_attached_non_matching_target_ignored() {
+        // Target type "worker" does not match the default filter (page only).
+        let inner = make_inner();
+        let params = serde_json::json!({
+            "sessionId": "sess-worker",
+            "targetInfo": {
+                "targetId": "tgt-w",
+                "type": "worker",
+                "title": "",
+                "url": ""
+            }
+        });
+        handle_event(&inner, "Target.attachedToTarget", params).await;
+
+        assert!(
+            inner.session.lock().await.is_none(),
+            "session must stay None for non-matching targets"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_event_detached_clears_matching_session() {
+        let inner = make_inner();
+        *inner.session.lock().await = Some(SessionInfo {
+            session_id: "sess-abc".into(),
+            target_id: "tgt-001".into(),
+        });
+        let params = serde_json::json!({ "sessionId": "sess-abc" });
+        handle_event(&inner, "Target.detachedFromTarget", params).await;
+
+        assert!(
+            inner.session.lock().await.is_none(),
+            "session should be cleared after detachedFromTarget"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_event_detached_ignores_other_session() {
+        // Detach from a different sessionId must not clear our session.
+        let inner = make_inner();
+        *inner.session.lock().await = Some(SessionInfo {
+            session_id: "sess-ours".into(),
+            target_id: "tgt-001".into(),
+        });
+        let params = serde_json::json!({ "sessionId": "sess-other" });
+        handle_event(&inner, "Target.detachedFromTarget", params).await;
+
+        assert!(
+            inner.session.lock().await.is_some(),
+            "our session must not be cleared by an unrelated detach"
+        );
+    }
 
     fn page(title: &str, url: &str) -> TargetInfo {
         TargetInfo {
