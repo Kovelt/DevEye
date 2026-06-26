@@ -59,6 +59,12 @@ pub const DEFAULT_PORT: u16 = 31337;
 /// anciens événements (politique drop-oldest).
 pub const LOG_BUFFER_CAPACITY: usize = 1024;
 
+/// Capacité de la file de requêtes d'évaluation. **Bornée** (backpressure) :
+/// une app figée qui ne draine plus sa pompe ne fait pas enfler la file sans
+/// limite — au-delà, `POST /devtools/eval` répond « file pleine » (503) et
+/// libère le client au lieu de laisser la mémoire croître indéfiniment.
+pub const EVAL_QUEUE_CAPACITY: usize = 32;
+
 /// Version du wire protocol DevEye, émise dans le header
 /// `X-DevEye-Protocol-Version` de **chaque** réponse. Incrémentée à chaque
 /// changement cassant du contrat HTTP (cf. `docs/wire-protocol.md`). Le client
@@ -136,8 +142,7 @@ pub(crate) struct Registry {
     pub(crate) logs: Mutex<VecDeque<deveye_core::LogEvent>>,
     /// Émetteur vers la pompe d'évaluation de l'app (None tant que l'app
     /// n'a pas appelé [`take_eval_requests`]).
-    pub(crate) eval_tx:
-        tokio::sync::RwLock<Option<tokio::sync::mpsc::UnboundedSender<EvalRequest>>>,
+    pub(crate) eval_tx: tokio::sync::RwLock<Option<tokio::sync::mpsc::Sender<EvalRequest>>>,
     /// Émetteur du canal de drain des logs (N6) : posé une seule fois par
     /// [`install_tracing_layer`][crate::install_tracing_layer]. La couche
     /// tracing envoie chaque [`deveye_core::LogEvent`] via ce canal
@@ -211,12 +216,19 @@ pub fn init(config: Config) {
                 .route("/devtools/eval", post(eval_handler))
                 .route("/devtools/command", post(command_handler))
                 .route("/devtools/commands", get(commands_handler))
+                // CORS deny-all explicite : aucune origine cross-origin n'est
+                // autorisée (avant, ce n'était qu'accidentel — simple absence de
+                // header CORS). Defense-in-depth : empêche une page web tierce de
+                // solliciter ce serveur local via le navigateur de l'utilisateur. Le
+                // trafic serveur (clients reqwest des adapters) ignore CORS — non
+                // concerné.
+                .layer(tower_http::cors::CorsLayer::new())
                 // Chaque `.layer()` enveloppe le routeur courant par l'EXTERIEUR :
                 // le DERNIER appelé est donc la couche la plus EXTERNE. Ici
-                // `add_protocol_version` (dernier) est EXTERNE, `guard_local_host`
-                // INTERNE. Ainsi le 403 de la garde (interne) ressort en retraversant
-                // `add_protocol_version` (externe) et reçoit le header de version —
-                // *chaque* réponse le porte.
+                // `add_protocol_version` (dernier) est EXTERNE, puis `guard_local_host`,
+                // et `CorsLayer` (premier) la plus INTERNE. Ainsi le 403 de la garde
+                // ressort en retraversant `add_protocol_version` (externe) et reçoit le
+                // header de version — *chaque* réponse le porte.
                 .layer(middleware::from_fn(guard_local_host))
                 .layer(middleware::from_fn(add_protocol_version))
                 .with_state(registry);
@@ -266,8 +278,8 @@ async fn logs_poll_handler(State(registry): State<Arc<Registry>>) -> impl IntoRe
 /// Côté app : prend le bout consommateur du canal d'évaluation. La pompe de
 /// l'app boucle dessus et exécute chaque [`EvalRequest`] dans son webview.
 /// Un nouvel appel remplace la pompe précédente (l'ancien receiver se ferme).
-pub fn take_eval_requests() -> tokio::sync::mpsc::UnboundedReceiver<EvalRequest> {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+pub fn take_eval_requests() -> tokio::sync::mpsc::Receiver<EvalRequest> {
+    let (tx, rx) = tokio::sync::mpsc::channel(EVAL_QUEUE_CAPACITY);
     let registry = REGISTRY.clone();
     runtime().spawn(async move {
         *registry.eval_tx.write().await = Some(tx);
@@ -304,18 +316,23 @@ async fn eval_handler(
         );
     };
     let (respond, rx) = tokio::sync::oneshot::channel();
-    if tx
-        .send(EvalRequest {
-            expression: body.expression,
-            respond,
-        })
-        .is_err()
-    {
+    // `try_send` (non bloquant) : sur file pleine, on refuse (503) au lieu de
+    // bloquer le handler async — la backpressure protège contre une pompe qui
+    // ne draine plus (app figée) et empêche la file d'enfler sans limite.
+    if let Err(err) = tx.try_send(EvalRequest {
+        expression: body.expression,
+        respond,
+    }) {
+        use tokio::sync::mpsc::error::TrySendError;
+        let message = match err {
+            TrySendError::Full(_) => "file d'évaluation pleine (backpressure) — réessayer",
+            TrySendError::Closed(_) => "la pompe d'évaluation de l'app s'est arrêtée",
+        };
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(EvalResponse {
                 value: None,
-                error: Some("la pompe d'évaluation de l'app s'est arrêtée".into()),
+                error: Some(message.into()),
             }),
         );
     }

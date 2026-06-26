@@ -26,10 +26,12 @@ where
 
 /// Capture la fenêtre dont le titre contient la sous-chaîne fournie.
 ///
-/// Utilise [`xcap`](https://crates.io/crates/xcap) — multi-OS (Windows,
-/// macOS, Linux X11+Wayland). Aucune dépendance à un webview, fonctionne sur
-/// n'importe quelle app graphique. C'est le fallback universel quand CDP
-/// n'est pas disponible (macOS WKWebView, app legacy MAUI, jeu, etc.).
+/// Utilise [`xcap`](https://crates.io/crates/xcap) — multi-OS (Windows, macOS,
+/// Linux X11/XWayland **uniquement** : xcap 0.0.14 énumère les fenêtres via XCB,
+/// donc sous une session Wayland native il faut lancer l'app cible avec
+/// `GDK_BACKEND=x11`). Aucune dépendance à un webview, fonctionne sur n'importe
+/// quelle app graphique. C'est le fallback universel quand CDP n'est pas
+/// disponible (macOS WKWebView, app legacy MAUI, jeu, etc.).
 ///
 /// Le `title_substring` est cherché de façon **insensible à la casse**.
 /// `xcap` ne dispose pas d'API "find by exact title" multiplateforme — on

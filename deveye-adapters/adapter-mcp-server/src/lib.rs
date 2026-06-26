@@ -2,7 +2,7 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Vingt outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Vingt et un outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `click` : clic à `(x, y)` (bouton gauche)
 //! - `right_click` : clic droit à `(x, y)` (ouvre les menus contextuels)
@@ -33,6 +33,7 @@
 //! - `list_windows` : liste les fenêtres/onglets de la cible (CDP ; vide en SDK)
 //! - `wait_condition` : attend un prédicat (dom-selector / state-key /
 //!   screenshot-stable) avec timeout
+//! - `wait_ready` : attend que l'app publie un state non vide (app prête)
 //!
 //! Les appels d'outils sont **sérialisés** (un seul à la fois, mutex) : des
 //! interactions concurrentes pendant un re-render Dioxus touchaient le
@@ -220,6 +221,12 @@ struct WaitConditionParams {
     /// Timeout en millisecondes (défaut 5000, plafond 60000).
     #[serde(default)]
     timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WaitReadyParams {
+    /// Délai maximal d'attente, en millisecondes.
+    timeout_ms: u64,
 }
 
 #[tool_router]
@@ -620,6 +627,39 @@ impl DeveyeMcpServer {
         let windows = self.window_lister.list_windows().await.map_err(internal)?;
         Ok(json_success(&windows))
     }
+
+    #[tool(
+        description = "Attend que l'app cible publie un state non vide (signe qu'elle est prête), au plus `timeout_ms` ms (poll toutes les 200 ms). Évite les captures/clics prématurés juste après le lancement. `isError` si le délai expire."
+    )]
+    async fn wait_ready(
+        &self,
+        Parameters(p): Parameters<WaitReadyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Gate locke PAR ITERATION (snapshot atomique), relache pendant le sleep
+        // — cf. M1 : un wait observationnel ne doit pas bloquer les autres outils.
+        let start = Instant::now();
+        let budget = Duration::from_millis(p.timeout_ms);
+        loop {
+            let ready = {
+                let _serial = self.gate.lock().await;
+                let dump = self.inspector.state_snapshot().await.map_err(internal)?;
+                !dump.entries.is_empty()
+            };
+            if ready {
+                return Ok(json_success(&serde_json::json!({
+                    "ready": true,
+                    "waited_ms": start.elapsed().as_millis() as u64,
+                })));
+            }
+            if start.elapsed() >= budget {
+                return Ok(json_error(&serde_json::json!({
+                    "ready": false,
+                    "waited_ms": start.elapsed().as_millis() as u64,
+                })));
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
 }
 
 #[tool_handler]
@@ -635,7 +675,7 @@ impl ServerHandler for DeveyeMcpServer {
              click_text, eval_js, type_text, dom, state, logs_tail, \
              invoke_command, list_commands, wait_for_selector, find_element, \
              assert_selector, drag_drop, collect_console_errors, list_windows, \
-             wait_condition."
+             wait_condition, wait_ready."
                 .to_string(),
         );
         info

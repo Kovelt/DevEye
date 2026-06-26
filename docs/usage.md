@@ -85,7 +85,7 @@ dx serve --platform desktop --features deveye
 claude
 ```
 
-Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **20 outils sont disponibles** (2 _(à venir)_ pas encore implémentés) :
+Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **21 outils sont disponibles** (2 _(à venir)_ pas encore implémentés) :
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|
@@ -104,6 +104,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `assert_selector` | `{selector, expected_text?, expected_count?}` | JSON `{ok, selector, actual_count, actual_text?}` | « vérifie qu'il y a exactement 3 `.card` » (`isError` si l'assertion échoue) |
 | `wait_for_selector` | `{selector, timeout_ms?, visible?}` | JSON `{found, elapsed_ms}` | « attends que `#result` soit présent (max 5 s) » (sans sleep arbitraire) |
 | `wait_condition` | `{predicate, timeout_ms?}` | JSON `{satisfied, elapsed_ms, detail}` | « attends que `count` vaille 3 dans le state » (dom-selector / state-key / screenshot-stable) |
+| `wait_ready` | `{timeout_ms}` | JSON `{ready, waited_ms}` | « attends que l'app soit prête » (state non vide ; poll 200 ms ; `isError` si timeout) |
 | `drag_drop` | `{from_x, from_y, to_x, to_y}` | `"ok"` | « glisse de (10, 20) vers (100, 200) » |
 | `invoke_command` | `{name, args?}` | JSON (résultat de la commande) | « invoque `set-page` avec `{page:"Agenda"}` » (route exposée par l'app) |
 | `list_commands` | aucun | JSON `[{name, description}]` | « quelles commandes l'app expose-t-elle ? » |

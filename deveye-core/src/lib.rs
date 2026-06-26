@@ -4,8 +4,9 @@
 //! de toute dépendance technique. Les seules crates utilisées sont `chrono`,
 //! `serde`, `serde_json`, `thiserror`.
 //!
-//! Voir [`deveye.md`](../../../../../docs/architecture/deveye.md) (côté
-//! Chronos) pour le contexte stratégique et le plan d'implémentation.
+//! Le contexte stratégique et le plan d'implémentation de DevEye vivent dans le
+//! repo Chronos (`crates/deveye`), source canonique dont ce dépôt est l'export
+//! miroir (`git subtree split`).
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
