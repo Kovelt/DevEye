@@ -204,6 +204,61 @@ impl Renderer for KwinRenderer {
     }
 }
 
+impl KwinRenderer {
+    /// Resout l'origine ecran `(x, y)` de la fenetre cible via un script KWin
+    /// ephemere (meme mecanique que [`KwinRenderer::resolve_window`]).
+    ///
+    /// Retourne [`KwinScreencapError::WindowNotFound`] si aucune fenetre ne
+    /// correspond au titre. Repli sur `(0, 0)` si `frameGeometry` ne renvoie
+    /// pas de position valide (fenetre en cours d'ouverture, cas rare).
+    pub async fn window_origin(&self) -> Result<(i32, i32), KwinScreencapError> {
+        let conn = Connection::session()
+            .await
+            .map_err(|e| KwinScreencapError::Dbus(format!("D-Bus session : {e}")))?;
+
+        let dest = conn
+            .unique_name()
+            .map(|n| n.to_string())
+            .ok_or_else(|| KwinScreencapError::Dbus("connexion D-Bus sans nom unique".into()))?;
+
+        let (tx, rx) = oneshot::channel();
+        conn.object_server()
+            .at(
+                BRIDGE_PATH,
+                Bridge {
+                    tx: Mutex::new(Some(tx)),
+                },
+            )
+            .await
+            .map_err(|e| KwinScreencapError::Dbus(format!("object_server.at : {e}")))?;
+
+        let plugin = format!("deveye-origin-{}-{}", std::process::id(), next_id());
+        let temp = tempfile::Builder::new()
+            .prefix("deveye-origin-")
+            .suffix(".js")
+            .tempfile()
+            .map_err(|e| KwinScreencapError::Dbus(format!("tempfile creation : {e}")))?;
+        tokio::fs::write(
+            temp.path(),
+            build_position_script(&self.title_substring, &dest),
+        )
+        .await
+        .map_err(|e| KwinScreencapError::Dbus(format!("ecriture script KWin : {e}")))?;
+
+        let result = self.run_script(&conn, temp.path(), &plugin, rx).await;
+        drop(temp);
+        let _ = conn.object_server().remove::<Bridge, _>(BRIDGE_PATH).await;
+
+        let (uuid, pos_str) = result?;
+        if uuid.is_empty() {
+            return Err(KwinScreencapError::WindowNotFound(
+                self.title_substring.clone(),
+            ));
+        }
+        Ok(parse_position(&pos_str).unwrap_or((0, 0)))
+    }
+}
+
 /// Génère le script KWin qui résout la fenêtre par titre et renvoie son UUID +
 /// géométrie via `callDBus` vers `dest` (le nom unique de notre connexion).
 fn build_script(needle: &str, dest: &str) -> String {
@@ -236,6 +291,39 @@ callDBus(dest, "{BRIDGE_PATH}", "{BRIDGE_IFACE}", "Report", uuid, geom);
 fn parse_geometry(s: &str) -> Option<Size> {
     let (w, h) = s.split_once('x')?;
     Some(Size::new(w.trim().parse().ok()?, h.trim().parse().ok()?))
+}
+
+/// Genere le script KWin qui reporte la position (x, y) de la fenetre cible.
+/// Meme mecanique que [`build_script`] mais rapporte `"X,Y"` au lieu de `"WxH"`.
+fn build_position_script(needle: &str, dest: &str) -> String {
+    let needle_js = serde_json::to_string(&needle.to_lowercase()).expect("string serialise");
+    let dest_js = serde_json::to_string(dest).expect("string serialise");
+    format!(
+        r#"var dest = {dest_js};
+var needle = {needle_js};
+var list = (typeof workspace.windowList === "function") ? workspace.windowList()
+         : (typeof workspace.clientList === "function") ? workspace.clientList()
+         : workspace.stackingOrder;
+var uuid = "";
+var pos = "0,0";
+for (var i = 0; i < list.length; i++) {{
+    var w = list[i];
+    if (String(w.caption).toLowerCase().indexOf(needle) !== -1) {{
+        uuid = String(w.internalId);
+        var g = w.frameGeometry;
+        if (g) {{ pos = Math.round(g.x) + "," + Math.round(g.y); }}
+        break;
+    }}
+}}
+callDBus(dest, "{BRIDGE_PATH}", "{BRIDGE_IFACE}", "Report", uuid, pos);
+"#
+    )
+}
+
+/// Parse une position `"X,Y"` en `(i32, i32)`.
+fn parse_position(s: &str) -> Option<(i32, i32)> {
+    let (x, y) = s.split_once(',')?;
+    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
 }
 
 /// Extrait une clé entière du dict de métadonnées (KWin peut typer en i32/u32).
@@ -366,5 +454,27 @@ mod tests {
         let raw = [0u8; 4];
         let err = bgra_to_rgba(&raw, 1, 1, 3).unwrap_err();
         assert!(matches!(err, KwinScreencapError::Decode(_)));
+    }
+
+    #[test]
+    fn parse_position_ok_and_bad() {
+        assert_eq!(parse_position("100,200"), Some((100, 200)));
+        assert_eq!(parse_position(" -5 , 10 "), Some((-5, 10)));
+        assert_eq!(parse_position("0,0"), Some((0, 0)));
+        assert_eq!(parse_position("nope"), None);
+        assert_eq!(parse_position("12,"), None);
+        assert_eq!(parse_position(",34"), None);
+    }
+
+    #[test]
+    fn build_position_script_reports_xy_fields() {
+        let js = build_position_script("atelier", ":1.42");
+        assert!(js.contains("var pos = \"0,0\""));
+        assert!(js.contains("g.x"));
+        assert!(js.contains("g.y"));
+        // Le script appelle Report avec pos (pas geom).
+        assert!(js.contains("Report"));
+        // L'aiguille est en minuscules.
+        assert!(js.contains("var needle = \"atelier\""));
     }
 }

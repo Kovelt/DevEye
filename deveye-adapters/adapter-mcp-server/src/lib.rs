@@ -65,6 +65,20 @@ use deveye_ports::{
     PortError, Renderer, WaitCondition, WindowLister,
 };
 
+/// Ports passes a [`DeveyeMcpServer::new`] — evite les 9 arguments positionnels
+/// dont l'ordre fragile etait source d'erreurs silencieuses.
+pub struct DeveyePorts {
+    pub renderer: Arc<dyn Renderer>,
+    pub interaction: Arc<dyn InteractionSink>,
+    pub inspector: Arc<dyn AppInspector>,
+    pub log_source: Arc<dyn LogSource>,
+    pub evaluator: Arc<dyn JsEvaluator>,
+    pub command_router: Arc<dyn CommandRouter>,
+    pub window_lister: Arc<dyn WindowLister>,
+    pub console_errors: Arc<dyn ConsoleErrorSource>,
+    pub wait_condition: Arc<dyn WaitCondition>,
+}
+
 /// Serveur MCP DevEye.
 ///
 /// Le `tool_router` est construit une fois au `new` ; le serveur lui-même est
@@ -210,30 +224,17 @@ struct WaitConditionParams {
 
 #[tool_router]
 impl DeveyeMcpServer {
-    // Neuf ports composés à la main par l'orchestrateur ; un builder n'apporte
-    // rien ici (un seul site d'appel, dans deveye-server).
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        renderer: Arc<dyn Renderer>,
-        interaction: Arc<dyn InteractionSink>,
-        inspector: Arc<dyn AppInspector>,
-        log_source: Arc<dyn LogSource>,
-        evaluator: Arc<dyn JsEvaluator>,
-        command_router: Arc<dyn CommandRouter>,
-        window_lister: Arc<dyn WindowLister>,
-        console_errors: Arc<dyn ConsoleErrorSource>,
-        wait_condition: Arc<dyn WaitCondition>,
-    ) -> Self {
+    pub fn new(ports: DeveyePorts) -> Self {
         Self {
-            renderer,
-            interaction,
-            inspector,
-            log_source,
-            evaluator,
-            command_router,
-            window_lister,
-            console_errors,
-            wait_condition,
+            renderer: ports.renderer,
+            interaction: ports.interaction,
+            inspector: ports.inspector,
+            log_source: ports.log_source,
+            evaluator: ports.evaluator,
+            command_router: ports.command_router,
+            window_lister: ports.window_lister,
+            console_errors: ports.console_errors,
+            wait_condition: ports.wait_condition,
             gate: Arc::new(tokio::sync::Mutex::new(())),
             tool_router: Self::tool_router(),
         }
