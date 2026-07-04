@@ -28,6 +28,7 @@ mod error;
 mod kwin_bridge;
 mod proxy;
 mod renderer;
+mod resolve_cache;
 mod window_geometry;
 mod window_lister;
 mod window_manager;

@@ -10,12 +10,13 @@ use nix::unistd::pipe2;
 use zbus::zvariant::{Fd, OwnedValue, Value};
 use zbus::Connection;
 
-use deveye_core::{Screenshot, Size};
+use deveye_core::{Screenshot, Size, WindowRect};
 use deveye_ports::{PortError, PortResult, Renderer};
 
 use crate::error::KwinScreencapError;
 use crate::kwin_bridge::{run_kwin_script, BRIDGE_IFACE, BRIDGE_PATH};
 use crate::proxy::ScreenShot2Proxy;
+use crate::resolve_cache::{self, ResolvedWindow};
 
 /// Délai d'attente de la lecture du pipe de capture ScreenShot2 : marge large
 /// au-dessus du temps normal de rendu+écriture (quelques dizaines de ms) sans
@@ -25,8 +26,11 @@ const KWIN_PIPE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Capture une fenêtre KDE/Wayland via `org.kde.KWin.ScreenShot2`.
 ///
 /// La fenêtre est désignée par sous-chaîne (insensible à la casse) de son
-/// `caption`. On résout l'UUID à chaque appel (sans cache) pour survivre aux
-/// ouvertures/fermetures de fenêtres entre deux outils MCP.
+/// `caption`. La résolution (UUID + géométrie) passe par
+/// [`crate::resolve_cache`] (TTL court, partagé avec [`crate::KwinWindowGeometry`])
+/// pour éviter de rejouer un cycle `loadScript`/`start`/`unloadScript` complet
+/// à chaque appel — tout en restant à jour aux ouvertures/fermetures de
+/// fenêtres entre deux outils MCP (TTL expiré, ou purge immédiate sur erreur).
 #[derive(Clone, Debug)]
 pub struct KwinRenderer {
     title_substring: String,
@@ -39,28 +43,59 @@ impl KwinRenderer {
         }
     }
 
-    /// Résout `(uuid, taille_logique)` de la première fenêtre dont le titre
-    /// contient `title_substring`, via un script KWin éphémère (cycle de vie
-    /// porté par [`run_kwin_script`]).
-    async fn resolve_window(
+    /// Résout `(uuid, géométrie_écran_complète)` via une connexion **déjà
+    /// ouverte par l'appelant** : cache-first (cf. [`crate::resolve_cache`]),
+    /// sinon script KWin éphémère (cycle de vie porté par [`run_kwin_script`])
+    /// sur `conn`. Utilisé par [`Renderer::screenshot`], qui a de toute façon
+    /// besoin d'une connexion pour `CaptureWindow` — pas la peine d'en ouvrir
+    /// une seconde sur un cache miss.
+    async fn resolve_rect_with(
         &self,
         conn: &Connection,
-    ) -> Result<(String, Size), KwinScreencapError> {
+    ) -> Result<(String, WindowRect), KwinScreencapError> {
+        if let Some(cached) = resolve_cache::get(&self.title_substring).await {
+            return Ok((cached.uuid, cached.rect));
+        }
+
         let dest = conn
             .unique_name()
             .map(|n| n.to_string())
             .ok_or_else(|| KwinScreencapError::Dbus("connexion D-Bus sans nom unique".into()))?;
 
-        let script = build_script(&self.title_substring, &dest);
-        let (uuid, geometry) = run_kwin_script(conn, "deveye-screencap", &script).await?;
+        let script = build_resolve_script(&self.title_substring, &dest);
+        let (uuid, rect_str) = run_kwin_script(conn, "deveye-screencap", &script).await?;
 
         if uuid.is_empty() {
+            resolve_cache::invalidate(&self.title_substring).await;
             return Err(KwinScreencapError::WindowNotFound(
                 self.title_substring.clone(),
             ));
         }
-        let size = parse_geometry(&geometry).unwrap_or_else(|| Size::new(0, 0));
-        Ok((uuid, size))
+        let rect = parse_resolved_rect(&rect_str).unwrap_or_else(|| WindowRect::new(0, 0, 0, 0));
+        resolve_cache::put(
+            &self.title_substring,
+            ResolvedWindow {
+                uuid: uuid.clone(),
+                rect: rect.clone(),
+            },
+        )
+        .await;
+        Ok((uuid, rect))
+    }
+
+    /// Résout `(uuid, géométrie_écran_complète)` sans connexion préexistante :
+    /// cache-first, et ouvre sa propre connexion D-Bus **seulement** sur cache
+    /// miss (sur cache hit, [`Self::window_origin`]/`viewport_size` n'ouvrent
+    /// donc aucune connexion D-Bus du tout). Utilisé par les appelants qui
+    /// n'ont besoin de D-Bus que pour cette résolution.
+    async fn resolve_rect_lazy(&self) -> Result<(String, WindowRect), KwinScreencapError> {
+        if let Some(cached) = resolve_cache::get(&self.title_substring).await {
+            return Ok((cached.uuid, cached.rect));
+        }
+        let conn = Connection::session()
+            .await
+            .map_err(|e| KwinScreencapError::Dbus(format!("D-Bus session : {e}")))?;
+        self.resolve_rect_with(&conn).await
     }
 }
 
@@ -73,7 +108,10 @@ impl Renderer for KwinRenderer {
             .await
             .map_err(|e| PortError::Render(format!("D-Bus session : {e}")))?;
 
-        let (uuid, _logical) = self.resolve_window(&conn).await.map_err(PortError::from)?;
+        let (uuid, _rect) = self
+            .resolve_rect_with(&conn)
+            .await
+            .map_err(PortError::from)?;
 
         // Pipe anonyme O_CLOEXEC (pas de fuite aux sous-process).
         let (read_fd, write_fd) =
@@ -94,10 +132,20 @@ impl Renderer for KwinRenderer {
             .await
             .map_err(|e| PortError::Render(format!("proxy ScreenShot2 : {e}")))?;
         let options: HashMap<String, Value<'_>> = HashMap::new();
-        let meta = ss2
+        let meta = match ss2
             .capture_window(&uuid, options, Fd::from(write_fd.as_fd()))
             .await
-            .map_err(|e| PortError::Render(format!("CaptureWindow : {e}")))?;
+        {
+            Ok(meta) => meta,
+            Err(e) => {
+                // L'UUID venait peut-etre du cache et ne designe plus une
+                // fenetre vivante (fermee entre la resolution et la capture) :
+                // purge pour forcer une resolution fraiche au prochain appel,
+                // sans attendre l'expiration du TTL.
+                resolve_cache::invalidate(&self.title_substring).await;
+                return Err(PortError::Render(format!("CaptureWindow : {e}")));
+            }
+        };
 
         // Fermer NOTRE write_fd : KWin garde sa copie ; sans ça le lecteur ne
         // voit jamais EOF.
@@ -130,46 +178,33 @@ impl Renderer for KwinRenderer {
     }
 
     async fn viewport_size(&self) -> PortResult<Size> {
-        let conn = Connection::session()
-            .await
-            .map_err(|e| PortError::Render(format!("D-Bus session : {e}")))?;
-        let (_uuid, size) = self.resolve_window(&conn).await.map_err(PortError::from)?;
-        Ok(size)
+        let (_uuid, rect) = self.resolve_rect_lazy().await.map_err(PortError::from)?;
+        Ok(Size::new(rect.width, rect.height))
     }
 }
 
 impl KwinRenderer {
-    /// Resout l'origine ecran `(x, y)` de la fenetre cible via un script KWin
-    /// ephemere (meme mecanique que [`KwinRenderer::resolve_window`]).
+    /// Resout l'origine ecran `(x, y)` de la fenetre cible : cache d'abord
+    /// (meme entree que [`KwinRenderer::viewport_size`], cf.
+    /// [`KwinRenderer::resolve_rect_lazy`]), sinon script KWin ephemere — sans
+    /// jamais ouvrir de connexion D-Bus sur un cache hit.
     ///
     /// Retourne [`KwinScreencapError::WindowNotFound`] si aucune fenetre ne
     /// correspond au titre. Repli sur `(0, 0)` si `frameGeometry` ne renvoie
     /// pas de position valide (fenetre en cours d'ouverture, cas rare).
     pub async fn window_origin(&self) -> Result<(i32, i32), KwinScreencapError> {
-        let conn = Connection::session()
-            .await
-            .map_err(|e| KwinScreencapError::Dbus(format!("D-Bus session : {e}")))?;
-
-        let dest = conn
-            .unique_name()
-            .map(|n| n.to_string())
-            .ok_or_else(|| KwinScreencapError::Dbus("connexion D-Bus sans nom unique".into()))?;
-
-        let script = build_position_script(&self.title_substring, &dest);
-        let (uuid, pos_str) = run_kwin_script(&conn, "deveye-origin", &script).await?;
-
-        if uuid.is_empty() {
-            return Err(KwinScreencapError::WindowNotFound(
-                self.title_substring.clone(),
-            ));
-        }
-        Ok(parse_position(&pos_str).unwrap_or((0, 0)))
+        let (_uuid, rect) = self.resolve_rect_lazy().await?;
+        Ok((rect.x, rect.y))
     }
 }
 
 /// Génère le script KWin qui résout la fenêtre par titre et renvoie son UUID +
-/// géométrie via `callDBus` vers `dest` (le nom unique de notre connexion).
-fn build_script(needle: &str, dest: &str) -> String {
+/// géométrie écran complète (`"x,y,largeur,hauteur"`) via `callDBus` vers
+/// `dest` (le nom unique de notre connexion). Sert à la fois la taille
+/// ([`Renderer::viewport_size`]) et la position
+/// ([`KwinRenderer::window_origin`]) : une seule résolution/un seul cache
+/// pour les deux plutôt que deux scripts quasi identiques.
+fn build_resolve_script(needle: &str, dest: &str) -> String {
     // serde_json produit des littéraux JS/JSON sûrs (échappement des guillemets).
     let needle_js = serde_json::to_string(&needle.to_lowercase()).expect("string serialise");
     let dest_js = serde_json::to_string(dest).expect("string serialise");
@@ -180,58 +215,32 @@ var list = (typeof workspace.windowList === "function") ? workspace.windowList()
          : (typeof workspace.clientList === "function") ? workspace.clientList()
          : workspace.stackingOrder;
 var uuid = "";
-var geom = "0x0";
+var rect = "0,0,0,0";
 for (var i = 0; i < list.length; i++) {{
     var w = list[i];
     if (String(w.caption).toLowerCase().indexOf(needle) !== -1) {{
         uuid = String(w.internalId);
         var g = w.frameGeometry;
-        if (g) {{ geom = Math.round(g.width) + "x" + Math.round(g.height); }}
+        if (g) {{ rect = Math.round(g.x) + "," + Math.round(g.y) + "," + Math.round(g.width) + "," + Math.round(g.height); }}
         break;
     }}
 }}
-callDBus(dest, "{BRIDGE_PATH}", "{BRIDGE_IFACE}", "Report", uuid, geom);
+callDBus(dest, "{BRIDGE_PATH}", "{BRIDGE_IFACE}", "Report", uuid, rect);
 "#
     )
 }
 
-/// Parse une géométrie `"LARGEURxHAUTEUR"`.
-fn parse_geometry(s: &str) -> Option<Size> {
-    let (w, h) = s.split_once('x')?;
-    Some(Size::new(w.trim().parse().ok()?, h.trim().parse().ok()?))
-}
-
-/// Genere le script KWin qui reporte la position (x, y) de la fenetre cible.
-/// Meme mecanique que [`build_script`] mais rapporte `"X,Y"` au lieu de `"WxH"`.
-fn build_position_script(needle: &str, dest: &str) -> String {
-    let needle_js = serde_json::to_string(&needle.to_lowercase()).expect("string serialise");
-    let dest_js = serde_json::to_string(dest).expect("string serialise");
-    format!(
-        r#"var dest = {dest_js};
-var needle = {needle_js};
-var list = (typeof workspace.windowList === "function") ? workspace.windowList()
-         : (typeof workspace.clientList === "function") ? workspace.clientList()
-         : workspace.stackingOrder;
-var uuid = "";
-var pos = "0,0";
-for (var i = 0; i < list.length; i++) {{
-    var w = list[i];
-    if (String(w.caption).toLowerCase().indexOf(needle) !== -1) {{
-        uuid = String(w.internalId);
-        var g = w.frameGeometry;
-        if (g) {{ pos = Math.round(g.x) + "," + Math.round(g.y); }}
-        break;
-    }}
-}}
-callDBus(dest, "{BRIDGE_PATH}", "{BRIDGE_IFACE}", "Report", uuid, pos);
-"#
-    )
-}
-
-/// Parse une position `"X,Y"` en `(i32, i32)`.
-fn parse_position(s: &str) -> Option<(i32, i32)> {
-    let (x, y) = s.split_once(',')?;
-    Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+/// Parse une géométrie `"x,y,largeur,hauteur"` en [`WindowRect`].
+fn parse_resolved_rect(s: &str) -> Option<WindowRect> {
+    let mut parts = s.split(',');
+    let x = parts.next()?.trim().parse().ok()?;
+    let y = parts.next()?.trim().parse().ok()?;
+    let width = parts.next()?.trim().parse().ok()?;
+    let height = parts.next()?.trim().parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(WindowRect::new(x, y, width, height))
 }
 
 /// Extrait une clé entière du dict de métadonnées (KWin peut typer en i32/u32).
@@ -319,21 +328,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_script_inline_needle_lowercase_and_escapes() {
-        let js = build_script("Mon \"Atelier\"", ":1.42");
+    fn build_resolve_script_inline_needle_lowercase_and_escapes() {
+        let js = build_resolve_script("Mon \"Atelier\"", ":1.42");
         assert!(js.contains(r#"var needle = "mon \"atelier\"""#));
         assert!(js.contains(r#"var dest = ":1.42""#));
         assert!(js.contains("callDBus(dest"));
         assert!(js.contains("org.deveye.KwinBridge"));
+        assert!(js.contains("g.x"));
+        assert!(js.contains("g.y"));
+        assert!(js.contains("g.width"));
+        assert!(js.contains("g.height"));
     }
 
     #[test]
-    fn parse_geometry_ok_and_bad() {
-        assert_eq!(parse_geometry("1920x1080"), Some(Size::new(1920, 1080)));
-        assert_eq!(parse_geometry(" 800 x 600 "), Some(Size::new(800, 600)));
-        assert_eq!(parse_geometry("0x0"), Some(Size::new(0, 0)));
-        assert_eq!(parse_geometry("nope"), None);
-        assert_eq!(parse_geometry("12x"), None);
+    fn parse_resolved_rect_ok_and_bad() {
+        assert_eq!(
+            parse_resolved_rect("10,20,1920,1080"),
+            Some(WindowRect::new(10, 20, 1920, 1080))
+        );
+        assert_eq!(
+            parse_resolved_rect(" -5 , 0 , 800 , 600 "),
+            Some(WindowRect::new(-5, 0, 800, 600))
+        );
+        assert_eq!(
+            parse_resolved_rect("0,0,0,0"),
+            Some(WindowRect::new(0, 0, 0, 0))
+        );
+        assert_eq!(parse_resolved_rect("nope"), None);
+        assert_eq!(parse_resolved_rect("1,2,3"), None);
+        assert_eq!(parse_resolved_rect("1,2,3,4,5"), None);
     }
 
     #[test]
@@ -364,25 +387,47 @@ mod tests {
         assert!(matches!(err, KwinScreencapError::Decode(_)));
     }
 
-    #[test]
-    fn parse_position_ok_and_bad() {
-        assert_eq!(parse_position("100,200"), Some((100, 200)));
-        assert_eq!(parse_position(" -5 , 10 "), Some((-5, 10)));
-        assert_eq!(parse_position("0,0"), Some((0, 0)));
-        assert_eq!(parse_position("nope"), None);
-        assert_eq!(parse_position("12,"), None);
-        assert_eq!(parse_position(",34"), None);
+    #[tokio::test]
+    async fn window_origin_returns_cached_position_without_dbus() {
+        // Cache pre-rempli => window_origin() doit repondre depuis le cache
+        // (resolve_rect_lazy) sans jamais tenter Connection::session() : donc
+        // sans risque de toucher une session KWin live pendant `cargo test`
+        // (contrairement a tests/live_resolve.rs, deliberement #[ignore]).
+        let title = "Renderer-Test-Window-Origin";
+        resolve_cache::put(
+            title,
+            ResolvedWindow {
+                uuid: "u-origin".to_string(),
+                rect: WindowRect::new(42, 7, 300, 200),
+            },
+        )
+        .await;
+        let renderer = KwinRenderer::new(title);
+        let origin = renderer
+            .window_origin()
+            .await
+            .expect("cache hit : pas de D-Bus necessaire");
+        assert_eq!(origin, (42, 7));
+        resolve_cache::invalidate(title).await;
     }
 
-    #[test]
-    fn build_position_script_reports_xy_fields() {
-        let js = build_position_script("atelier", ":1.42");
-        assert!(js.contains("var pos = \"0,0\""));
-        assert!(js.contains("g.x"));
-        assert!(js.contains("g.y"));
-        // Le script appelle Report avec pos (pas geom).
-        assert!(js.contains("Report"));
-        // L'aiguille est en minuscules.
-        assert!(js.contains("var needle = \"atelier\""));
+    #[tokio::test]
+    async fn viewport_size_returns_cached_size_without_dbus() {
+        let title = "Renderer-Test-Viewport-Size";
+        resolve_cache::put(
+            title,
+            ResolvedWindow {
+                uuid: "u-size".to_string(),
+                rect: WindowRect::new(0, 0, 1024, 768),
+            },
+        )
+        .await;
+        let renderer = KwinRenderer::new(title);
+        let size = renderer
+            .viewport_size()
+            .await
+            .expect("cache hit : pas de D-Bus necessaire");
+        assert_eq!(size, Size::new(1024, 768));
+        resolve_cache::invalidate(title).await;
     }
 }
