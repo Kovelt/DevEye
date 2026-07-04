@@ -2,10 +2,11 @@
 name = "adapter-screencap-kwin"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.81"
+rust-version = "1.88"
 license = "LicenseRef-Proprietary"
 authors = ["NuvoraCode <contact@nuvoracode.fr>"]
 description = "Adapter DevEye : capture de fenetre Wayland via KWin D-Bus ScreenShot2 (pixel-perfect, sans XWayland)."
+publish = false  # crate interne proprietaire, jamais publiee sur crates.io
 
 # Métadonnées figées localement — cf. deveye-core/Cargo.toml.
 

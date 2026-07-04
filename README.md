@@ -58,8 +58,13 @@ Contrat complet du wire protocol HTTP SDK : [docs/wire-protocol.md](docs/wire-pr
 
 ### Prérequis
 
-- Toolchain Rust **stable** (`rustup update stable`)
-- Pour les cibles KWin : session KDE Plasma Wayland + `libxkbcommon-devel` (Fedora) ou équivalent
+- Toolchain Rust **stable** (`rustup update stable`) — MSRV : 1.81
+- Bibliothèques système (les mêmes que le `before_script` CI) :
+  - Fedora : `sudo dnf install libxcb-devel libXrandr-devel dbus-devel libxkbcommon-devel mesa-libgbm-devel`
+  - Debian/Ubuntu : `sudo apt install libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev libgbm-dev`
+
+  (xcap → libxcb/libXrandr + libgbm ; zbus → libdbus ; injection EIS → libxkbcommon)
+- Pour les cibles KWin : session KDE Plasma Wayland
 - Un client MCP (Claude Code recommandé)
 
 ### Build

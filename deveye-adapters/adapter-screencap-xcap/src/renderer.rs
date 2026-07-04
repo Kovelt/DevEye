@@ -27,7 +27,7 @@ where
 /// Capture la fenêtre dont le titre contient la sous-chaîne fournie.
 ///
 /// Utilise [`xcap`](https://crates.io/crates/xcap) — multi-OS (Windows, macOS,
-/// Linux X11/XWayland **uniquement** : xcap 0.0.14 énumère les fenêtres via XCB,
+/// Linux X11/XWayland **uniquement** : xcap énumère les fenêtres via XCB,
 /// donc sous une session Wayland native il faut lancer l'app cible avec
 /// `GDK_BACKEND=x11`). Aucune dépendance à un webview, fonctionne sur n'importe
 /// quelle app graphique. C'est le fallback universel quand CDP n'est pas
@@ -53,7 +53,15 @@ impl XcapRenderer {
         let windows = Window::all().map_err(|e| ScreencapError::Xcap(e.to_string()))?;
         windows
             .into_iter()
-            .find(|w| w.title().to_lowercase().contains(&needle))
+            // xcap >= 0.9 : `title()` est fallible (Result<String, XCapError>).
+            // Une fenêtre dont le titre est illisible (ex : permission refusée
+            // par l'OS sur certaines fenêtres système) est simplement ignorée
+            // plutôt que de faire échouer toute la recherche.
+            .find(|w| {
+                w.title()
+                    .map(|title| title.to_lowercase().contains(&needle))
+                    .unwrap_or(false)
+            })
             .ok_or_else(|| ScreencapError::WindowNotFound(self.title_substring.clone()))
     }
 }
@@ -80,7 +88,14 @@ impl Renderer for XcapRenderer {
         let renderer = self.clone();
         run_xcap(move || {
             let window = renderer.find_window()?;
-            Ok(Size::new(window.width(), window.height()))
+            // xcap >= 0.9 : width()/height() renvoient un Result.
+            let width = window
+                .width()
+                .map_err(|e| ScreencapError::Xcap(e.to_string()))?;
+            let height = window
+                .height()
+                .map_err(|e| ScreencapError::Xcap(e.to_string()))?;
+            Ok(Size::new(width, height))
         })
         .await
     }
@@ -99,9 +114,13 @@ impl MonitorRenderer {
         let monitors = Monitor::all().map_err(|e| ScreencapError::Xcap(e.to_string()))?;
         // N2: preference au moniteur marque is_primary(), avec repli sur le
         // premier si aucun n'est marque principal.
+        // xcap >= 0.9 : is_primary() renvoie un Result (echec propage, ce
+        // n'est pas equivalent a "non principal").
         let mut fallback: Option<Monitor> = None;
         for m in monitors {
-            if m.is_primary() {
+            if m.is_primary()
+                .map_err(|e| ScreencapError::Xcap(e.to_string()))?
+            {
                 return Ok(m);
             }
             if fallback.is_none() {
@@ -132,7 +151,14 @@ impl Renderer for MonitorRenderer {
     async fn viewport_size(&self) -> PortResult<Size> {
         run_xcap(|| {
             let monitor = MonitorRenderer::primary()?;
-            Ok(Size::new(monitor.width(), monitor.height()))
+            // xcap >= 0.9 : width()/height() renvoient un Result.
+            let width = monitor
+                .width()
+                .map_err(|e| ScreencapError::Xcap(e.to_string()))?;
+            let height = monitor
+                .height()
+                .map_err(|e| ScreencapError::Xcap(e.to_string()))?;
+            Ok(Size::new(width, height))
         })
         .await
     }

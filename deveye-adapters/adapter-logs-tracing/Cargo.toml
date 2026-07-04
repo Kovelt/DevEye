@@ -2,10 +2,11 @@
 name = "adapter-logs-tracing"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.81"
+rust-version = "1.88"
 license = "LicenseRef-Proprietary"
 authors = ["NuvoraCode <contact@nuvoracode.fr>"]
 description = "Adapter DevEye : LogSource consommant le buffer tracing du SDK opt-in (HTTP local)."
+publish = false  # crate interne proprietaire, jamais publiee sur crates.io
 
 # Métadonnées figées localement — cf. deveye-core/Cargo.toml.
 
