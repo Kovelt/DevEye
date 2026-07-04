@@ -2,7 +2,7 @@
 
 > **Source** : audit multi-agents (26 juin 2026) — matrice de capacités par cible, survol des MCP comparables (Playwright MCP, Chrome DevTools MCP, Puppeteer MCP), génération multi-angles, **scoring adversarial** (chaque outil doit mériter sa place face à `eval_js` / `invoke_command`), synthèse priorisée. 43 agents, 50 candidats bruts → **33 candidats notés**.
 > **Périmètre** : outils MCP *à ajouter* à DevEye après M0→M7 (distinct de l'audit qualité du 25/06 qui durcissait l'existant).
-> **Statut** : backlog à attaquer. Cocher au fur et à mesure.
+> **Statut (mis à jour le 04/07/2026, cf. `docs/audit-2026-07-04.md` §D1)** : les 17 outils retenus (7 « maintenant » + 10 « ensuite ») sont **tous livrés** (sprints 1-2 du backlog, 21 → 38 outils), **plus `clipboard_set`** — classé « plus tard » ci-dessous mais livré en avance, en bundle avec `key_combo`. Les **3 extensions S** du 26/06 jamais livrées à l'époque (`get_value`, `wait_for_text`, `console_messages`) ont été livrées lors du sprint T4 du 04/07 (38 → 41 outils), avec en prime `WaitPredicate::TargetAlive` (`wait_target_alive`), `window_geometry_get` (`window_geometry`, port `WindowGeometry`) et `KwinWindowLister` (`list_windows` fonctionnel sur `kwin-eis`). Chaque outil ci-dessous porté à ✅ a été vérifié directement dans `adapter-mcp-server/src/lib.rs`. Restent **non livrés** (priorités inchangées, conditions de montée en priorité non atteintes) : `resize_viewport`, `network_requests`, `set_cookie`/`get_cookies` — cf. section « Plus tard ».
 
 Légende effort : **S** (≤15 min) · **M** (≤2 h) · **L** (refacto structurel).
 
@@ -25,15 +25,15 @@ Outils dont le domaine est câblé jusqu'aux adapters, ou dont l'effort est S av
 
 | Outil | Famille | Cibles | Effort | Impact port | Pourquoi maintenant |
 |---|---|---|---|---|---|
-| `press_key` | Interaction | cdp · sdk · kwin-eis · auto | **S** | Nul — `InteractionCommand::KeyPress` câblé dans les 3 adapters ; ~20 l. dans `adapter-mcp-server` | Seul moyen d'envoyer Return / Tab / Escape / ArrowDown à une app native kwin-eis ; `eval_js` = Unsupported. Sur CDP : `isTrusted=true` (Monaco, CodeMirror, React Synthetic Events). |
-| `navigate` | Interaction | cdp · sdk · auto | **S** | Nul — variante `InteractionCommand::Navigate` câblée dans les 3 adapters ; ~25 l. dans `adapter-mcp-server` | Interface contractuelle et découvrable ; l'agent ne doit pas connaître `window.__deveye_router__` (interne SDK) pour écrire l'`eval_js` équivalent. |
-| `screenshot_region` | Capture | cdp · sdk · kwin-eis · auto | **S** | Nul — post-traitement PNG via crate `image` v0.25 (déjà dans le workspace) ; ~30 l. | Sur kwin-eis, un screenshot plein écran 2560×1440 coûte cher en tokens pour chaque vérification ciblée ; seule forme de vérification de composant sur cette cible (pas de DOM). |
-| `target_info` | Inspection | cdp · sdk · kwin-eis · auto | **S** | 2-3 champs sur `DeveyePorts` + peuplement dans `compose.rs` | L'agent ne peut pas savoir si `eval_js` répondra ou renverra `Unsupported` sans tenter l'appel ; `target_info` coupe la boucle de découverte en une requête déterministe. |
-| `key_combo` | Interaction | cdp · sdk · kwin-eis · auto | **M** | Nouvelle variante `InteractionCommand::KeyCombo { modifiers, key }` ; réutilise `xkb_name_to_evdev()` ; ~125 l. sur 5 fichiers | Ctrl+Z/S/A/C/V, Shift+Tab, Alt+F4 absents sur **toutes** les cibles. Le `KeyPress` actuel n'a pas de bitmask `modifiers` → Ctrl+Z est factuellement impossible aujourd'hui. Pré-requis à `clipboard_set`. |
-| `scroll` | Interaction | cdp · sdk · kwin-eis · auto | **M** | Nouvelle variante `InteractionCommand::Scroll { position?, dx, dy }` ; `DeviceCapability::Scroll` déjà bindé ; ~70 l. | Toute UI à liste/grille/arbre est bloquée sans scroll sur kwin-eis. Sur CDP : `Input.dispatchMouseEvent mouseWheel` avec x/y frappe le bon conteneur (vs `window.scrollBy` qui ne défile que la racine). |
-| `wait_for_gone` *(extension)* | Attente | cdp · sdk · auto | **S** | Pas un nouvel outil — ajouter `negate: bool` à `WaitPredicate::DomSelector` et à `WaitForSelectorParams` ; ~8 l. | Aucun prédicat ne couvre l'absence DOM avec polling + timeout intégré. Pattern fréquent : attendre la disparition d'un spinner / toast / modale. |
+| ✅ `press_key` | Interaction | cdp · sdk · kwin-eis · auto | **S** | Nul — `InteractionCommand::KeyPress` câblé dans les 3 adapters ; ~20 l. dans `adapter-mcp-server` | Seul moyen d'envoyer Return / Tab / Escape / ArrowDown à une app native kwin-eis ; `eval_js` = Unsupported. Sur CDP : `isTrusted=true` (Monaco, CodeMirror, React Synthetic Events). |
+| ✅ `navigate` | Interaction | cdp · sdk · auto | **S** | Nul — variante `InteractionCommand::Navigate` câblée dans les 3 adapters ; ~25 l. dans `adapter-mcp-server` | Interface contractuelle et découvrable ; l'agent ne doit pas connaître `window.__deveye_router__` (interne SDK) pour écrire l'`eval_js` équivalent. |
+| ✅ `screenshot_region` | Capture | cdp · sdk · kwin-eis · auto | **S** | Nul — post-traitement PNG via crate `image` v0.25 (déjà dans le workspace) ; ~30 l. | Sur kwin-eis, un screenshot plein écran 2560×1440 coûte cher en tokens pour chaque vérification ciblée ; seule forme de vérification de composant sur cette cible (pas de DOM). |
+| ✅ `target_info` | Inspection | cdp · sdk · kwin-eis · auto | **S** | 2-3 champs sur `DeveyePorts` + peuplement dans `compose.rs` | L'agent ne peut pas savoir si `eval_js` répondra ou renverra `Unsupported` sans tenter l'appel ; `target_info` coupe la boucle de découverte en une requête déterministe. |
+| ✅ `key_combo` | Interaction | cdp · sdk · kwin-eis · auto | **M** | Nouvelle variante `InteractionCommand::KeyCombo { modifiers, key }` ; réutilise `xkb_name_to_evdev()` ; ~125 l. sur 5 fichiers | Ctrl+Z/S/A/C/V, Shift+Tab, Alt+F4 absents sur **toutes** les cibles. Le `KeyPress` actuel n'a pas de bitmask `modifiers` → Ctrl+Z est factuellement impossible aujourd'hui. Pré-requis à `clipboard_set`. |
+| ✅ `scroll` | Interaction | cdp · sdk · kwin-eis · auto | **M** | Nouvelle variante `InteractionCommand::Scroll { position?, dx, dy }` ; `DeviceCapability::Scroll` déjà bindé ; ~70 l. | Toute UI à liste/grille/arbre est bloquée sans scroll sur kwin-eis. Sur CDP : `Input.dispatchMouseEvent mouseWheel` avec x/y frappe le bon conteneur (vs `window.scrollBy` qui ne défile que la racine). |
+| ✅ `wait_for_gone` *(extension)* | Attente | cdp · sdk · auto | **S** | Pas un nouvel outil — ajouter `negate: bool` à `WaitPredicate::DomSelector` et à `WaitForSelectorParams` ; ~8 l. | Aucun prédicat ne couvre l'absence DOM avec polling + timeout intégré. Pattern fréquent : attendre la disparition d'un spinner / toast / modale. |
 
-> **Note `wait_for_gone`** : implémentation préférée via `negate: bool #[serde(default)]` sur `DomSelector`, exposé par `wait_for_selector`. Pas de nouvel outil MCP ; le compteur reste cohérent.
+> **Note `wait_for_gone`** : implémentation préférée via `negate: bool #[serde(default)]` sur `DomSelector`, exposé par `wait_for_selector`. Pas de nouvel outil MCP ; le compteur reste cohérent. **Livré** — `WaitPredicate::DomSelector` porte bien `negate` (et `visible`), consommé par `wait_for_selector` (vérifié dans `adapter-mcp-server/src/lib.rs`).
 
 > **Note `press_key` — divergence de nommage** : CDP attend les noms W3C (`Enter`, `ArrowDown`) ; kwin-eis attend les noms XKB (`Return`, `Down`). À documenter dans la description MCP, ou normaliser côté adapter CDP (`Return` → `Enter`). Les noms communs (`Tab`, `Escape`, `F5`, `Space`) passent sans traduction.
 
@@ -45,29 +45,29 @@ Valeur avérée, effort M ou nouveau port, sans bloquer le chemin critique.
 
 | Outil | Famille | Cibles | Effort | Impact port | Pourquoi |
 |---|---|---|---|---|---|
-| `assert_visual` | Capture | cdp · sdk · kwin-eis · auto | **M** | Nul — pixel diff dans `adapter-mcp-server` ; `image` v0.25 déjà dans le workspace | Sur kwin-eis : premier et **seul** outil d'assertion déterministe (pas de DOM/JS). Réduit aussi le coût token des vérifs visuelles ciblées. |
-| `wait_screenshot_region` | Attente | cdp · sdk · kwin-eis · auto | **M** | Nouvelle variante `WaitPredicate::ScreenshotRegionStable` ; `image` dans `adapter-composite` | `ScreenshotStable` plein viewport est inutilisable avec un curseur clignotant / une horloge. Seule attente visuelle praticable sur kwin-eis. |
-| `double_click` | Interaction | cdp · sdk · kwin-eis · auto | **M** | Nouvelle variante `InteractionCommand::DoubleClick` ; ~60 l. | Deux `click()` MCP successifs : intervalle imprévisible (5-50 ms). Un `DoubleClick` émet les deux press/release dans un seul dispatch worker. |
-| `focus_window` | Interaction | kwin-eis · sdk | **M** | Nouveau port `WindowManager` (10e) ; `KwinWindowManager` via D-Bus Scripting déjà présent | KWin EIS route vers la fenêtre ayant le focus OS ; une notif Plasma ou un dialog système dévie **silencieusement** tous les clics, sans signal d'erreur. |
-| `assert_state` | Inspection | cdp · sdk | **S** | Nul — composition sur `AppInspector::state_snapshot()` ; ~20 l. | `state()` expose le snapshot sans sémantique d'assertion ; `isError=true` est un signal déterministe pour les pipelines (symétrie avec `assert_selector`). |
-| `wait_for_log` | Attente | cdp · sdk | **M** | Nouvelle variante `WaitPredicate::LogMessage { contains, level_min? }` ; champ `log_source` dans `CompositeWaitCondition` ; ~80 l. | `eval_js` ne peut pas observer les logs `tracing` Rust bufferisés côté SDK. Boucler sur `logs_tail` + sleeps est l'anti-pattern que la famille Wait* supprime. |
-| `handle_dialog` | Interaction | cdp | **S** | Nouvelle variante `InteractionCommand::HandleDialog { accept, prompt_text? }` ; ~30 l. | Quand `alert()`/`confirm()`/`prompt()` se déclenche, le moteur JS se suspend → `eval_js` est physiquement impossible. `Page.handleJavaScriptDialog` est la seule issue. |
-| `screenshot_element` | Capture | cdp · sdk | **M** | Nouvelle méthode `screenshot_clip(rect)` sur le trait `Renderer` (5 implémenteurs) ; `image` dans `adapter-mcp-server` ; ~140 l. | `eval_js` retourne du JSON, pas un PNG. Recadre sur le composant d'intérêt. |
-| `upload_file` | Interaction | cdp | **M** | Nouvelle variante `InteractionCommand::UploadFile { selector, paths }` ; `DOM.setFileInputFiles` ; ~70 l. | La sécurité navigateur interdit de setter `input[type=file].value` depuis JS → `DOM.setFileInputFiles` est le seul chemin. Verrou non contournable par `eval_js`. |
-| `clipboard_get` | Workflow | cdp · sdk · kwin-eis · auto | **M** | Nouveau port `ClipboardPort { get(), set() }` + crate `adapter-clipboard-wayland` ; à livrer avec `clipboard_set` | `navigator.clipboard.readText()` lève `NotAllowedError` en contexte automatisé ; sur kwin-eis `eval_js` = Unsupported. `wl-paste` OS-level est la seule approche fiable (`wl-clipboard` validé sur la machine). |
+| ✅ `assert_visual` | Capture | cdp · sdk · kwin-eis · auto | **M** | Nul — pixel diff dans `adapter-mcp-server` ; `image` v0.25 déjà dans le workspace | Sur kwin-eis : premier et **seul** outil d'assertion déterministe (pas de DOM/JS). Réduit aussi le coût token des vérifs visuelles ciblées. |
+| ✅ `wait_screenshot_region` | Attente | cdp · sdk · kwin-eis · auto | **M** | Nouvelle variante `WaitPredicate::ScreenshotRegionStable` ; `image` dans `adapter-composite` | `ScreenshotStable` plein viewport est inutilisable avec un curseur clignotant / une horloge. Seule attente visuelle praticable sur kwin-eis. |
+| ✅ `double_click` | Interaction | cdp · sdk · kwin-eis · auto | **M** | Nouvelle variante `InteractionCommand::DoubleClick` ; ~60 l. | Deux `click()` MCP successifs : intervalle imprévisible (5-50 ms). Un `DoubleClick` émet les deux press/release dans un seul dispatch worker. |
+| ✅ `focus_window` | Interaction | kwin-eis · sdk | **M** | Nouveau port `WindowManager` ; `KwinWindowManager` via D-Bus Scripting déjà présent | KWin EIS route vers la fenêtre ayant le focus OS ; une notif Plasma ou un dialog système dévie **silencieusement** tous les clics, sans signal d'erreur. |
+| ✅ `assert_state` | Inspection | cdp · sdk | **S** | Nul — composition sur `AppInspector::state_snapshot()` ; ~20 l. | `state()` expose le snapshot sans sémantique d'assertion ; `isError=true` est un signal déterministe pour les pipelines (symétrie avec `assert_selector`). |
+| ✅ `wait_for_log` | Attente | cdp · sdk | **M** | Nouvelle variante `WaitPredicate::LogMessage { contains, level_min? }` ; champ `log_source` dans `CompositeWaitCondition` ; ~80 l. | `eval_js` ne peut pas observer les logs `tracing` Rust bufferisés côté SDK. Boucler sur `logs_tail` + sleeps est l'anti-pattern que la famille Wait* supprime. |
+| ✅ `handle_dialog` | Interaction | cdp | **S** | Nouvelle variante `InteractionCommand::HandleDialog { accept, prompt_text? }` ; ~30 l. | Quand `alert()`/`confirm()`/`prompt()` se déclenche, le moteur JS se suspend → `eval_js` est physiquement impossible. `Page.handleJavaScriptDialog` est la seule issue. |
+| ✅ `screenshot_element` | Capture | cdp · sdk | **M** | Nouvelle méthode `screenshot_clip(rect)` sur le trait `Renderer` (5 implémenteurs) ; `image` dans `adapter-mcp-server` ; ~140 l. | `eval_js` retourne du JSON, pas un PNG. Recadre sur le composant d'intérêt. |
+| ✅ `upload_file` | Interaction | cdp | **M** | Nouvelle variante `InteractionCommand::UploadFile { selector, paths }` ; `DOM.setFileInputFiles` ; ~70 l. | La sécurité navigateur interdit de setter `input[type=file].value` depuis JS → `DOM.setFileInputFiles` est le seul chemin. Verrou non contournable par `eval_js`. |
+| ✅ `clipboard_get` | Workflow | cdp · sdk · kwin-eis · auto | **M** | Nouveau port `Clipboard { get(), set() }` + crate `adapter-clipboard-wayland` ; livré avec `clipboard_set` (cf. section « Plus tard ») | `navigator.clipboard.readText()` lève `NotAllowedError` en contexte automatisé ; sur kwin-eis `eval_js` = Unsupported. `wl-paste` OS-level est la seule approche fiable (`wl-clipboard` validé sur la machine). |
 
 ---
 
 ## Plus tard
 
-CDP-only ou besoin non encore opérationnel sur le chemin critique.
+CDP-only ou besoin non encore opérationnel sur le chemin critique. **Statut (04/07/2026)** : `resize_viewport`, `network_requests` et `set_cookie`/`get_cookies` restent **non livrés**, conditions de montée en priorité toujours non atteintes (confirmé par l'audit du 04/07, §D1) — ne pas re-proposer sans que la condition ci-dessous soit remplie. `clipboard_set` a en revanche été livré **en avance** (bundle avec `key_combo`, sprint 2 du backlog), sans attendre que le pilotage de texte Unicode long devienne un besoin distinct.
 
 | Outil | Famille | Cibles | Effort | Condition de montée en priorité |
 |---|---|---|---|---|
-| `resize_viewport` | Capture | cdp | M | Quand les tests de la tête WASM atlas à différentes résolutions deviennent un workflow. ⚠️ **Breaking change** sur le trait `Renderer` (6 implémenteurs, dont `MonitorRenderer` et `LazyCdp`). |
-| `network_requests` | Inspection | cdp | M | Quand les tests d'intégration atlas WASM via CDP deviennent actifs. Piège : `Network.enable` doit être ré-envoyé dans l'arm `Target.attachedToTarget`. |
-| `set_cookie` + `get_cookies` | Workflow | cdp | M | Livrer en bundle (un seul nouveau port `CookieManager`). `HttpOnly` est l'unique argument face à `eval_js`. Intérêt limité hors tests de flux d'auth sur cible CDP. |
-| `clipboard_set` | Workflow | kwin-eis | L | Pré-requis : `key_combo` (Ctrl+V impossible sans modifiers EIS). Bundle avec `clipboard_get` quand le pilotage de texte Unicode long sur kwin-eis devient opérationnel. |
+| `resize_viewport` | Capture | cdp | M | Non livré. Quand les tests de la tête WASM atlas à différentes résolutions deviennent un workflow. ⚠️ **Breaking change** sur le trait `Renderer` (6 implémenteurs, dont `MonitorRenderer` et `LazyCdp`). |
+| `network_requests` | Inspection | cdp | M | Non livré. Quand les tests d'intégration atlas WASM via CDP deviennent actifs. Piège : `Network.enable` doit être ré-envoyé dans l'arm `Target.attachedToTarget`. |
+| `set_cookie` + `get_cookies` | Workflow | cdp | M | Non livré. Livrer en bundle (un seul nouveau port `CookieManager`). `HttpOnly` est l'unique argument face à `eval_js`. Intérêt limité hors tests de flux d'auth sur cible CDP. |
+| ✅ `clipboard_set` | Workflow | kwin-eis | L | **Livré en avance** (bundle avec `key_combo`, sprint 2, cf. `adapter-mcp-server::clipboard_set` et port `Clipboard`) — la condition initiale (pré-requis `key_combo`) était déjà remplie au même sprint. |
 
 ---
 
@@ -80,7 +80,7 @@ CDP-only ou besoin non encore opérationnel sur le chemin critique.
 | Outil | Raison |
 |---|---|
 | `get_text` | Sous-ensemble de `find_element` (champ `.text`, déjà null-safe) et `assert_selector` (`actual_text`). Si la limite `slice(0, 200)` gêne, l'ajuster. |
-| `get_value` | `eval_js` one-liner. Correction correcte : ajouter `value_prop: ('value' in el) ? el.value : null` au snippet de `find_element` (~10 caractères). Aucun nouvel outil. |
+| ✅ `get_value` | `eval_js` one-liner. Correction correcte : ajouter `value_prop: ('value' in el) ? el.value : null` au snippet de `find_element` (~10 caractères). Aucun nouvel outil. **Livré** (sprint T4, 04/07) — `value_prop` présent dans le snippet de `find_element`, vérifié dans `adapter-mcp-server/src/lib.rs`. |
 | `navigate_history` | `history.back()/forward()` = `eval_js` verbatim, même appel CDP. Seul `Page.reload({ ignoreCache: true })` est un delta réel — trop étroit. |
 | `storage_state` | Deux one-liners JS, synchrones et atomiques en JS monothread. Nul gain sur kwin-eis. |
 
@@ -88,8 +88,8 @@ CDP-only ou besoin non encore opérationnel sur le chemin critique.
 
 | Outil | Action correcte |
 |---|---|
-| `wait_for_text` | Ajouter `WaitPredicate::TextContent { text, selector?, visible? }` et l'exposer via `wait_condition`. kwin-eis Unsupported retire la justification d'un outil dédié. |
-| `console_messages` | Étendre le snippet console aux niveaux `log`/`info`/`debug` + filtre `levels?` sur `collect_console_errors`. La voie CDP-native (`Runtime.consoleAPICalled`) est en réalité un effort L. |
+| ✅ `wait_for_text` | Ajouter `WaitPredicate::TextContent { text, selector?, visible? }` et l'exposer via `wait_condition`. kwin-eis Unsupported retire la justification d'un outil dédié. **Livré** (sprint T4, 04/07) — variante exposée via `wait_condition` **et** via un outil dédié `wait_for_text` (au-delà du plan initial). |
+| ✅ `console_messages` | Étendre le snippet console aux niveaux `log`/`info`/`debug` + filtre `levels?` sur `collect_console_errors`. La voie CDP-native (`Runtime.consoleAPICalled`) est en réalité un effort L. **Livré** (sprint T4, 04/07) — paramètre `levels?` sur `collect_console_errors`, vérifié dans `adapter-mcp-server/src/lib.rs`. |
 
 ### Conflits architecturaux ou portée insuffisante
 
@@ -117,3 +117,5 @@ CDP-only ou besoin non encore opérationnel sur le chemin critique.
 | 6 | `assert_visual` | 1,5 j | Premier outil d'assertion déterministe pour kwin-eis ; valeur immédiate pour les pipelines de vérification. |
 
 **Total estimé : ~4,75 jours.** Ces 6 entrées (8 outils + 1 extension) couvrent l'essentiel des trous kwin-eis et tous les quick-wins domaine, sans nouveau port ni dette d'archi.
+
+**Statut (04/07/2026)** : ce premier sprint est **entièrement livré**, ainsi que la totalité du reste du backlog « maintenant »/« ensuite » (voir tableaux ci-dessus) et `clipboard_set` en avance. Sprints suivants pour les 3 extensions S restées en jachère : cf. sprint T4 (04/07, `docs/audit-2026-07-04.md` §D1).

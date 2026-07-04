@@ -502,9 +502,12 @@ fn parse_keymap(ctx: &xkb::Context, km: &reis::event::Keymap) -> Option<xkb::Key
     }
 }
 
-/// Résout un caractère Unicode en `(keycode evdev, shift requis)` via le keymap.
-fn char_to_evdev(keymap: &xkb::Keymap, ch: char) -> Option<(u32, bool)> {
-    let target = xkb::Keysym::from_char(ch);
+/// Balaye tout le keymap (keycodes XKB, niveaux 0 et 1) a la recherche du
+/// premier keycode dont un des deux niveaux produit `target`. Retourne le
+/// keycode evdev (offset `XKB_TO_EVDEV_OFFSET` deja retire) et le niveau
+/// trouve (0 ou 1). Factorise le balayage double-boucle commun a
+/// `char_to_evdev` et `xkb_name_to_evdev`.
+fn scan_keymap(keymap: &xkb::Keymap, target: xkb::Keysym) -> Option<(u32, u32)> {
     for xkb_code in keymap.min_keycode().raw()..=keymap.max_keycode().raw() {
         let keycode = xkb::Keycode::new(xkb_code);
         for level in 0_u32..=1 {
@@ -513,12 +516,12 @@ fn char_to_evdev(keymap: &xkb::Keymap, ch: char) -> Option<(u32, bool)> {
                 .contains(&target)
             {
                 match xkb_code.checked_sub(XKB_TO_EVDEV_OFFSET) {
-                    Some(evdev) => return Some((evdev, level == 1)),
+                    Some(evdev) => return Some((evdev, level)),
                     None => {
                         tracing::warn!(
-                            "char_to_evdev: xkb_code {} < XKB_TO_EVDEV_OFFSET pour {:?}, ignore",
+                            "scan_keymap: xkb_code {} < XKB_TO_EVDEV_OFFSET pour {:?}, ignore",
                             xkb_code,
-                            ch
+                            target
                         );
                         // Poursuit la recherche sur les keycodes suivants.
                         continue;
@@ -530,35 +533,19 @@ fn char_to_evdev(keymap: &xkb::Keymap, ch: char) -> Option<(u32, bool)> {
     None
 }
 
+/// Résout un caractère Unicode en `(keycode evdev, shift requis)` via le keymap.
+fn char_to_evdev(keymap: &xkb::Keymap, ch: char) -> Option<(u32, bool)> {
+    let target = xkb::Keysym::from_char(ch);
+    scan_keymap(keymap, target).map(|(evdev, level)| (evdev, level == 1))
+}
+
 /// Résout un nom de touche XKB en keycode evdev.
 fn xkb_name_to_evdev(keymap: &xkb::Keymap, name: &str) -> Option<u32> {
     let target = xkb::keysym_from_name(name, xkb::KEYSYM_NO_FLAGS);
     if target == xkb::keysyms::KEY_NoSymbol.into() {
         return None;
     }
-    for xkb_code in keymap.min_keycode().raw()..=keymap.max_keycode().raw() {
-        let keycode = xkb::Keycode::new(xkb_code);
-        for level in 0_u32..=1 {
-            if keymap
-                .key_get_syms_by_level(keycode, 0, level)
-                .contains(&target)
-            {
-                match xkb_code.checked_sub(XKB_TO_EVDEV_OFFSET) {
-                    Some(evdev) => return Some(evdev),
-                    None => {
-                        tracing::warn!(
-                            "xkb_name_to_evdev: xkb_code {} < XKB_TO_EVDEV_OFFSET pour {:?}, ignore",
-                            xkb_code,
-                            name
-                        );
-                        // Poursuit la recherche sur les keycodes suivants.
-                        continue;
-                    }
-                }
-            }
-        }
-    }
-    None
+    scan_keymap(keymap, target).map(|(evdev, _level)| evdev)
 }
 
 #[cfg(test)]
@@ -614,5 +601,48 @@ mod tests {
         assert_eq!(modifier_to_evdev("Super"), Some(KEY_LEFTMETA));
         assert_eq!(modifier_to_evdev("cmd"), Some(KEY_LEFTMETA));
         assert_eq!(modifier_to_evdev("fn"), None);
+    }
+
+    // --- char_to_evdev / xkb_name_to_evdev : resolution via un vrai keymap ---
+    //
+    // Un keymap "us" se compile localement (xkb::Context::new +
+    // Keymap::new_from_names), sans session KWin : xkeyboard-config est
+    // installe sur cette machine (paquet `libxkbcommon` + data xkb).
+
+    /// Compile un keymap XKB "us" minimal pour les tests, sans passer par KWin.
+    fn us_keymap() -> xkb::Keymap {
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        xkb::Keymap::new_from_names(&ctx, "", "", "us", "", None, xkb::COMPILE_NO_FLAGS)
+            .expect("compilation du keymap XKB \"us\" (xkeyboard-config installe)")
+    }
+
+    /// (a) 'a' est en niveau 0 (pas de Shift) sur KEY_A = 30.
+    #[test]
+    fn char_to_evdev_lowercase_a_maps_to_key_a_without_shift() {
+        let keymap = us_keymap();
+        assert_eq!(char_to_evdev(&keymap, 'a'), Some((30, false)));
+    }
+
+    /// (b) 'A' est la meme touche KEY_A, mais en niveau 1 (Shift requis).
+    #[test]
+    fn char_to_evdev_uppercase_a_maps_to_key_a_with_shift() {
+        let keymap = us_keymap();
+        assert_eq!(char_to_evdev(&keymap, 'A'), Some((30, true)));
+    }
+
+    /// (c) Noms de touches XKB usuels -> keycodes evdev standards
+    /// (linux/input-event-codes.h : KEY_ENTER = 28, KEY_ESC = 1).
+    #[test]
+    fn xkb_name_to_evdev_resolves_known_key_names() {
+        let keymap = us_keymap();
+        assert_eq!(xkb_name_to_evdev(&keymap, "Return"), Some(28));
+        assert_eq!(xkb_name_to_evdev(&keymap, "Escape"), Some(1));
+    }
+
+    /// (d) Un nom de touche XKB inconnu ne resout aucun keysym : `None`.
+    #[test]
+    fn xkb_name_to_evdev_unknown_name_returns_none() {
+        let keymap = us_keymap();
+        assert_eq!(xkb_name_to_evdev(&keymap, "PasUneVraieTouche"), None);
     }
 }

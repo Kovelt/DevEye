@@ -49,21 +49,33 @@ impl XcapRenderer {
     }
 
     fn find_window(&self) -> Result<Window, ScreencapError> {
-        let needle = self.title_substring.to_lowercase();
         let windows = Window::all().map_err(|e| ScreencapError::Xcap(e.to_string()))?;
-        windows
+        // xcap >= 0.9 : `title()` est fallible (Result<String, XCapError>).
+        // Une fenêtre dont le titre est illisible (ex : permission refusée
+        // par l'OS sur certaines fenêtres système) est simplement ignorée
+        // plutôt que de faire échouer toute la recherche (`.ok()` -> `None`).
+        let titles: Vec<Option<String>> = windows.iter().map(|w| w.title().ok()).collect();
+        let idx = find_title_match(titles.iter().map(|t| t.as_deref()), &self.title_substring)
+            .ok_or_else(|| ScreencapError::WindowNotFound(self.title_substring.clone()))?;
+        Ok(windows
             .into_iter()
-            // xcap >= 0.9 : `title()` est fallible (Result<String, XCapError>).
-            // Une fenêtre dont le titre est illisible (ex : permission refusée
-            // par l'OS sur certaines fenêtres système) est simplement ignorée
-            // plutôt que de faire échouer toute la recherche.
-            .find(|w| {
-                w.title()
-                    .map(|title| title.to_lowercase().contains(&needle))
-                    .unwrap_or(false)
-            })
-            .ok_or_else(|| ScreencapError::WindowNotFound(self.title_substring.clone()))
+            .nth(idx)
+            .expect("idx provient de la meme liste, donc dans les bornes"))
     }
+}
+
+/// Cherche l'indice de la première entrée dont le titre (quand lisible)
+/// contient `needle`, insensible à la casse. Une entrée `None` (titre
+/// illisible) ne matche jamais, quel que soit `needle` — c'est cohérent avec
+/// le fait qu'on ne sait rien dire du titre réel de cette fenêtre.
+fn find_title_match<'a, I>(titles: I, needle: &str) -> Option<usize>
+where
+    I: IntoIterator<Item = Option<&'a str>>,
+{
+    let needle = needle.to_lowercase();
+    titles
+        .into_iter()
+        .position(|title| title.is_some_and(|t| t.to_lowercase().contains(&needle)))
 }
 
 #[async_trait]
@@ -114,21 +126,42 @@ impl MonitorRenderer {
         let monitors = Monitor::all().map_err(|e| ScreencapError::Xcap(e.to_string()))?;
         // N2: preference au moniteur marque is_primary(), avec repli sur le
         // premier si aucun n'est marque principal.
-        // xcap >= 0.9 : is_primary() renvoie un Result (echec propage, ce
-        // n'est pas equivalent a "non principal").
-        let mut fallback: Option<Monitor> = None;
-        for m in monitors {
-            if m.is_primary()
-                .map_err(|e| ScreencapError::Xcap(e.to_string()))?
-            {
-                return Ok(m);
-            }
-            if fallback.is_none() {
-                fallback = Some(m);
-            }
-        }
-        fallback.ok_or_else(|| ScreencapError::Xcap("aucun moniteur detecte".into()))
+        // xcap >= 0.9 : is_primary() renvoie un Result — on le resout pour
+        // chaque moniteur (echec propage immediatement, ce n'est pas
+        // equivalent a "non principal") avant de choisir via `pick_primary`.
+        let flags: Vec<bool> = monitors
+            .iter()
+            .map(|m| {
+                m.is_primary()
+                    .map_err(|e| ScreencapError::Xcap(e.to_string()))
+            })
+            .collect::<Result<_, _>>()?;
+        let idx = pick_primary(flags)
+            .ok_or_else(|| ScreencapError::Xcap("aucun moniteur detecte".into()))?;
+        Ok(monitors
+            .into_iter()
+            .nth(idx)
+            .expect("idx provient de la meme liste, donc dans les bornes"))
     }
+}
+
+/// Choisit l'indice du moniteur "principal" parmi les flags `is_primary`
+/// fournis dans l'ordre d'énumération OS ; repli sur le premier moniteur si
+/// aucun n'est marqué principal. `None` si la liste est vide.
+fn pick_primary<I>(flags: I) -> Option<usize>
+where
+    I: IntoIterator<Item = bool>,
+{
+    let mut fallback: Option<usize> = None;
+    for (i, is_primary) in flags.into_iter().enumerate() {
+        if is_primary {
+            return Some(i);
+        }
+        if fallback.is_none() {
+            fallback = Some(i);
+        }
+    }
+    fallback
 }
 
 #[async_trait]
@@ -161,5 +194,72 @@ impl Renderer for MonitorRenderer {
             Ok(Size::new(width, height))
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_title_match, pick_primary};
+
+    // ---- find_title_match ------------------------------------------------
+
+    #[test]
+    fn find_title_match_insensible_a_la_casse() {
+        let titles = vec![Some("Mon Editeur"), Some("Terminal")];
+        assert_eq!(
+            find_title_match(titles, "EDITEUR"),
+            Some(0),
+            "doit matcher malgre la casse differente"
+        );
+    }
+
+    #[test]
+    fn find_title_match_renvoie_le_premier_des_multiples() {
+        let titles = vec![Some("Firefox - a"), Some("Terminal"), Some("Firefox - b")];
+        assert_eq!(
+            find_title_match(titles, "firefox"),
+            Some(0),
+            "doit renvoyer le premier match, pas le suivant"
+        );
+    }
+
+    #[test]
+    fn find_title_match_none_si_aucun_titre_ne_matche() {
+        let titles = vec![Some("Terminal"), Some("Editeur")];
+        assert_eq!(find_title_match(titles, "navigateur"), None);
+    }
+
+    #[test]
+    fn find_title_match_ignore_les_titres_illisibles() {
+        // Un titre `None` (title() a echoue cote xcap) ne doit jamais
+        // matcher, meme quand needle est vide.
+        let titles = vec![None, Some("Terminal")];
+        assert_eq!(find_title_match(titles, ""), Some(1));
+    }
+
+    #[test]
+    fn find_title_match_none_sur_iterateur_vide() {
+        let titles: Vec<Option<&str>> = vec![];
+        assert_eq!(find_title_match(titles, "quoi que ce soit"), None);
+    }
+
+    // ---- pick_primary ------------------------------------------------------
+
+    #[test]
+    fn pick_primary_prefere_le_moniteur_marque() {
+        let flags = vec![false, true, false];
+        assert_eq!(pick_primary(flags), Some(1));
+    }
+
+    #[test]
+    fn pick_primary_replie_sur_le_premier_si_aucun_marque() {
+        let flags = vec![false, false, false];
+        assert_eq!(pick_primary(flags), Some(0));
+    }
+
+    #[test]
+    fn pick_primary_none_si_liste_vide() {
+        let flags: Vec<bool> = vec![];
+        assert_eq!(pick_primary(flags), None);
     }
 }

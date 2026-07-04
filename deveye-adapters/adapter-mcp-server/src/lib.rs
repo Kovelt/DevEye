@@ -8,9 +8,11 @@
 //! - `screenshot_element` : capture recadrée sur le rect d'un sélecteur CSS
 //! - `assert_visual` : compare le viewport (ou une région) à un PNG baseline
 //!   (golden) ; crée la baseline si absente
-//! - `click` : clic à `(x, y)` (bouton gauche)
+//! - `click` : clic à `(x, y)` ; `button` optionnel (`left` par défaut,
+//!   `right`, `middle` — E6) fait doublon assumé avec `right_click`
 //! - `double_click` : double-clic gauche à `(x, y)`
-//! - `right_click` : clic droit à `(x, y)` (ouvre les menus contextuels)
+//! - `right_click` : clic droit à `(x, y)` (ouvre les menus contextuels) —
+//!   conservé pour compatibilité, équivalent à `click(button: "right")`
 //! - `hover` : déplace le pointeur à `(x, y)` sans presser (déclenche
 //!   `mouseover`/`mouseenter`)
 //! - `click_selector` : clique sur le premier élément matchant un sélecteur
@@ -69,6 +71,15 @@
 //! `wait_for_selector` accepte aussi `negate` (attendre la disparition d'un
 //! élément — « wait_for_gone »).
 //!
+//! **Convention d'erreur (E1)** : une capacité absente sur la cible active
+//! (`PortError::Unsupported` — pas de WebView en kwin-eis pour `eval_js`/
+//! `dom`/`state`, pas de session Wayland pour le presse-papiers, pas de
+//! KDE/Wayland pour `focus_window`/`window_geometry`…) est un cas **normal**,
+//! pas une panne : elle remonte comme un résultat `isError` structuré
+//! `{ ok: false, reason: "unsupported", detail }`, jamais comme une erreur
+//! JSON-RPC opaque (-32603). Cohérent avec `assert_*`/`wait_*`, où `isError`
+//! signale déjà un échec sémantique plutôt qu'une panne de protocole.
+//!
 //! Les appels d'outils sont **sérialisés** (un seul à la fois, mutex) : des
 //! interactions concurrentes pendant un re-render Dioxus touchaient le
 //! mauvais nœud (leçon du 5 juin 2026).
@@ -98,13 +109,30 @@ use tracing::debug;
 use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, WaitPredicate};
 use deveye_ports::{
     AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
-    LogSource, PortError, Renderer, WaitCondition, WindowGeometry, WindowLister, WindowManager,
+    LogSource, PortError, PortResult, Renderer, WaitCondition, WindowGeometry, WindowLister,
+    WindowManager,
 };
 
+/// E4 : timeout par defaut partage par tous les outils `wait_*` a boucle de
+/// polling explicite, quand `timeout_ms` est omis par l'appelant. Une seule
+/// constante nommee plutot que le litteral `5_000` recopie a chaque outil.
+const WAIT_DEFAULT_MS: u64 = 5_000;
+
+/// E4 : plafond des outils `wait_*` qui interrogent le rendu DOM de la page
+/// (`wait_for_selector`, `wait_for_text`) — deliberement plus bas que
+/// [`WAIT_TIMEOUT_MAX_MS`]. Une attente de rendu UI (element/texte qui
+/// apparait) se joue normalement en quelques secondes ; les autres `wait_*`
+/// couvrent aussi le cas d'un redemarrage complet de la cible (bien plus
+/// lent, cf. `target-alive`). Nommer et partager les deux plafonds ici rend
+/// cette difference (30 s vs 60 s) consciente plutot qu'un magic number
+/// recopie deux fois chacun.
+const WAIT_DOM_TIMEOUT_MAX_MS: u64 = 30_000;
+
 /// Plafond partage par les outils `wait_*` a boucle de polling explicite
-/// (`wait_condition`, `wait_for_log`, `wait_screenshot_region` l'appliquent
-/// deja en local) : borne a 60 s le temps de blocage cote agent MCP, quel que
-/// soit le `timeout_ms` demande. `wait_ready` (A5) etait le seul sans plafond.
+/// (`wait_condition`, `wait_for_log`, `wait_screenshot_region`,
+/// `wait_target_alive` l'appliquent deja) : borne a 60 s le temps de blocage
+/// cote agent MCP, quel que soit le `timeout_ms` demande. `wait_ready` (A5)
+/// etait le seul sans plafond avant le sprint R1.
 const WAIT_TIMEOUT_MAX_MS: u64 = 60_000;
 
 /// B1 : garde-fou de l'outil `dom` — au-dela de ce nombre d'octets JSON
@@ -210,12 +238,32 @@ impl Drop for GateGuard<'_> {
     }
 }
 
+/// Coordonnées seules — `hover`/`right_click`/`double_click` (le bouton y est
+/// implicite ou fixe). Distincte de [`ClickParams`] (E6 : `click` seul a un
+/// paramètre `button`) pour ne pas faire apparaître un champ sans effet dans
+/// le schéma MCP des trois autres outils.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct PositionParams {
+    /// Abscisse en pixels logiques depuis le coin haut-gauche du viewport.
+    x: i32,
+    /// Ordonnée en pixels logiques depuis le coin haut-gauche du viewport.
+    y: i32,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ClickParams {
     /// Abscisse en pixels logiques depuis le coin haut-gauche du viewport.
     x: i32,
     /// Ordonnée en pixels logiques depuis le coin haut-gauche du viewport.
     y: i32,
+    /// E6 : bouton de souris, insensible à la casse — `"left"` (défaut),
+    /// `"right"`, `"middle"`. `MouseButton::Middle` existe côté deveye-core
+    /// depuis l'origine mais n'était exposé par aucun outil ; `"right"` fait
+    /// doublon assumé avec `right_click` (conservé pour compatibilité et
+    /// découvrabilité), voie jugée la moins perturbante plutôt qu'un outil
+    /// `middle_click` dédié.
+    #[serde(default)]
+    button: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -226,10 +274,12 @@ struct TypeParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct PressKeyParams {
-    /// Nom de la touche à presser (keydown + keyup). En CDP, noms W3C
-    /// (`Enter`, `Tab`, `Escape`, `ArrowDown`, `F5`…). En kwin-eis, noms XKB
-    /// (`Return`, `Down`…). Les noms communs (`Tab`, `Escape`, `F5`, `space`)
-    /// passent sur les deux.
+    /// Nom de la touche à presser (keydown + keyup). En CDP **et** en sdk
+    /// (pont JS du SDK, qui synthétise aussi un `KeyboardEvent` DOM), noms
+    /// W3C `KeyboardEvent.key` (`Enter`, `Tab`, `Escape`, `ArrowDown`,
+    /// `F5`…). En kwin-eis (mains OS-level, pas de DOM), noms XKB (`Return`,
+    /// `Down`…). Les noms communs (`Tab`, `Escape`, `F5`, `space`) passent
+    /// sur les trois (E7).
     key: String,
 }
 
@@ -238,8 +288,9 @@ struct KeyComboParams {
     /// Modificateurs maintenus pendant la frappe (insensibles à la casse) :
     /// `ctrl`/`control`, `shift`, `alt`, `meta`/`super`/`cmd`.
     modifiers: Vec<String>,
-    /// Touche principale. En CDP, nom W3C (`KeyZ`, `KeyS`, `Tab`…) ou caractère
-    /// (`z`, `s`) ; en kwin-eis, nom XKB (`z`, `s`, `Tab`…).
+    /// Touche principale. En CDP **et** en sdk (pont JS, `KeyboardEvent`
+    /// synthétique), nom W3C (`KeyZ`, `KeyS`, `Tab`…) ou caractère (`z`,
+    /// `s`) ; en kwin-eis (mains OS-level), nom XKB (`z`, `s`, `Tab`…) (E7).
     key: String,
 }
 
@@ -594,10 +645,31 @@ impl DeveyeMcpServer {
         }
     }
 
+    /// H3 : factorise le triptyque commun a la majorite des outils
+    /// d'interaction « fire-and-forget » (right_click, double_click,
+    /// type_text, press_key, key_combo, navigate, hover, drag_drop,
+    /// handle_dialog, upload_file — 10 des 12 sites identifies par l'audit ;
+    /// `click` garde son propre corps pour l'instrumentation `acquire_gate`
+    /// dediee, `scroll` pour la resolution d'ancrage sous le meme gate) :
+    /// acquiert le gate (non instrumente : le bruit de tracer ces 10 outils
+    /// n'apporterait rien de plus qu'un `click`/`screenshot`/`eval_js` deja
+    /// trace, cf. A8), dispatche, puis convertit le resultat via
+    /// `ok_or_unsupported` (E1 : Unsupported -> isError structure ; E3 :
+    /// succes JSON `{ok:true}` au lieu du texte libre `"ok"`).
+    async fn dispatch_ok(&self, cmd: InteractionCommand) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        ok_or_unsupported(self.interaction.dispatch(cmd).await)
+    }
+
     #[tool(description = "Capture un screenshot PNG du viewport de l'app cible (image MCP).")]
     async fn screenshot(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.acquire_gate("screenshot").await;
-        let shot = self.renderer.screenshot().await.map_err(port_to_mcp)?;
+        let shot = match unsupported_aware(self.renderer.screenshot().await) {
+            Ok(v) => v,
+            // La cible ne peut pas capturer (fenetre KWin/xcap introuvable...) :
+            // isError semantique structure, pas une erreur protocolaire (E1).
+            Err(issue) => return issue,
+        };
         let b64 = B64.encode(&shot.bytes);
         // Contenu `image` (et non `text`) : le client MCP affiche le PNG —
         // c'est ce qui rend l'outil utilisable comme « yeux ».
@@ -615,7 +687,12 @@ impl DeveyeMcpServer {
         Parameters(p): Parameters<ScreenshotRegionParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let shot = self.renderer.screenshot().await.map_err(port_to_mcp)?;
+        let shot = match unsupported_aware(self.renderer.screenshot().await) {
+            Ok(v) => v,
+            // La cible ne peut pas capturer (fenetre KWin/xcap introuvable...) :
+            // isError semantique structure, pas une erreur protocolaire (E1).
+            Err(issue) => return issue,
+        };
         let cropped = crop_png(&shot.bytes, p.x, p.y, p.width, p.height).map_err(internal)?;
         let b64 = B64.encode(&cropped);
         Ok(CallToolResult::success(vec![Content::image(
@@ -642,18 +719,22 @@ impl DeveyeMcpServer {
              if (r.width === 0 || r.height === 0) return {{ found: false, reason: 'not_visible' }}; \
              return {{ found: true, x: r.left, y: r.top, width: r.width, height: r.height }}; }})()"
         );
-        let rect = self
-            .evaluator
-            .evaluate(&snippet)
-            .await
-            .map_err(port_to_mcp)?;
+        let rect = match unsupported_aware(self.evaluator.evaluate(&snippet).await) {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         if !rect.get("found").and_then(|v| v.as_bool()).unwrap_or(false) {
             return Ok(json_error(&rect));
         }
         // 2) Capturer puis recadrer. Le PNG peut etre en pixels physiques
         // (HiDPI) alors que le rect est en pixels CSS : on met a l'echelle par
         // le ratio dimensions-PNG / viewport-logique.
-        let shot = self.renderer.screenshot().await.map_err(port_to_mcp)?;
+        let shot = match unsupported_aware(self.renderer.screenshot().await) {
+            Ok(v) => v,
+            // La cible ne peut pas capturer (fenetre KWin/xcap introuvable...) :
+            // isError semantique structure, pas une erreur protocolaire (E1).
+            Err(issue) => return issue,
+        };
         let (pw, ph) = png_dimensions(&shot.bytes).map_err(internal)?;
         let scale_x = if shot.viewport.width > 0 {
             pw as f64 / shot.viewport.width as f64
@@ -686,7 +767,12 @@ impl DeveyeMcpServer {
         Parameters(p): Parameters<AssertVisualParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let shot = self.renderer.screenshot().await.map_err(port_to_mcp)?;
+        let shot = match unsupported_aware(self.renderer.screenshot().await) {
+            Ok(v) => v,
+            // La cible ne peut pas capturer (fenetre KWin/xcap introuvable...) :
+            // isError semantique structure, pas une erreur protocolaire (E1).
+            Err(issue) => return issue,
+        };
         // Recadrage optionnel : les 4 bornes doivent etre fournies ensemble.
         // B10 : `Cow` evite de cloner tout le PNG quand aucun recadrage n'est
         // demande (chemin le plus frequent) — seul le cas recadre alloue,
@@ -734,32 +820,33 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Effectue un clic gauche sur le viewport de l'app cible aux coordonnées absolues fournies."
+        description = "Effectue un clic sur le viewport de l'app cible aux coordonnées absolues fournies. `button` optionnel (E6) : \"left\" (défaut), \"right\", \"middle\"."
     )]
     async fn click(
         &self,
         Parameters(p): Parameters<ClickParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.acquire_gate("click").await;
-        let cmd = InteractionCommand::click(Position::new(p.x, p.y));
-        self.interaction.dispatch(cmd).await.map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
+        let button = parse_mouse_button(p.button.as_deref())?;
+        let cmd = InteractionCommand::Click {
+            position: Position::new(p.x, p.y),
+            button,
+        };
+        ok_or_unsupported(self.interaction.dispatch(cmd).await)
     }
 
     #[tool(
-        description = "Effectue un clic DROIT (menu contextuel) sur le viewport de l'app cible aux coordonnées absolues fournies. Déclenche button=right (contextmenu) — ouvre les menus contextuels des UI qui les écoutent."
+        description = "Effectue un clic DROIT (menu contextuel) sur le viewport de l'app cible aux coordonnées absolues fournies. Déclenche button=right (contextmenu) — ouvre les menus contextuels des UI qui les écoutent. Conservé pour compatibilité ; équivalent à click(button: \"right\")."
     )]
     async fn right_click(
         &self,
-        Parameters(p): Parameters<ClickParams>,
+        Parameters(p): Parameters<PositionParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
         let cmd = InteractionCommand::Click {
             position: Position::new(p.x, p.y),
             button: MouseButton::Right,
         };
-        self.interaction.dispatch(cmd).await.map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
+        self.dispatch_ok(cmd).await
     }
 
     #[tool(
@@ -767,14 +854,10 @@ impl DeveyeMcpServer {
     )]
     async fn double_click(
         &self,
-        Parameters(p): Parameters<ClickParams>,
+        Parameters(p): Parameters<PositionParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
-        self.interaction
-            .dispatch(InteractionCommand::double_click(Position::new(p.x, p.y)))
+        self.dispatch_ok(InteractionCommand::double_click(Position::new(p.x, p.y)))
             .await
-            .map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
     #[tool(description = "Saisit du texte au focus courant de l'app cible.")]
@@ -782,57 +865,40 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<TypeParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
-        self.interaction
-            .dispatch(InteractionCommand::type_text(p.text))
+        self.dispatch_ok(InteractionCommand::type_text(p.text))
             .await
-            .map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
     #[tool(
-        description = "Presse une touche unique (keydown + keyup) au focus courant : Enter, Tab, Escape, ArrowDown, F5… Marche sur toutes les cibles, y compris kwin-eis (où eval_js est indisponible). Noms W3C en CDP (Enter, ArrowDown) ; noms XKB en kwin-eis (Return, Down) ; les noms communs (Tab, Escape, F5) passent partout."
+        description = "Presse une touche unique (keydown + keyup) au focus courant : Enter, Tab, Escape, ArrowDown, F5… Marche sur toutes les cibles, y compris kwin-eis (où eval_js est indisponible). Noms W3C en CDP et sdk (Enter, ArrowDown) ; noms XKB en kwin-eis (Return, Down) ; les noms communs (Tab, Escape, F5) passent partout (E7)."
     )]
     async fn press_key(
         &self,
         Parameters(p): Parameters<PressKeyParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
-        self.interaction
-            .dispatch(InteractionCommand::key(p.key))
-            .await
-            .map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
+        self.dispatch_ok(InteractionCommand::key(p.key)).await
     }
 
     #[tool(
-        description = "Combinaison de touches : maintient les modificateurs (ctrl/shift/alt/meta) pendant la frappe de `key`, puis les relâche. Ctrl+S, Ctrl+Z, Ctrl+Shift+P, Alt+F4… Marche sur toutes les cibles, y compris kwin-eis (events OS-level : les raccourcis du toolkit se déclenchent). `press_key` seul ne porte aucun modificateur."
+        description = "Combinaison de touches : maintient les modificateurs (ctrl/shift/alt/meta) pendant la frappe de `key`, puis les relâche. Ctrl+S, Ctrl+Z, Ctrl+Shift+P, Alt+F4… Marche sur toutes les cibles, y compris kwin-eis (events OS-level : les raccourcis du toolkit se déclenchent). `press_key` seul ne porte aucun modificateur. Noms de touche W3C en CDP et sdk, XKB en kwin-eis (E7, cf. KeyComboParams)."
     )]
     async fn key_combo(
         &self,
         Parameters(p): Parameters<KeyComboParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
-        self.interaction
-            .dispatch(InteractionCommand::key_combo(p.modifiers, p.key))
+        self.dispatch_ok(InteractionCommand::key_combo(p.modifiers, p.key))
             .await
-            .map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
     #[tool(
-        description = "Navigue vers une route logique exposée par l'app cible (routeur du SDK opt-in). Interface découvrable, à préférer à un eval_js sur le hook interne `window.__deveye_router__`. Indisponible en kwin-eis (pas de routeur applicatif OS-level)."
+        description = "Navigue vers une route logique exposée par l'app cible (routeur du SDK opt-in). Interface découvrable, à préférer à un eval_js sur le hook interne `window.__deveye_router__`. Indisponible en kwin-eis (pas de routeur applicatif OS-level) : renvoie un résultat isError structuré `{ reason: \"unsupported\" }` plutôt qu'une erreur protocolaire (E1)."
     )]
     async fn navigate(
         &self,
         Parameters(p): Parameters<NavigateParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
-        self.interaction
-            .dispatch(InteractionCommand::navigate(p.route))
+        self.dispatch_ok(InteractionCommand::navigate(p.route))
             .await
-            .map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
     #[tool(
@@ -840,29 +906,24 @@ impl DeveyeMcpServer {
     )]
     async fn hover(
         &self,
-        Parameters(p): Parameters<ClickParams>,
+        Parameters(p): Parameters<PositionParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
-        self.interaction
-            .dispatch(InteractionCommand::hover(Position::new(p.x, p.y)))
+        self.dispatch_ok(InteractionCommand::hover(Position::new(p.x, p.y)))
             .await
-            .map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
     #[tool(
-        description = "Évalue une expression JavaScript dans la page cible et renvoie la valeur JSON. Promises supportées (awaitPromise=true)."
+        description = "Évalue une expression JavaScript dans la page cible et renvoie la valeur JSON. Promises supportées (awaitPromise=true). Indisponible en kwin-eis (pas de WebView) : renvoie un résultat isError structuré `{ reason: \"unsupported\" }` plutôt qu'une erreur protocolaire (E1)."
     )]
     async fn eval_js(
         &self,
         Parameters(p): Parameters<EvalParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.acquire_gate("eval_js").await;
-        let value = self
-            .evaluator
-            .evaluate(&p.expression)
-            .await
-            .map_err(port_to_mcp)?;
+        let value = match unsupported_aware(self.evaluator.evaluate(&p.expression).await) {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         Ok(json_success(&value))
     }
 
@@ -903,11 +964,10 @@ impl DeveyeMcpServer {
     /// ou `{{ok: false, reason}}`) puis clique au centre trouvé par vrais
     /// événements souris CDP — mêmes événements qu'un humain, focus compris.
     async fn click_located(&self, snippet: &str) -> Result<CallToolResult, McpError> {
-        let value = self
-            .evaluator
-            .evaluate(snippet)
-            .await
-            .map_err(port_to_mcp)?;
+        let value = match unsupported_aware(self.evaluator.evaluate(snippet).await) {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         let found = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
         if !found {
             // H1 : element absent ou invisible — erreur semantique (isError=true)
@@ -916,21 +976,27 @@ impl DeveyeMcpServer {
         }
         let x = value.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let y = value.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        self.interaction
-            .dispatch(InteractionCommand::click(Position::new(x, y)))
-            .await
-            .map_err(port_to_mcp)?;
-        Ok(json_success(
-            &serde_json::json!({ "ok": true, "x": x, "y": y }),
-        ))
+        match unsupported_aware(
+            self.interaction
+                .dispatch(InteractionCommand::click(Position::new(x, y)))
+                .await,
+        ) {
+            Ok(()) => Ok(json_success(
+                &serde_json::json!({ "ok": true, "x": x, "y": y }),
+            )),
+            Err(issue) => issue,
+        }
     }
 
     #[tool(
-        description = "Récupère le DOM courant de l'app cible (JSON sérialisé). Garde-fou (B1) : si la sérialisation dépasse ~100 Ko, renvoie une erreur MCP explicite (`isError`) au lieu de saturer le contexte de l'agent — préférer find_element/assert_selector/eval_js pour cibler un élément précis."
+        description = "Récupère le DOM courant de l'app cible (JSON sérialisé). Garde-fou (B1) : si la sérialisation dépasse ~100 Ko, renvoie une erreur MCP explicite (`isError`) au lieu de saturer le contexte de l'agent — préférer find_element/assert_selector/eval_js pour cibler un élément précis. Indisponible en kwin-eis (pas de WebView) : résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
     )]
     async fn dom(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let tree = self.inspector.dom_snapshot().await.map_err(port_to_mcp)?;
+        let tree = match unsupported_aware(self.inspector.dom_snapshot().await) {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         let serialized = serde_json::to_string(&tree.tree).unwrap_or_else(|_| "null".to_string());
         if let Some(payload) = dom_size_guard(serialized.len()) {
             return Ok(json_error(&payload));
@@ -942,20 +1008,23 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé). `keys` optionnel restreint la réponse à ce sous-ensemble de clés (les clés absentes du state sont silencieusement omises) — réduit le coût en tokens quand seules quelques clés intéressent l'agent ; absent ou vide, renvoie tout le state (comportement inchangé)."
+        description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé). `keys` optionnel restreint la réponse à ce sous-ensemble de clés (les clés absentes du state sont silencieusement omises) — réduit le coût en tokens quand seules quelques clés intéressent l'agent ; absent ou vide, renvoie tout le state (comportement inchangé). Si la cible ne peut pas exposer de state, résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
     )]
     async fn state(
         &self,
         Parameters(p): Parameters<StateParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let dump = self.inspector.state_snapshot().await.map_err(port_to_mcp)?;
+        let dump = match unsupported_aware(self.inspector.state_snapshot().await) {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         let filtered = filter_state_entries(&dump.entries, p.keys.as_deref());
         Ok(json_success(&filtered))
     }
 
     #[tool(
-        description = "Assertion sur le state SDK : `expected` est un objet `{ clé: valeur }` ; chaque clé doit exister dans le state avec exactement cette valeur. Renvoie `{ ok, mismatches: [{ key, expected, actual }] }` ; `isError` si au moins une diverge. Symétrique de assert_selector, mais sur la logique métier."
+        description = "Assertion sur le state SDK : `expected` est un objet `{ clé: valeur }` ; chaque clé doit exister dans le state avec exactement cette valeur. Renvoie `{ ok, mismatches: [{ key, expected, actual }] }` ; `isError` si au moins une diverge. Symétrique de assert_selector, mais sur la logique métier. Si la cible ne peut pas exposer de state (pas de SDK), résultat isError structuré `{ reason: \"unsupported\" }` (E1) — distinct d'une divergence d'assertion."
     )]
     async fn assert_state(
         &self,
@@ -971,7 +1040,10 @@ impl DeveyeMcpServer {
                 })));
             }
         };
-        let dump = self.inspector.state_snapshot().await.map_err(port_to_mcp)?;
+        let dump = match unsupported_aware(self.inspector.state_snapshot().await) {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         let mut mismatches = Vec::new();
         for (key, want) in expected {
             let actual = dump.entries.get(key);
@@ -1052,7 +1124,11 @@ impl DeveyeMcpServer {
             visible: p.visible.unwrap_or(false),
             negate: p.negate.unwrap_or(false),
         };
-        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(30_000));
+        let budget = Duration::from_millis(
+            p.timeout_ms
+                .unwrap_or(WAIT_DEFAULT_MS)
+                .min(WAIT_DOM_TIMEOUT_MAX_MS),
+        );
         let outcome = self
             .wait_condition
             .wait_until(predicate, budget)
@@ -1085,7 +1161,11 @@ impl DeveyeMcpServer {
             selector: p.selector,
             visible: p.visible.unwrap_or(false),
         };
-        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(30_000));
+        let budget = Duration::from_millis(
+            p.timeout_ms
+                .unwrap_or(WAIT_DEFAULT_MS)
+                .min(WAIT_DOM_TIMEOUT_MAX_MS),
+        );
         let outcome = self
             .wait_condition
             .wait_until(predicate, budget)
@@ -1126,11 +1206,10 @@ impl DeveyeMcpServer {
                attributes: attrs, \
                value_prop: ('value' in el) ? el.value : null }}; }})()"
         );
-        let value = self
-            .evaluator
-            .evaluate(&snippet)
-            .await
-            .map_err(port_to_mcp)?;
+        let value = match unsupported_aware(self.evaluator.evaluate(&snippet).await) {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         Ok(json_success(&value))
     }
 
@@ -1149,11 +1228,10 @@ impl DeveyeMcpServer {
              const text = count > 0 ? (nodes[0].innerText || nodes[0].textContent || '').trim() : null; \
              return {{ count, text }}; }})()"
         );
-        let value = self
-            .evaluator
-            .evaluate(&snippet)
-            .await
-            .map_err(port_to_mcp)?;
+        let value = match unsupported_aware(self.evaluator.evaluate(&snippet).await) {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         let actual_count = value.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let actual_text = value
             .get("text")
@@ -1184,14 +1262,18 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<WaitConditionParams>,
     ) -> Result<CallToolResult, McpError> {
-        const DEFAULT_MS: u64 = 5_000;
-        const MAX_MS: u64 = 60_000;
         // M1 : le gate n'est PAS tenu pendant wait_until (boucle de polling
-        // jusqu'a MAX_MS). wait_until est purement observationnel (aucune
-        // interaction UI) — le tenir bloquerait tous les autres outils MCP
-        // pendant jusqu'a 60 s.
+        // jusqu'a WAIT_TIMEOUT_MAX_MS). wait_until est purement
+        // observationnel (aucune interaction UI) — le tenir bloquerait tous
+        // les autres outils MCP pendant jusqu'a 60 s. E4 : constantes
+        // partagees plutot que des `DEFAULT_MS`/`MAX_MS` locaux redefinis
+        // ici (et divergents des autres `wait_*`).
         let predicate: WaitPredicate = serde_json::from_value(p.predicate).map_err(internal)?;
-        let timeout = Duration::from_millis(p.timeout_ms.unwrap_or(DEFAULT_MS).min(MAX_MS));
+        let timeout = Duration::from_millis(
+            p.timeout_ms
+                .unwrap_or(WAIT_DEFAULT_MS)
+                .min(WAIT_TIMEOUT_MAX_MS),
+        );
         let outcome = self
             .wait_condition
             .wait_until(predicate, timeout)
@@ -1223,7 +1305,11 @@ impl DeveyeMcpServer {
             contains: p.contains,
             level_min,
         };
-        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(60_000));
+        let budget = Duration::from_millis(
+            p.timeout_ms
+                .unwrap_or(WAIT_DEFAULT_MS)
+                .min(WAIT_TIMEOUT_MAX_MS),
+        );
         let outcome = self
             .wait_condition
             .wait_until(predicate, budget)
@@ -1250,7 +1336,11 @@ impl DeveyeMcpServer {
             height: p.height,
             threshold_ms: p.threshold_ms.unwrap_or(300),
         };
-        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(60_000));
+        let budget = Duration::from_millis(
+            p.timeout_ms
+                .unwrap_or(WAIT_DEFAULT_MS)
+                .min(WAIT_TIMEOUT_MAX_MS),
+        );
         let outcome = self
             .wait_condition
             .wait_until(predicate, budget)
@@ -1270,7 +1360,11 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<WaitTargetAliveParams>,
     ) -> Result<CallToolResult, McpError> {
-        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(60_000));
+        let budget = Duration::from_millis(
+            p.timeout_ms
+                .unwrap_or(WAIT_DEFAULT_MS)
+                .min(WAIT_TIMEOUT_MAX_MS),
+        );
         let outcome = self
             .wait_condition
             .wait_until(WaitPredicate::TargetAlive {}, budget)
@@ -1284,49 +1378,39 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Glisse-dépose de (from_x, from_y) vers (to_x, to_y). En CDP : séquence souris native (press/déplacements/release) ; via le pont SDK : PointerEvent JS (support selon le framework de l'app). Renvoie \"ok\"."
+        description = "Glisse-dépose de (from_x, from_y) vers (to_x, to_y). En CDP : séquence souris native (press/déplacements/release) ; via le pont SDK : PointerEvent JS (support selon le framework de l'app)."
     )]
     async fn drag_drop(
         &self,
         Parameters(p): Parameters<DragDropParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
         let cmd = InteractionCommand::drag_drop(
             Position::new(p.from_x, p.from_y),
             Position::new(p.to_x, p.to_y),
         );
-        self.interaction.dispatch(cmd).await.map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
+        self.dispatch_ok(cmd).await
     }
 
     #[tool(
-        description = "Répond à une boîte de dialogue JS (`alert`/`confirm`/`prompt`) : `accept` (OK/Cancel), `prompt_text` = texte pour un `prompt`. CDP-only — pendant un dialog le moteur JS est suspendu, donc `eval_js` est impossible : c'est la seule issue. Renvoie une erreur `Unsupported` en sdk/kwin-eis."
+        description = "Répond à une boîte de dialogue JS (`alert`/`confirm`/`prompt`) : `accept` (OK/Cancel), `prompt_text` = texte pour un `prompt`. CDP-only — pendant un dialog le moteur JS est suspendu, donc `eval_js` est impossible : c'est la seule issue. En sdk/kwin-eis, résultat isError structuré `{ reason: \"unsupported\" }` plutôt qu'une erreur protocolaire (E1)."
     )]
     async fn handle_dialog(
         &self,
         Parameters(p): Parameters<HandleDialogParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
-        self.interaction
-            .dispatch(InteractionCommand::handle_dialog(p.accept, p.prompt_text))
+        self.dispatch_ok(InteractionCommand::handle_dialog(p.accept, p.prompt_text))
             .await
-            .map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
     #[tool(
-        description = "Renseigne les fichiers d'un `input[type=file]` (sélecteur CSS + chemins absolus). CDP-only (`DOM.setFileInputFiles`) : la sécurité navigateur interdit de le faire en JS, donc non contournable par eval_js. Renvoie une erreur `Unsupported` en sdk/kwin-eis."
+        description = "Renseigne les fichiers d'un `input[type=file]` (sélecteur CSS + chemins absolus). CDP-only (`DOM.setFileInputFiles`) : la sécurité navigateur interdit de le faire en JS, donc non contournable par eval_js. En sdk/kwin-eis, résultat isError structuré `{ reason: \"unsupported\" }` plutôt qu'une erreur protocolaire (E1)."
     )]
     async fn upload_file(
         &self,
         Parameters(p): Parameters<UploadFileParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
-        self.interaction
-            .dispatch(InteractionCommand::upload_file(p.selector, p.paths))
+        self.dispatch_ok(InteractionCommand::upload_file(p.selector, p.paths))
             .await
-            .map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
     #[tool(
@@ -1342,6 +1426,9 @@ impl DeveyeMcpServer {
         // Ancrage : centre du viewport si x ou y manquant. Resolu via le
         // renderer ; en cas d'echec (cible sans dimensions exploitables), on
         // retombe sur (0, 0) — sans incidence en kwin-eis (ancrage ignore).
+        // Le gate reste tenu pendant cette resolution (contrairement a
+        // `dispatch_ok`) : garder le meme perimetre de serialisation qu'avant
+        // ce sprint plutot que de le retrecir a la seule ligne de dispatch.
         let (cx, cy) = if p.x.is_none() || p.y.is_none() {
             match self.renderer.viewport_size().await {
                 Ok(size) => (size.width as i32 / 2, size.height as i32 / 2),
@@ -1351,11 +1438,11 @@ impl DeveyeMcpServer {
             (0, 0)
         };
         let anchor = Position::new(p.x.unwrap_or(cx), p.y.unwrap_or(cy));
-        self.interaction
-            .dispatch(InteractionCommand::scroll(anchor, dx, dy))
-            .await
-            .map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
+        ok_or_unsupported(
+            self.interaction
+                .dispatch(InteractionCommand::scroll(anchor, dx, dy))
+                .await,
+        )
     }
 
     #[tool(
@@ -1397,58 +1484,63 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Donne le focus OS à une fenêtre (par sous-chaîne de titre, ou la fenêtre --screencap-window par défaut). Crucial en kwin-eis : KWin EIS route les événements vers la fenêtre active ; une notification ou un dialog système peut détourner les clics sans erreur. À appeler avant une séquence d'interaction. Renvoie `{ ok, title }`. Nécessite KDE/Wayland (KWin Scripting) ; `Unsupported` sinon."
+        description = "Donne le focus OS à une fenêtre (par sous-chaîne de titre, ou la fenêtre --screencap-window par défaut). Crucial en kwin-eis : KWin EIS route les événements vers la fenêtre active ; une notification ou un dialog système peut détourner les clics sans erreur. À appeler avant une séquence d'interaction. Renvoie `{ ok, title }`. Nécessite KDE/Wayland (KWin Scripting) ; sinon résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
     )]
     async fn focus_window(
         &self,
         Parameters(p): Parameters<FocusWindowParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let title = self
-            .window_manager
-            .activate(p.title_pattern.as_deref())
-            .await
-            .map_err(port_to_mcp)?;
+        let title = match unsupported_aware(
+            self.window_manager
+                .activate(p.title_pattern.as_deref())
+                .await,
+        ) {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         Ok(json_success(
             &serde_json::json!({ "ok": true, "title": title }),
         ))
     }
 
     #[tool(
-        description = "Renvoie la géométrie écran `{ x, y, width, height }` de la fenêtre dont le titre contient `title` (ou la fenêtre `--screencap-window` par défaut) via KWin Scripting. Complète `find_element`/`eval_js` (indisponibles en kwin-eis, rendu natif) : convertit un rect DOM en coordonnées écran absolues pour un clic OS-level (EIS) hors du viewport webview. Nécessite KDE/Wayland ; `Unsupported` sinon."
+        description = "Renvoie la géométrie écran `{ x, y, width, height }` de la fenêtre dont le titre contient `title` (ou la fenêtre `--screencap-window` par défaut) via KWin Scripting. Complète `find_element`/`eval_js` (indisponibles en kwin-eis, rendu natif) : convertit un rect DOM en coordonnées écran absolues pour un clic OS-level (EIS) hors du viewport webview. Nécessite KDE/Wayland ; sinon résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
     )]
     async fn window_geometry(
         &self,
         Parameters(p): Parameters<WindowGeometryParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let rect = self
-            .window_geometry
-            .geometry(p.title.as_deref())
-            .await
-            .map_err(port_to_mcp)?;
+        let rect = match unsupported_aware(self.window_geometry.geometry(p.title.as_deref()).await)
+        {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         Ok(json_success(&rect))
     }
 
     #[tool(
-        description = "Lit le texte du presse-papiers de la session (OS-level via wl-paste sous Wayland). Renvoie `{ text }`. Fiable là où `navigator.clipboard.readText()` lève NotAllowedError (contexte automatisé) et en kwin-eis (pas de WebView). `Unsupported` hors Wayland."
+        description = "Lit le texte du presse-papiers de la session (OS-level via wl-paste sous Wayland). Renvoie `{ text }`. Fiable là où `navigator.clipboard.readText()` lève NotAllowedError (contexte automatisé) et en kwin-eis (pas de WebView). Hors Wayland, résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
     )]
     async fn clipboard_get(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let text = self.clipboard.get().await.map_err(port_to_mcp)?;
+        let text = match unsupported_aware(self.clipboard.get().await) {
+            Ok(v) => v,
+            Err(issue) => return issue,
+        };
         Ok(json_success(&serde_json::json!({ "text": text })))
     }
 
     #[tool(
-        description = "Place du texte dans le presse-papiers de la session (OS-level via wl-copy sous Wayland). Combiné à key_combo Ctrl+V, permet de saisir du texte long/Unicode sans frappe touche par touche. `Unsupported` hors Wayland."
+        description = "Place du texte dans le presse-papiers de la session (OS-level via wl-copy sous Wayland). Combiné à key_combo Ctrl+V, permet de saisir du texte long/Unicode sans frappe touche par touche. Hors Wayland, résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
     )]
     async fn clipboard_set(
         &self,
         Parameters(p): Parameters<ClipboardSetParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        self.clipboard.set(&p.text).await.map_err(port_to_mcp)?;
-        Ok(CallToolResult::success(vec![Content::text("ok")]))
+        ok_or_unsupported(self.clipboard.set(&p.text).await)
     }
 
     #[tool(
@@ -1561,6 +1653,76 @@ fn json_error<T: Serialize>(value: &T) -> CallToolResult {
     )])
 }
 
+/// E3 : sortie succes minimale des outils « fire-and-forget » (click,
+/// type_text, scroll...) — JSON structure `{ "ok": true }` plutot que le
+/// texte libre `"ok"` d'avant ce sprint, incoherent avec le reste de la
+/// surface (assert_*, find_element, wait_*...) qui renvoie deja du JSON.
+fn ok_result() -> CallToolResult {
+    json_success(&serde_json::json!({ "ok": true }))
+}
+
+/// E1 : payload `isError` structure pour `PortError::Unsupported` — une
+/// capacite absente sur la cible active (webview en kwin-eis, session
+/// Wayland absente, KDE/Wayland absent...) est un cas NORMAL, pas une
+/// panne : un resultat semantique, coherent avec le contrat `isError` deja
+/// applique par les `assert_*`/`wait_*` — plutot que l'erreur JSON-RPC
+/// opaque (-32603 `internal_error`) qu'aplatissait `port_to_mcp` jusqu'ici.
+fn unsupported_error(detail: impl Into<String>) -> CallToolResult {
+    json_error(&serde_json::json!({
+        "ok": false,
+        "reason": "unsupported",
+        "detail": detail.into(),
+    }))
+}
+
+/// E1 : deroule un `PortResult<T>` en distinguant « capacite absente sur la
+/// cible active » (`PortError::Unsupported`, cf. [`unsupported_error`]) de
+/// toute autre panne de port (mappee par [`port_to_mcp`]). Sur `Ok`, renvoie
+/// la valeur telle quelle ; sur erreur, renvoie l'issue MCP a faire remonter
+/// directement (soit un resultat isError structure, soit une erreur
+/// JSON-RPC classique) — a consommer par
+/// `match unsupported_aware(...) { Ok(v) => v, Err(issue) => return issue }`.
+/// Impossible d'exprimer ce filtrage avec `?` seul : les deux issues
+/// d'echec n'ont pas le meme type de retour cote outil MCP (`Ok(CallToolResult)`
+/// vs `Err(McpError)`), d'ou ce `Result` imbrique explicite.
+fn unsupported_aware<T>(result: PortResult<T>) -> Result<T, Result<CallToolResult, McpError>> {
+    match result {
+        Ok(v) => Ok(v),
+        Err(PortError::Unsupported(detail)) => Err(Ok(unsupported_error(detail))),
+        Err(e) => Err(Err(port_to_mcp(e))),
+    }
+}
+
+/// E1/E3/H3 : variante de [`unsupported_aware`] pour les ports qui ne
+/// produisent pas de valeur utile (`PortResult<()>` — `InteractionSink::dispatch`,
+/// `Clipboard::set`) : succes -> [`ok_result`], `Unsupported` -> [`unsupported_error`],
+/// autre erreur -> [`port_to_mcp`]. Utilise par [`DeveyeMcpServer::dispatch_ok`]
+/// et par les outils dont le corps differe legerement (`click`, `scroll`,
+/// `clipboard_set`).
+fn ok_or_unsupported(result: PortResult<()>) -> Result<CallToolResult, McpError> {
+    match unsupported_aware(result) {
+        Ok(()) => Ok(ok_result()),
+        Err(issue) => issue,
+    }
+}
+
+/// E6 : parse le parametre `button` optionnel de `click` (insensible a la
+/// casse) en `MouseButton` ; absent ou chaine vide => `Left` (comportement
+/// inchange, retro-compatible). Une valeur non reconnue est une erreur
+/// protocolaire explicite (-32602 `invalid_params`) plutot qu'un silencieux
+/// retour au bouton gauche.
+fn parse_mouse_button(button: Option<&str>) -> Result<MouseButton, McpError> {
+    match button.map(str::to_lowercase).as_deref() {
+        None | Some("") | Some("left") => Ok(MouseButton::Left),
+        Some("right") => Ok(MouseButton::Right),
+        Some("middle") => Ok(MouseButton::Middle),
+        Some(other) => Err(McpError::invalid_params(
+            format!("button invalide : {other:?} (attendu left/right/middle)"),
+            None,
+        )),
+    }
+}
+
 /// A7 : decision pure d'`assert_selector`, extraite pour etre testable sans
 /// I/O. Le garde precedent (`actual_count >= 1`) ecrasait toute demande
 /// `expected_count: Some(0)` — l'assertion d'ABSENCE etait inexprimable, elle
@@ -1643,8 +1805,17 @@ fn internal<E: std::fmt::Display>(err: E) -> McpError {
 ///   sont imputables a l'appelant MCP (parametres incorrects) -> -32602
 ///   `invalid_params`, comme pour toute erreur de requete mal formee.
 /// - tout le reste (Render, Inspect, Log, Network, Protocol, Console, Timeout,
-///   Unsupported) reste une panne d'infra cote adapter/cible -> -32603
-///   `internal_error`, code inchange.
+///   et `Unsupported` s'il atteint directement cette fonction) reste une
+///   panne d'infra cote adapter/cible -> -32603 `internal_error`, code
+///   inchange.
+///
+/// E1 : sur les outils ou `Unsupported` est un cas normal (capacite absente
+/// sur la cible active — eval_js/dom/state/clipboard/focus_window/
+/// window_geometry/handle_dialog/upload_file/navigate...), l'appelant
+/// intercepte `Unsupported` **avant** `port_to_mcp` via [`unsupported_aware`]
+/// / [`ok_or_unsupported`] pour le router vers un resultat isError structure
+/// plutot que cette erreur protocolaire — cette fonction ne voit alors
+/// jamais la variante pour ces outils-la.
 ///
 /// Portage du banc d'essai Chronos du 28/06 (audit C2-c) : verifie en
 /// conditions reelles que « route inconnue » y remontait -32602 au lieu du
@@ -1990,5 +2161,585 @@ mod tests {
         assert!(kept.is_empty());
         assert!(truncated);
         assert_eq!(total, 3);
+    }
+}
+
+/// F-dispatch : le dispatch MCP (gate + routage vers les ports + conversion
+/// du resultat) etait quasi non teste malgre son role central. Module dedie
+/// avec des mocks legers des ports (les seams existent deja via les traits
+/// `deveye_ports`) et un `DeveyeMcpServer` de test construit dessus.
+/// Couvre aussi E1 (`PortError::Unsupported` -> resultat isError structure,
+/// plutot qu'erreur JSON-RPC opaque) sur les traits mockes ici.
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use deveye_core::{
+        CommandDescriptor, ConsoleError, DomTree, LogEvent, Screenshot, Size, StateDump,
+        WaitOutcome, WindowInfo, WindowRect,
+    };
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    // ------------------------------------------------------------------
+    // Mocks « noop » — un par port, juste assez pour construire un
+    // DeveyeMcpServer complet. Chaque test ne remplace que les ports qui
+    // l'interessent via `server_with`.
+    // ------------------------------------------------------------------
+
+    struct NoopRenderer;
+    #[async_trait]
+    impl Renderer for NoopRenderer {
+        async fn screenshot(&self) -> PortResult<Screenshot> {
+            Ok(Screenshot::new_png(vec![0u8; 4], Size::new(2, 2)))
+        }
+        async fn viewport_size(&self) -> PortResult<Size> {
+            Ok(Size::new(2, 2))
+        }
+    }
+
+    struct NoopInteraction;
+    #[async_trait]
+    impl InteractionSink for NoopInteraction {
+        async fn dispatch(&self, _command: InteractionCommand) -> PortResult<()> {
+            Ok(())
+        }
+    }
+
+    struct NoopInspector;
+    #[async_trait]
+    impl AppInspector for NoopInspector {
+        async fn dom_snapshot(&self) -> PortResult<DomTree> {
+            Ok(DomTree::new(serde_json::json!({})))
+        }
+        async fn state_snapshot(&self) -> PortResult<StateDump> {
+            Ok(StateDump::empty())
+        }
+    }
+
+    struct NoopLogSource;
+    #[async_trait]
+    impl LogSource for NoopLogSource {
+        async fn poll(&self) -> PortResult<Vec<LogEvent>> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct NoopEvaluator;
+    #[async_trait]
+    impl JsEvaluator for NoopEvaluator {
+        async fn evaluate(&self, _expression: &str) -> PortResult<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+    }
+
+    struct NoopCommandRouter;
+    #[async_trait]
+    impl CommandRouter for NoopCommandRouter {
+        async fn invoke(
+            &self,
+            route: &str,
+            _payload: serde_json::Value,
+        ) -> PortResult<serde_json::Value> {
+            Err(PortError::Route {
+                route: route.to_string(),
+                message: "aucune commande enregistree (mock)".to_string(),
+            })
+        }
+        async fn list(&self) -> PortResult<Vec<CommandDescriptor>> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct NoopWindowLister;
+    #[async_trait]
+    impl WindowLister for NoopWindowLister {
+        async fn list_windows(&self) -> PortResult<Vec<WindowInfo>> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct NoopConsoleErrors;
+    #[async_trait]
+    impl ConsoleErrorSource for NoopConsoleErrors {
+        async fn drain_console_errors(&self) -> PortResult<Vec<ConsoleError>> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct NoopWaitCondition;
+    #[async_trait]
+    impl WaitCondition for NoopWaitCondition {
+        async fn wait_until(
+            &self,
+            _predicate: WaitPredicate,
+            _timeout: Duration,
+        ) -> PortResult<WaitOutcome> {
+            Ok(WaitOutcome {
+                satisfied: true,
+                elapsed_ms: 0,
+                detail: "mock".to_string(),
+            })
+        }
+    }
+
+    struct NoopWindowManager;
+    #[async_trait]
+    impl WindowManager for NoopWindowManager {
+        async fn activate(&self, _title_substring: Option<&str>) -> PortResult<String> {
+            Ok("mock".to_string())
+        }
+    }
+
+    struct NoopWindowGeometry;
+    #[async_trait]
+    impl WindowGeometry for NoopWindowGeometry {
+        async fn geometry(&self, _title_substring: Option<&str>) -> PortResult<WindowRect> {
+            Ok(WindowRect::new(0, 0, 0, 0))
+        }
+    }
+
+    struct NoopClipboard;
+    #[async_trait]
+    impl Clipboard for NoopClipboard {
+        async fn get(&self) -> PortResult<String> {
+            Ok(String::new())
+        }
+        async fn set(&self, _text: &str) -> PortResult<()> {
+            Ok(())
+        }
+    }
+
+    fn base_ports() -> DeveyePorts {
+        DeveyePorts {
+            renderer: Arc::new(NoopRenderer),
+            interaction: Arc::new(NoopInteraction),
+            inspector: Arc::new(NoopInspector),
+            log_source: Arc::new(NoopLogSource),
+            evaluator: Arc::new(NoopEvaluator),
+            command_router: Arc::new(NoopCommandRouter),
+            window_lister: Arc::new(NoopWindowLister),
+            console_errors: Arc::new(NoopConsoleErrors),
+            wait_condition: Arc::new(NoopWaitCondition),
+            window_manager: Arc::new(NoopWindowManager),
+            window_geometry: Arc::new(NoopWindowGeometry),
+            clipboard: Arc::new(NoopClipboard),
+            target_info: TargetInfo {
+                target: "test".to_string(),
+                eyes: "mock".to_string(),
+                hands: "mock".to_string(),
+                eval_js: true,
+                dom: true,
+                state: true,
+                console_errors: true,
+                list_windows: true,
+                notes: String::new(),
+            },
+        }
+    }
+
+    /// Construit un serveur de test a partir de `base_ports()`, en laissant
+    /// `customize` remplacer les ports qu'un test veut observer/controler.
+    fn server_with(customize: impl FnOnce(&mut DeveyePorts)) -> DeveyeMcpServer {
+        let mut ports = base_ports();
+        customize(&mut ports);
+        DeveyeMcpServer::new(ports)
+    }
+
+    /// Extrait et parse en JSON le premier bloc `Content::text` d'un
+    /// `CallToolResult` — tous les outils testes ici renvoient du JSON (E3).
+    fn body_json(result: &CallToolResult) -> serde_json::Value {
+        let text = result.content[0]
+            .as_text()
+            .expect("contenu texte attendu")
+            .text
+            .clone();
+        serde_json::from_str(&text).expect("JSON attendu")
+    }
+
+    // ------------------------------------------------------------------
+    // (a)/(b) click_selector : element absent (isError, dispatch jamais
+    // appele) / element trouve (clic au centre, dispatch verifie par spy).
+    // ------------------------------------------------------------------
+
+    /// Evaluateur renvoyant une reponse JSON fixe, quel que soit le
+    /// snippet — suffisant en test (pas de moteur JS reel derriere).
+    struct FixedEval(serde_json::Value);
+    #[async_trait]
+    impl JsEvaluator for FixedEval {
+        async fn evaluate(&self, _expression: &str) -> PortResult<serde_json::Value> {
+            Ok(self.0.clone())
+        }
+    }
+
+    /// Evaluateur qui echoue toujours avec `PortError::Unsupported` — simule
+    /// une cible sans WebView (kwin-eis).
+    struct UnsupportedEval(String);
+    #[async_trait]
+    impl JsEvaluator for UnsupportedEval {
+        async fn evaluate(&self, _expression: &str) -> PortResult<serde_json::Value> {
+            Err(PortError::Unsupported(self.0.clone()))
+        }
+    }
+
+    /// Espion `InteractionSink` : enregistre chaque commande dispatchee, pour
+    /// verifier (a) qu'elle n'a JAMAIS ete appelee, ou (b) qu'elle l'a ete
+    /// avec les bons parametres.
+    #[derive(Clone, Default)]
+    struct DispatchSpy {
+        calls: Arc<Mutex<Vec<InteractionCommand>>>,
+    }
+    #[async_trait]
+    impl InteractionSink for DispatchSpy {
+        async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
+            self.calls.lock().unwrap().push(command);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn click_selector_is_error_when_element_absent_and_never_dispatches() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.evaluator = Arc::new(FixedEval(serde_json::json!({
+                "ok": false,
+                "reason": "not_found",
+            })));
+            ports.interaction = Arc::new(spy.clone());
+        });
+        let result = server
+            .click_selector(Parameters(ClickSelectorParams {
+                selector: ".missing".to_string(),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        assert!(
+            spy.calls.lock().unwrap().is_empty(),
+            "interaction.dispatch ne doit jamais etre appele si l'element est absent"
+        );
+    }
+
+    #[tokio::test]
+    async fn click_selector_clicks_at_the_found_center() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.evaluator = Arc::new(FixedEval(serde_json::json!({
+                "ok": true,
+                "x": 42,
+                "y": 84,
+            })));
+            ports.interaction = Arc::new(spy.clone());
+        });
+        let result = server
+            .click_selector(Parameters(ClickSelectorParams {
+                selector: ".present".to_string(),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(false));
+        let calls = spy.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0],
+            InteractionCommand::Click {
+                position: Position::new(42, 84),
+                button: MouseButton::Left,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_mouse_button_maps_all_cases() {
+        // Absent / vide / "left" (toutes casses) => Left (retro-compat).
+        assert_eq!(parse_mouse_button(None).unwrap(), MouseButton::Left);
+        assert_eq!(parse_mouse_button(Some("")).unwrap(), MouseButton::Left);
+        assert_eq!(parse_mouse_button(Some("left")).unwrap(), MouseButton::Left);
+        assert_eq!(parse_mouse_button(Some("LEFT")).unwrap(), MouseButton::Left);
+        assert_eq!(
+            parse_mouse_button(Some("Right")).unwrap(),
+            MouseButton::Right
+        );
+        assert_eq!(
+            parse_mouse_button(Some("MIDDLE")).unwrap(),
+            MouseButton::Middle
+        );
+        // Valeur inconnue => erreur protocolaire (invalid_params), pas un
+        // silencieux repli sur Left.
+        assert!(parse_mouse_button(Some("scroll")).is_err());
+    }
+
+    #[tokio::test]
+    async fn click_dispatches_with_requested_button() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(spy.clone());
+        });
+        let result = server
+            .click(Parameters(ClickParams {
+                x: 10,
+                y: 20,
+                button: Some("right".to_string()),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(false));
+        let calls = spy.calls.lock().unwrap();
+        assert_eq!(
+            calls[0],
+            InteractionCommand::Click {
+                position: Position::new(10, 20),
+                button: MouseButton::Right,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn click_with_invalid_button_is_protocol_error() {
+        let server = server_with(|_| {});
+        let err = server
+            .click(Parameters(ClickParams {
+                x: 0,
+                y: 0,
+                button: Some("nope".to_string()),
+            }))
+            .await;
+        assert!(
+            err.is_err(),
+            "un button invalide doit etre une erreur -32602"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // E1 : PortError::Unsupported -> isError structure (pas une erreur
+    // JSON-RPC opaque), sur les 3 traits mockes ici.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn eval_js_unsupported_becomes_structured_is_error() {
+        let server = server_with(|ports| {
+            ports.evaluator = Arc::new(UnsupportedEval(
+                "eval JS indisponible en mode kwin-eis".to_string(),
+            ));
+        });
+        let result = server
+            .eval_js(Parameters(EvalParams {
+                expression: "1 + 1".to_string(),
+            }))
+            .await
+            .expect("E1 : Unsupported devient un isError semantique, pas une erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        let body = body_json(&result);
+        assert_eq!(body["reason"], "unsupported");
+        assert_eq!(body["detail"], "eval JS indisponible en mode kwin-eis");
+    }
+
+    struct UnsupportedInspectorMock(String);
+    #[async_trait]
+    impl AppInspector for UnsupportedInspectorMock {
+        async fn dom_snapshot(&self) -> PortResult<DomTree> {
+            Err(PortError::Unsupported(self.0.clone()))
+        }
+        async fn state_snapshot(&self) -> PortResult<StateDump> {
+            Err(PortError::Unsupported(self.0.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn dom_unsupported_becomes_structured_is_error() {
+        let server = server_with(|ports| {
+            ports.inspector = Arc::new(UnsupportedInspectorMock(
+                "DOM indisponible en mode kwin-eis".to_string(),
+            ));
+        });
+        let result = server.dom().await.expect("E1 : pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(body_json(&result)["reason"], "unsupported");
+    }
+
+    struct UnsupportedInteraction(String);
+    #[async_trait]
+    impl InteractionSink for UnsupportedInteraction {
+        async fn dispatch(&self, _command: InteractionCommand) -> PortResult<()> {
+            Err(PortError::Unsupported(self.0.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn navigate_unsupported_in_kwin_eis_becomes_structured_is_error() {
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(UnsupportedInteraction(
+                "Navigate necessite un routeur applicatif".to_string(),
+            ));
+        });
+        let result = server
+            .navigate(Parameters(NavigateParams {
+                route: "Agenda".to_string(),
+            }))
+            .await
+            .expect("E1 : pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(body_json(&result)["reason"], "unsupported");
+    }
+
+    // ------------------------------------------------------------------
+    // (c) assert_state rapporte les mismatches.
+    // ------------------------------------------------------------------
+
+    struct FixedState(BTreeMap<String, serde_json::Value>);
+    #[async_trait]
+    impl AppInspector for FixedState {
+        async fn dom_snapshot(&self) -> PortResult<DomTree> {
+            Ok(DomTree::new(serde_json::json!({})))
+        }
+        async fn state_snapshot(&self) -> PortResult<StateDump> {
+            Ok(StateDump::new(self.0.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn assert_state_reports_mismatches() {
+        let mut entries = BTreeMap::new();
+        entries.insert("a".to_string(), serde_json::json!(1));
+        entries.insert("b".to_string(), serde_json::json!(2));
+        let server = server_with(|ports| {
+            ports.inspector = Arc::new(FixedState(entries));
+        });
+        let result = server
+            .assert_state(Parameters(AssertStateParams {
+                expected: serde_json::json!({ "a": 1, "b": 99, "c": 5 }),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        let body = body_json(&result);
+        assert_eq!(body["ok"], false);
+        let mismatches = body["mismatches"].as_array().expect("tableau attendu");
+        assert_eq!(mismatches.len(), 2, "b et c divergent, a est correct");
+        let keys: std::collections::BTreeSet<&str> = mismatches
+            .iter()
+            .map(|m| m["key"].as_str().expect("cle string"))
+            .collect();
+        assert_eq!(
+            keys,
+            ["b", "c"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // (d) le gate serialise : 2 appels concurrents (sur deux ports/outils
+    // differents) ne sont jamais dans leur section critique en meme temps.
+    // ------------------------------------------------------------------
+
+    /// Compteur de sections critiques simultanement en cours. Si le gate ne
+    /// serialisait pas vraiment, deux appels concurrents feraient monter
+    /// `max_observed` a 2 (chacun incremente `current` avant son `sleep`,
+    /// sans attendre l'autre).
+    struct ConcurrencyProbe {
+        current: AtomicUsize,
+        max_observed: AtomicUsize,
+    }
+    impl ConcurrencyProbe {
+        fn new() -> Self {
+            Self {
+                current: AtomicUsize::new(0),
+                max_observed: AtomicUsize::new(0),
+            }
+        }
+        async fn enter_then_wait(&self) {
+            let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_observed.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.current.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    struct ProbedRenderer(Arc<ConcurrencyProbe>);
+    #[async_trait]
+    impl Renderer for ProbedRenderer {
+        async fn screenshot(&self) -> PortResult<Screenshot> {
+            self.0.enter_then_wait().await;
+            Ok(Screenshot::new_png(vec![0u8; 4], Size::new(2, 2)))
+        }
+        async fn viewport_size(&self) -> PortResult<Size> {
+            Ok(Size::new(2, 2))
+        }
+    }
+
+    struct ProbedInspector(Arc<ConcurrencyProbe>);
+    #[async_trait]
+    impl AppInspector for ProbedInspector {
+        async fn dom_snapshot(&self) -> PortResult<DomTree> {
+            self.0.enter_then_wait().await;
+            Ok(DomTree::new(serde_json::json!({})))
+        }
+        async fn state_snapshot(&self) -> PortResult<StateDump> {
+            Ok(StateDump::empty())
+        }
+    }
+
+    #[tokio::test]
+    async fn gate_serializes_two_concurrent_tool_calls() {
+        let probe = Arc::new(ConcurrencyProbe::new());
+        let server = server_with(|ports| {
+            ports.renderer = Arc::new(ProbedRenderer(probe.clone()));
+            ports.inspector = Arc::new(ProbedInspector(probe.clone()));
+        });
+        // `screenshot` passe par `acquire_gate` (instrumente), `dom` par un
+        // `gate.lock()` direct : les deux tiennent le MEME mutex, preuve que
+        // la serialisation couvre bien les 41 outils et pas seulement ceux
+        // instrumentes.
+        let s1 = server.clone();
+        let s2 = server.clone();
+        let (r1, r2) = tokio::join!(async move { s1.screenshot().await }, async move {
+            s2.dom().await
+        });
+        assert!(r1.is_ok());
+        assert!(r2.is_ok());
+        assert_eq!(
+            probe.max_observed.load(Ordering::SeqCst),
+            1,
+            "le gate (max_concurrent==1) doit serialiser : jamais deux outils \
+             a la fois dans leur section critique, meme sur deux ports differents"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // (e) wait_ready : succes immediat / timeout.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn wait_ready_succeeds_immediately_when_state_non_empty() {
+        let mut entries = BTreeMap::new();
+        entries.insert("ready".to_string(), serde_json::json!(true));
+        let server = server_with(|ports| {
+            ports.inspector = Arc::new(FixedState(entries));
+        });
+        let result = server
+            .wait_ready(Parameters(WaitReadyParams { timeout_ms: 1_000 }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(body_json(&result)["ready"], true);
+    }
+
+    #[tokio::test]
+    async fn wait_ready_times_out_when_state_stays_empty() {
+        let server = server_with(|ports| {
+            ports.inspector = Arc::new(FixedState(BTreeMap::new()));
+        });
+        // timeout_ms=0 : des le premier tour de boucle, le state est vide
+        // (pas pret) ET le budget (0 ms) est deja depasse -> retour
+        // immediat sans jamais atteindre le `sleep(200ms)` de la boucle de
+        // polling (test rapide et deterministe, pas de vrai delai).
+        let result = server
+            .wait_ready(Parameters(WaitReadyParams { timeout_ms: 0 }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(body_json(&result)["ready"], false);
     }
 }

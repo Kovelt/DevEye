@@ -1,5 +1,7 @@
 # M1 — adapter-screencap-kwin : yeux fiables sous Wayland natif
 
+> **Note de rectification (audit du 04/07/2026)** : la migration `xcap 0.0.14` → `0.9.6` planifiée dans ce document (section « Changements détaillés » → `Cargo.toml`) n'a été **exécutée que le 04/07/2026** (sprint R3, hygiène CI/packaging), pas au moment de M1. Entre les deux, `adapter-screencap-xcap` est resté sur `xcap 0.0.14` — c'est la source du warning `future-incompat` relevé dans la baseline de l'audit du 04/07. `deveye-adapters/adapter-screencap-xcap/Cargo.toml` porte désormais `xcap = "0.9.6"`. Le reste de ce document (contexte, risques, alternative KWin D-Bus) reste valide tel quel.
+
 ## Objectif
 
 Implémenter le port `Renderer` via l'interface D-Bus `org.kde.KWin.ScreenShot2` (méthode `CaptureWindow` par UUID) afin de capturer des fenêtres graphiques sous KDE/Wayland natif sans passer par XWayland ni par CDP. Le renderer est sélectionné automatiquement selon la variable `XDG_SESSION_TYPE` au démarrage de `deveye-server`.
