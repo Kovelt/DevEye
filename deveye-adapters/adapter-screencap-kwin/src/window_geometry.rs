@@ -2,6 +2,11 @@
 //! hauteur) de la fenêtre dont le `caption` contient une sous-chaîne. Même
 //! mécanique de script éphémère + callback D-Bus que
 //! [`crate::KwinWindowManager`] (cf. [`crate::kwin_bridge`]).
+//!
+//! Résolution passée par [`crate::resolve_cache`] (TTL court) : le cache est
+//! partagé avec [`crate::KwinRenderer`] (même UUID + géométrie sous-jacents),
+//! donc un `screenshot`/`viewport_size`/`window_origin` recent sur la même
+//! fenêtre évite ici tout aller-retour D-Bus.
 
 use async_trait::async_trait;
 use zbus::Connection;
@@ -11,6 +16,7 @@ use deveye_ports::{PortError, PortResult, WindowGeometry};
 
 use crate::error::KwinScreencapError;
 use crate::kwin_bridge::{run_kwin_script, BRIDGE_IFACE, BRIDGE_PATH};
+use crate::resolve_cache::{self, ResolvedWindow};
 
 /// Lit la géométrie écran d'une fenêtre KDE/Wayland via KWin Scripting.
 #[derive(Clone, Debug)]
@@ -40,6 +46,13 @@ impl WindowGeometry for KwinWindowGeometry {
             ));
         }
 
+        // NE LIT PAS le cache : `window_geometry` renvoie des coordonnées que
+        // l'agent exploite pour DÉCIDER (calcul d'un clic, « la fenêtre a-t-elle
+        // bougé ? »). Une fenêtre fermée-rouverte au même titre reçoit un
+        // nouvel `internalId` et souvent une autre géométrie ; servir une entrée
+        // périmée donnerait un rect faux SANS erreur (revue P5). Cet outil est
+        // rare (pas un chemin chaud) : on résout toujours frais. On ÉCRIT quand
+        // même le résultat pour qu'un `screenshot` proche en profite.
         let conn = Connection::session()
             .await
             .map_err(|e| PortError::Render(format!("D-Bus session : {e}")))?;
@@ -49,19 +62,32 @@ impl WindowGeometry for KwinWindowGeometry {
             .ok_or_else(|| PortError::Render("connexion D-Bus sans nom unique".to_string()))?;
 
         let script = build_geometry_script(needle, &dest);
-        let (found, rect_str) = run_kwin_script(&conn, "deveye-geometry", &script).await?;
+        let (uuid, rect_str) = run_kwin_script(&conn, "deveye-geometry", &script).await?;
 
-        if found.is_empty() {
+        if uuid.is_empty() {
+            resolve_cache::invalidate(needle).await;
             return Err(KwinScreencapError::WindowNotFound(needle.to_string()).into());
         }
-        parse_rect(&rect_str)
-            .ok_or_else(|| PortError::Render(format!("geometrie KWin illisible : {rect_str:?}")))
+        let rect = parse_rect(&rect_str)
+            .ok_or_else(|| PortError::Render(format!("geometrie KWin illisible : {rect_str:?}")))?;
+        resolve_cache::put(
+            needle,
+            ResolvedWindow {
+                uuid,
+                rect: rect.clone(),
+            },
+        )
+        .await;
+        Ok(rect)
     }
 }
 
 /// Génère le script KWin qui trouve la fenêtre par titre et renvoie sa
 /// `frameGeometry` en `"x,y,largeur,hauteur"` via `callDBus` ; le premier
-/// retour est le `caption` trouvé (vide si aucune fenêtre ne correspond).
+/// retour est l'`internalId` (UUID KWin) de la fenêtre trouvée (vide si
+/// aucune fenêtre ne correspond) — même convention que
+/// [`crate::renderer::KwinRenderer`], ce qui permet de partager le cache de
+/// résolution entre les deux.
 fn build_geometry_script(needle: &str, dest: &str) -> String {
     let needle_js = serde_json::to_string(&needle.to_lowercase()).expect("string serialise");
     let dest_js = serde_json::to_string(dest).expect("string serialise");
@@ -71,12 +97,12 @@ var needle = {needle_js};
 var list = (typeof workspace.windowList === "function") ? workspace.windowList()
          : (typeof workspace.clientList === "function") ? workspace.clientList()
          : workspace.stackingOrder;
-var found = "";
+var uuid = "";
 var rect = "0,0,0,0";
 for (var i = 0; i < list.length; i++) {{
     var w = list[i];
     if (String(w.caption).toLowerCase().indexOf(needle) !== -1) {{
-        found = String(w.caption);
+        uuid = String(w.internalId);
         var g = w.frameGeometry;
         if (g) {{
             rect = Math.round(g.x) + "," + Math.round(g.y) + "," + Math.round(g.width) + "," + Math.round(g.height);
@@ -84,7 +110,7 @@ for (var i = 0; i < list.length; i++) {{
         break;
     }}
 }}
-callDBus(dest, "{BRIDGE_PATH}", "{BRIDGE_IFACE}", "Report", found, rect);
+callDBus(dest, "{BRIDGE_PATH}", "{BRIDGE_IFACE}", "Report", uuid, rect);
 "#
     )
 }
@@ -142,4 +168,10 @@ mod tests {
         let err = geo.geometry(None).await.unwrap_err();
         assert!(matches!(err, PortError::Unsupported(_)));
     }
+
+    // NB : `geometry()` ne LIT PAS le cache (résolution toujours fraîche, cf.
+    // revue P5) — le chemin nominal exige donc une session KWin live et n'est
+    // pas testable ici sans mock D-Bus (couverture prévue au sprint Q6 via un
+    // seam sur `run_kwin_script`). Les primitives de cache elles-mêmes sont
+    // couvertes par `crate::resolve_cache::tests`.
 }

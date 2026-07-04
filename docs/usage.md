@@ -110,12 +110,12 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `clipboard_get` | aucun | JSON `{text}` | « lis le presse-papiers » (Wayland `wl-paste` ; fiable en contexte automatisé) |
 | `clipboard_set` | `{text}` | `"ok"` | « mets ce texte dans le presse-papiers » (Wayland `wl-copy` ; combiner à `key_combo` Ctrl+V) |
 | `eval_js` | `{expression}` | JSON sérialisé | « renvoie `document.querySelectorAll('button').length` » (Promise awaitée) |
-| `dom` | aucun | JSON du DOM courant | « renvoie le DOM courant » |
-| `state` | aucun | JSON `{ ... }` | « quel est l'état applicatif courant ? » |
+| `dom` | aucun | JSON du DOM courant (erreur `isError` si l'arbre dépasse ~100 Ko : cibler avec `find_element`/`eval_js`) | « renvoie le DOM courant » |
+| `state` | `{keys?}` | JSON `{ ... }` (filtré aux clés demandées si `keys` fourni) | « quel est l'état applicatif courant ? » ; `keys: ["count"]` pour un seul signal |
 | `assert_state` | `{expected}` | JSON `{ok, mismatches}` | « vérifie `{count: 3, page: "Agenda"}` dans le state » (`isError` si divergence) |
 | `target_info` | aucun | JSON `{target, eyes, hands, eval_js, dom, state, console_errors, list_windows, notes}` | « quelles capacités a la cible ? » (à appeler en premier ; dit si `eval_js`/`dom` répondront) |
-| `logs_tail` | aucun | JSON `[{ level, target, message, ... }]` | « affiche les derniers logs » |
-| `find_element` | `{selector}` | JSON `{found, tag, text, rect, visible, disabled, attributes}` | « inspecte le premier `#save-btn` » (alternatif léger à `dom`) |
+| `logs_tail` | `{limit?}` | JSON `{events: [{level, target, message, ...}], truncated, total}` (défaut 200 events les plus récents ; `total` = nombre réellement drainé) | « affiche les derniers logs » |
+| `find_element` | `{selector}` | JSON `{found, tag, text, value, rect, visible, disabled, attributes}` | « inspecte le premier `#save-btn` » (alternatif léger à `dom` ; `value` = valeur des inputs) |
 | `assert_selector` | `{selector, expected_text?, expected_count?}` | JSON `{ok, selector, actual_count, actual_text?}` | « vérifie qu'il y a exactement 3 `.card` » (`isError` si l'assertion échoue) |
 | `wait_for_selector` | `{selector, timeout_ms?, visible?, negate?}` | JSON `{found, elapsed_ms}` | « attends que `#result` soit présent » ; avec `negate=true` : « attends que `.spinner` disparaisse » (wait_for_gone) |
 | `wait_condition` | `{predicate, timeout_ms?}` | JSON `{satisfied, elapsed_ms, detail}` | « attends que `count` vaille 3 » (prédicats : dom-selector / state-key / screenshot-stable / screenshot-region-stable / log-message) |

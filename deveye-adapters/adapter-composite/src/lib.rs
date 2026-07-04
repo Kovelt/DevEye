@@ -165,6 +165,19 @@ impl ConsoleErrorSource for JsConsoleErrorSource {
 /// fournie par l'appelant, potentiellement > 60 s).
 const MAX_SCREENSHOT_STABLE_THRESHOLD_MS: u64 = 2000;
 
+/// Etat de stabilite porte par l'appelant (`wait_until`, une instance par
+/// appel) entre deux iterations de polling du meme predicat `ScreenshotStable`
+/// / `ScreenshotRegionStable` (perf B3). Avant : chaque iteration capturait
+/// DEUX cliches (un avant, un apres `threshold_ms`) sans rien reutiliser de
+/// l'iteration precedente — 2 captures par iteration sur une attente non
+/// immediatement satisfaite. Desormais on ne capture qu'UNE nouvelle image par
+/// iteration, comparee au hash + instant memorises ici lors de l'iteration
+/// precedente : ~2x moins de captures sur une attente longue.
+struct StabilityState {
+    hash: u64,
+    captured_at: Instant,
+}
+
 /// Hache les octets PNG d'une capture via [`DefaultHasher`] (non cryptographique,
 /// suffisant pour la comparaison de stabilite visuelle).
 ///
@@ -230,7 +243,72 @@ fn absorb_transient<T>(result: PortResult<T>, predicate: &'static str) -> PortRe
 }
 
 impl CompositeWaitCondition {
-    async fn check(&self, predicate: &WaitPredicate) -> PortResult<bool> {
+    /// Coeur partage de `ScreenshotStable` / `ScreenshotRegionStable` (perf
+    /// B3) : ne capture qu'UNE nouvelle image, comparee au hash memorise dans
+    /// `stability` par l'appel precedent (`None` region => image entiere,
+    /// `Some((x, y, w, h))` => `hash_region`).
+    ///
+    /// Le delai minimal demande entre deux captures comparees (`capped_ms`,
+    /// deja plafonne par l'appelant) reste garanti : si l'iteration
+    /// precedente s'est terminee trop recemment (le polling externe de
+    /// `wait_until` peut dormir moins longtemps que `capped_ms`), on complete
+    /// l'attente ici avant de capturer. Sur la toute premiere iteration
+    /// (`stability` a `None`), aucune comparaison n'est possible : on capture,
+    /// on memorise, et on renvoie "pas encore stable".
+    ///
+    /// Compromis assume (revue P5) : la satisfaction ne peut donc jamais
+    /// survenir avant la DEUXIEME capture, soit >= `capped_ms` apres la
+    /// premiere. Pour un `threshold_ms` tres court c'est une legere latence de
+    /// premiere satisfaction en plus ; le gain (une capture/iteration au lieu
+    /// de deux) domine des que l'attente n'est pas immediatement satisfaite.
+    async fn check_screenshot_stable(
+        &self,
+        capped_ms: u64,
+        region: Option<(u32, u32, u32, u32)>,
+        stability: &mut Option<StabilityState>,
+    ) -> PortResult<bool> {
+        let predicate_name = if region.is_some() {
+            "screenshot-region-stable"
+        } else {
+            "screenshot-stable"
+        };
+        if let Some(prev) = stability.as_ref() {
+            let min_gap = Duration::from_millis(capped_ms);
+            let elapsed = prev.captured_at.elapsed();
+            if elapsed < min_gap {
+                tokio::time::sleep(min_gap - elapsed).await;
+            }
+        }
+        let shot = match absorb_transient(self.renderer.screenshot().await, predicate_name)? {
+            Some(s) => s,
+            None => {
+                // Erreur transitoire : pas de hash exploitable. On repart a
+                // zero plutot que de comparer au prochain appel avec un etat
+                // perime (capture ratee entre-temps).
+                *stability = None;
+                return Ok(false);
+            }
+        };
+        // Une region hors capture est une erreur de parametrage de
+        // l'appelant, pas un etat transitoire de l'app : elle reste propagee
+        // telle quelle (pas de filtre `absorb_transient` ici), comme avant.
+        let hash = match region {
+            Some((x, y, width, height)) => hash_region(&shot.bytes, x, y, width, height)?,
+            None => hash_screenshot_bytes(&shot.bytes),
+        };
+        let stable = stability.as_ref().is_some_and(|prev| prev.hash == hash);
+        *stability = Some(StabilityState {
+            hash,
+            captured_at: Instant::now(),
+        });
+        Ok(stable)
+    }
+
+    async fn check(
+        &self,
+        predicate: &WaitPredicate,
+        stability: &mut Option<StabilityState>,
+    ) -> PortResult<bool> {
         match predicate {
             WaitPredicate::DomSelector {
                 selector,
@@ -280,24 +358,7 @@ impl CompositeWaitCondition {
                 // pause demesure a chaque iteration (le timeout global du caller
                 // borne la duree totale, pas chaque check individuel).
                 let capped = (*threshold_ms).min(MAX_SCREENSHOT_STABLE_THRESHOLD_MS);
-                let first = match absorb_transient(
-                    self.renderer.screenshot().await,
-                    "screenshot-stable",
-                )? {
-                    Some(s) => s,
-                    None => return Ok(false),
-                };
-                let hash_first = hash_screenshot_bytes(&first.bytes);
-                tokio::time::sleep(Duration::from_millis(capped)).await;
-                let second = match absorb_transient(
-                    self.renderer.screenshot().await,
-                    "screenshot-stable",
-                )? {
-                    Some(s) => s,
-                    None => return Ok(false),
-                };
-                let hash_second = hash_screenshot_bytes(&second.bytes);
-                Ok(hash_first == hash_second)
+                self.check_screenshot_stable(capped, None, stability).await
             }
             WaitPredicate::ScreenshotRegionStable {
                 x,
@@ -307,27 +368,8 @@ impl CompositeWaitCondition {
                 threshold_ms,
             } => {
                 let capped = (*threshold_ms).min(MAX_SCREENSHOT_STABLE_THRESHOLD_MS);
-                let first = match absorb_transient(
-                    self.renderer.screenshot().await,
-                    "screenshot-region-stable",
-                )? {
-                    Some(s) => s,
-                    None => return Ok(false),
-                };
-                // Une region hors capture est une erreur de parametrage de
-                // l'appelant, pas un etat transitoire de l'app : elle reste
-                // propagee telle quelle (pas de filtre `absorb_transient` ici).
-                let hash_first = hash_region(&first.bytes, *x, *y, *width, *height)?;
-                tokio::time::sleep(Duration::from_millis(capped)).await;
-                let second = match absorb_transient(
-                    self.renderer.screenshot().await,
-                    "screenshot-region-stable",
-                )? {
-                    Some(s) => s,
-                    None => return Ok(false),
-                };
-                let hash_second = hash_region(&second.bytes, *x, *y, *width, *height)?;
-                Ok(hash_first == hash_second)
+                self.check_screenshot_stable(capped, Some((*x, *y, *width, *height)), stability)
+                    .await
             }
             WaitPredicate::LogMessage {
                 contains,
@@ -427,8 +469,12 @@ impl WaitCondition for CompositeWaitCondition {
         const POLL: Duration = Duration::from_millis(200);
         let start = Instant::now();
         let deadline = start + timeout;
+        // Etat de stabilite screenshot (perf B3), propre a cet appel de
+        // `wait_until` : reinitialise a `None` a chaque nouvelle attente,
+        // porte ensuite d'iteration en iteration par `check`.
+        let mut stability: Option<StabilityState> = None;
         loop {
-            if self.check(&predicate).await? {
+            if self.check(&predicate, &mut stability).await? {
                 return Ok(WaitOutcome {
                     satisfied: true,
                     elapsed_ms: start.elapsed().as_millis() as u64,
@@ -736,6 +782,164 @@ mod tests {
         // Une valeur dans la limite passe intacte.
         let small: u64 = 500;
         assert_eq!(small.min(MAX_SCREENSHOT_STABLE_THRESHOLD_MS), 500);
+    }
+
+    // ----- B3 : etat de stabilite porte inter-iterations (audit perf) -----
+
+    /// Renderer scripte : renvoie une sequence programmee de resultats (un
+    /// PNG ou une erreur transitoire), un par appel a `screenshot()`, et
+    /// compte le nombre d'appels recus. Sert a verifier deterministe le
+    /// nombre de captures reellement effectuees par `check_screenshot_stable`
+    /// (au lieu de deviner via les delais de `wait_until`).
+    struct ScriptedRenderer {
+        calls: std::sync::Mutex<std::collections::VecDeque<PortResult<Vec<u8>>>>,
+        size: Size,
+        count: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait]
+    impl Renderer for ScriptedRenderer {
+        async fn screenshot(&self) -> PortResult<Screenshot> {
+            self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let next = self
+                .calls
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("script de captures epuise");
+            next.map(|bytes| Screenshot::new_png(bytes, self.size))
+        }
+        async fn viewport_size(&self) -> PortResult<Size> {
+            Ok(self.size)
+        }
+    }
+
+    fn noop_condition(renderer: Arc<dyn Renderer>) -> CompositeWaitCondition {
+        CompositeWaitCondition {
+            evaluator: Arc::new(UnusedEval),
+            inspector: Arc::new(UnusedInsp),
+            renderer,
+            log_source: Arc::new(EmptyLog),
+        }
+    }
+
+    /// B3 — coeur de l'optimisation : sur une image constante, chaque appel a
+    /// `check_screenshot_stable` ne doit declencher qu'UNE seule capture (au
+    /// lieu de deux avant/apres `threshold_ms` dans l'ancienne implementation),
+    /// le hash de l'iteration precedente etant reutilise via `stability`.
+    #[tokio::test]
+    async fn check_screenshot_stable_captures_once_per_call_when_image_constant() {
+        let png = solid_png(4, 4);
+        let renderer = Arc::new(ScriptedRenderer {
+            calls: std::sync::Mutex::new(std::collections::VecDeque::from(vec![
+                Ok(png.clone()),
+                Ok(png.clone()),
+            ])),
+            size: Size::new(4, 4),
+            count: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let cond = noop_condition(Arc::clone(&renderer) as Arc<dyn Renderer>);
+        let mut stability: Option<StabilityState> = None;
+
+        let first = cond
+            .check_screenshot_stable(5, None, &mut stability)
+            .await
+            .expect("check ok");
+        assert!(
+            !first,
+            "1ere iteration : rien a comparer => pas encore stable"
+        );
+        assert_eq!(
+            renderer.count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "1 seule capture sur la 1ere iteration (2 avant l'optimisation)"
+        );
+
+        let second = cond
+            .check_screenshot_stable(5, None, &mut stability)
+            .await
+            .expect("check ok");
+        assert!(second, "meme image sur les 2 iterations => stable");
+        assert_eq!(
+            renderer.count.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "2 captures cumulees pour 2 iterations (4 avant l'optimisation)"
+        );
+    }
+
+    /// B3 — le delai minimal demande entre deux captures comparees
+    /// (`threshold_ms`, deja plafonne par l'appelant) doit rester respecte
+    /// meme si les deux appels a `check_screenshot_stable` s'enchainent sans
+    /// delai externe : c'est le check lui-meme qui complete l'attente avant
+    /// de capturer la 2e image.
+    #[tokio::test]
+    async fn check_screenshot_stable_second_call_still_waits_full_threshold() {
+        let png = solid_png(4, 4);
+        let renderer = Arc::new(ScriptedRenderer {
+            calls: std::sync::Mutex::new(std::collections::VecDeque::from(vec![
+                Ok(png.clone()),
+                Ok(png.clone()),
+            ])),
+            size: Size::new(4, 4),
+            count: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let cond = noop_condition(renderer);
+        let mut stability: Option<StabilityState> = None;
+
+        let t0 = Instant::now();
+        cond.check_screenshot_stable(80, None, &mut stability)
+            .await
+            .expect("check ok");
+        cond.check_screenshot_stable(80, None, &mut stability)
+            .await
+            .expect("check ok");
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(75),
+            "le gap minimal (threshold_ms) entre 2 captures comparees doit etre respecte, elapsed={elapsed:?}"
+        );
+    }
+
+    /// B3 — une erreur transitoire de capture (absorbee) doit remettre
+    /// `stability` a zero : la capture suivante ne doit PAS etre comparee a
+    /// un hash memorise avant l'echec, meme si l'image redevient identique.
+    /// Sinon on perdrait la garantie "2 captures CONSECUTIVES identiques" —
+    /// un changement invisible aurait pu survenir pendant le hoquet.
+    #[tokio::test]
+    async fn check_screenshot_stable_resets_after_transient_capture_error() {
+        let png = solid_png(4, 4);
+        let renderer = Arc::new(ScriptedRenderer {
+            calls: std::sync::Mutex::new(std::collections::VecDeque::from(vec![
+                Ok(png.clone()),
+                Err(PortError::Inspect("hoquet transitoire".to_string())),
+                Ok(png.clone()),
+            ])),
+            size: Size::new(4, 4),
+            count: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let cond = noop_condition(renderer);
+        let mut stability: Option<StabilityState> = None;
+
+        let r1 = cond
+            .check_screenshot_stable(5, None, &mut stability)
+            .await
+            .expect("check ok");
+        assert!(!r1, "1ere iteration : rien a comparer");
+
+        let r2 = cond
+            .check_screenshot_stable(5, None, &mut stability)
+            .await
+            .expect("erreur transitoire absorbee, jamais d'Err");
+        assert!(!r2, "erreur transitoire => pas stable");
+
+        let r3 = cond
+            .check_screenshot_stable(5, None, &mut stability)
+            .await
+            .expect("check ok");
+        assert!(
+            !r3,
+            "l'echec intercalaire doit avoir efface l'etat memorise : pas de faux 'stable' \
+             meme si l'image de la 3e capture est identique a celle de la 1ere"
+        );
     }
 
     // ----- H2 : tests d'orchestration (audit lot B/C) -----

@@ -29,10 +29,15 @@
 //! - `upload_file` : renseigne un input[type=file] (DOM.setFileInputFiles) — CDP
 //! - `focus_window` : donne le focus OS à une fenêtre (KWin) — kwin-eis/sdk
 //! - `clipboard_get` / `clipboard_set` : presse-papiers OS-level (Wayland)
-//! - `dom` : sérialise le DOM de l'app cible
-//! - `state` : sérialise le state opt-in poussé par le SDK
+//! - `dom` : sérialise le DOM de l'app cible ; garde-fou (B1) : erreur
+//!   explicite au-delà d'environ 100 Ko sérialisés, plutôt que de saturer le
+//!   contexte de l'agent (cibler via find_element/assert_selector/eval_js)
+//! - `state` : sérialise le state opt-in poussé par le SDK ; `keys` filtre
+//!   optionnellement un sous-ensemble de clés (B7)
 //! - `assert_state` : vérifie des clés du state SDK (`isError` si divergence)
-//! - `logs_tail` : draine et renvoie le buffer de logs accumulé
+//! - `logs_tail` : draine et renvoie le buffer de logs accumulé, sous la
+//!   forme `{ events, truncated, total }` ; `limit` (défaut 200, B4) borne
+//!   `events` aux plus récents sans perdre le principe de drain
 //! - `invoke_command` : invoque une commande logique exposée par l'app
 //!   (route déclarée via `deveye_sdk::expose_route`)
 //! - `list_commands` : liste les commandes logiques exposées par l'app
@@ -101,6 +106,16 @@ use deveye_ports::{
 /// deja en local) : borne a 60 s le temps de blocage cote agent MCP, quel que
 /// soit le `timeout_ms` demande. `wait_ready` (A5) etait le seul sans plafond.
 const WAIT_TIMEOUT_MAX_MS: u64 = 60_000;
+
+/// B1 : garde-fou de l'outil `dom` — au-dela de ce nombre d'octets JSON
+/// serialises, l'arbre DOM complet n'est plus renvoye (erreur MCP explicite)
+/// pour eviter de saturer le contexte de l'agent LLM (chaque octet de sortie
+/// coute des tokens). L'agent est alors invite a cibler via
+/// `find_element`/`assert_selector`/`eval_js` plutot que de dumper tout
+/// l'arbre. Raffinement futur (hors perimetre de ce sprint) : parametres
+/// `selector`/`max_depth` cote CDP (`DOM.querySelector` +
+/// `DOM.describeNode(depth=N)`) pour ne demander que le sous-arbre utile.
+const DOM_MAX_BYTES: usize = 100_000;
 
 /// Description statique de la cible active et de ses capacites, renvoyee par
 /// l'outil `target_info`. Construite par `deveye-server` (compose) selon le
@@ -512,6 +527,30 @@ struct WaitScreenshotRegionParams {
     timeout_ms: Option<u64>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct LogsTailParams {
+    /// Nombre maximal d'événements les plus RÉCENTS à renvoyer (défaut 200).
+    /// Le drain côté source reste complet (rien n'est laissé dans le buffer
+    /// ni perdu silencieusement) : `total` indique le nombre réellement
+    /// drainé, `truncated` signale si `total > limit`.
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// B4 : défaut de `LogsTailParams::limit` — plafonne le coût token d'un
+/// `logs_tail` sans paramètre explicite, tout en restant assez large pour
+/// couvrir la plupart des sessions de debug.
+const LOGS_TAIL_DEFAULT_LIMIT: usize = 200;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct StateParams {
+    /// Sous-ensemble de clés à renvoyer (sinon, tout le state). Réduit le
+    /// coût token quand seules quelques clés intéressent l'agent. Absent ou
+    /// vide : aucun filtrage (comportement inchangé).
+    #[serde(default)]
+    keys: Option<Vec<String>>,
+}
+
 #[tool_router]
 impl DeveyeMcpServer {
     pub fn new(ports: DeveyePorts) -> Self {
@@ -649,11 +688,14 @@ impl DeveyeMcpServer {
         let _serial = self.gate.lock().await;
         let shot = self.renderer.screenshot().await.map_err(port_to_mcp)?;
         // Recadrage optionnel : les 4 bornes doivent etre fournies ensemble.
-        let current = match (p.x, p.y, p.width, p.height) {
+        // B10 : `Cow` evite de cloner tout le PNG quand aucun recadrage n'est
+        // demande (chemin le plus frequent) — seul le cas recadre alloue,
+        // via le buffer deja produit par `crop_png`.
+        let current: std::borrow::Cow<'_, [u8]> = match (p.x, p.y, p.width, p.height) {
             (Some(x), Some(y), Some(w), Some(h)) => {
-                crop_png(&shot.bytes, x, y, w, h).map_err(internal)?
+                std::borrow::Cow::Owned(crop_png(&shot.bytes, x, y, w, h).map_err(internal)?)
             }
-            _ => shot.bytes.clone(),
+            _ => std::borrow::Cow::Borrowed(&shot.bytes),
         };
         let path = std::path::Path::new(&p.baseline_path);
         if !tokio::fs::try_exists(path).await.map_err(internal)? {
@@ -883,18 +925,33 @@ impl DeveyeMcpServer {
         ))
     }
 
-    #[tool(description = "Récupère le DOM courant de l'app cible (JSON sérialisé).")]
+    #[tool(
+        description = "Récupère le DOM courant de l'app cible (JSON sérialisé). Garde-fou (B1) : si la sérialisation dépasse ~100 Ko, renvoie une erreur MCP explicite (`isError`) au lieu de saturer le contexte de l'agent — préférer find_element/assert_selector/eval_js pour cibler un élément précis."
+    )]
     async fn dom(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
         let tree = self.inspector.dom_snapshot().await.map_err(port_to_mcp)?;
-        Ok(json_success(&tree.tree))
+        let serialized = serde_json::to_string(&tree.tree).unwrap_or_else(|_| "null".to_string());
+        if let Some(payload) = dom_size_guard(serialized.len()) {
+            return Ok(json_error(&payload));
+        }
+        // Le JSON est deja serialise ci-dessus (pour mesurer sa taille) : on
+        // le reutilise tel quel plutot que de rappeler json_success (qui
+        // resserialiserait tree.tree en double).
+        Ok(CallToolResult::success(vec![Content::text(serialized)]))
     }
 
-    #[tool(description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé).")]
-    async fn state(&self) -> Result<CallToolResult, McpError> {
+    #[tool(
+        description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé). `keys` optionnel restreint la réponse à ce sous-ensemble de clés (les clés absentes du state sont silencieusement omises) — réduit le coût en tokens quand seules quelques clés intéressent l'agent ; absent ou vide, renvoie tout le state (comportement inchangé)."
+    )]
+    async fn state(
+        &self,
+        Parameters(p): Parameters<StateParams>,
+    ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
         let dump = self.inspector.state_snapshot().await.map_err(port_to_mcp)?;
-        Ok(json_success(&dump.entries))
+        let filtered = filter_state_entries(&dump.entries, p.keys.as_deref());
+        Ok(json_success(&filtered))
     }
 
     #[tool(
@@ -936,12 +993,21 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Draine et renvoie les événements `tracing` accumulés depuis le dernier appel."
+        description = "Draine et renvoie les événements `tracing` accumulés depuis le dernier appel, sous la forme `{ events, truncated, total }`. `limit` (défaut 200) borne le nombre d'événements présents dans `events` aux plus RÉCENTS ; le drain côté source reste complet (rien n'est laissé dans le buffer ni perdu silencieusement) — `total` indique le nombre réellement drainé et `truncated` si `total > limit` (des événements plus anciens ont alors été omis de la réponse, mais comptés)."
     )]
-    async fn logs_tail(&self) -> Result<CallToolResult, McpError> {
+    async fn logs_tail(
+        &self,
+        Parameters(p): Parameters<LogsTailParams>,
+    ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
         let events = self.log_source.poll().await.map_err(port_to_mcp)?;
-        Ok(json_success(&events))
+        let limit = p.limit.unwrap_or(LOGS_TAIL_DEFAULT_LIMIT);
+        let (events, truncated, total) = truncate_recent(events, limit);
+        Ok(json_success(&serde_json::json!({
+            "events": events,
+            "truncated": truncated,
+            "total": total,
+        })))
     }
 
     #[tool(
@@ -1515,6 +1581,58 @@ fn selector_assertion_ok(
     count_ok && text_ok
 }
 
+/// B7 : filtre `entries` sur `keys` avant sérialisation par l'outil `state`.
+/// `None` ou vide (aucun filtrage demandé) renvoie toutes les entrées ; les
+/// clés absentes de `entries` sont silencieusement ignorées (pas d'erreur —
+/// même logique que `collect_console_errors`/`levels`). Retourne des
+/// références pour éviter de cloner les valeurs JSON quand un seul sous-
+/// ensemble est demandé (et même sans filtrage, on ne clone pas `entries`).
+fn filter_state_entries<'a>(
+    entries: &'a std::collections::BTreeMap<String, serde_json::Value>,
+    keys: Option<&[String]>,
+) -> std::collections::BTreeMap<&'a String, &'a serde_json::Value> {
+    match keys {
+        Some(keys) if !keys.is_empty() => keys
+            .iter()
+            .filter_map(|k| entries.get_key_value(k))
+            .collect(),
+        _ => entries.iter().collect(),
+    }
+}
+
+/// B1 : décide si un DOM sérialisé (longueur en octets) dépasse le garde-fou
+/// [`DOM_MAX_BYTES`] ; renvoie le payload d'erreur à propager le cas échéant.
+/// Extrait de l'outil `dom` pour être testable sans dépendre d'un
+/// `AppInspector`.
+fn dom_size_guard(serialized_len: usize) -> Option<serde_json::Value> {
+    if serialized_len > DOM_MAX_BYTES {
+        Some(serde_json::json!({
+            "ok": false,
+            "reason": "dom_too_large",
+            "size_bytes": serialized_len,
+            "max_bytes": DOM_MAX_BYTES,
+            "hint": "DOM trop volumineux pour etre renvoye entier : cibler via \
+                      find_element (un element), assert_selector (compte/texte) \
+                      ou eval_js (extraction ciblee) plutot que de dumper tout l'arbre.",
+        }))
+    } else {
+        None
+    }
+}
+
+/// B4 : logique pure de troncature de `logs_tail` — garde les `limit`
+/// événements les PLUS RÉCENTS (`poll()` renvoie l'ordre d'émission, donc les
+/// plus récents sont en fin de vecteur) et signale si le total drainé
+/// dépassait `limit`. Extrait pour être testé sans `LogSource`.
+fn truncate_recent<T>(mut events: Vec<T>, limit: usize) -> (Vec<T>, bool, usize) {
+    let total = events.len();
+    let truncated = total > limit;
+    if truncated {
+        events = events.split_off(total - limit);
+    }
+    (events, truncated, total)
+}
+
 fn internal<E: std::fmt::Display>(err: E) -> McpError {
     McpError::internal_error(err.to_string(), None)
 }
@@ -1540,13 +1658,22 @@ fn port_to_mcp(err: PortError) -> McpError {
     }
 }
 
-/// Dimensions `(width, height)` d'un PNG sans le décoder entièrement en mémoire
-/// pixel (utilise le décodeur d'en-tête de `image`). Sert au calcul d'échelle
-/// DPI de `screenshot_element`.
+/// Dimensions `(width, height)` d'un PNG en ne lisant que l'en-tête (chunk
+/// IHDR) via `ImageReader::into_dimensions`, sans décoder les pixels. Sert au
+/// calcul d'échelle DPI de `screenshot_element`, où le PNG est ensuite décodé
+/// (une seule fois) par `crop_png` pour le recadrage.
+///
+/// B6 : corrige le commentaire — et surtout l'implémentation — mensongers de
+/// la version précédente, qui prétendait ne lire que l'en-tête mais appelait
+/// en réalité `load_from_memory` (décodage pixel complet), doublant le coût
+/// de `screenshot_element` qui décode déjà tout le PNG une fois via
+/// `crop_png`.
 fn png_dimensions(png: &[u8]) -> Result<(u32, u32), String> {
-    use image::GenericImageView;
-    let img = image::load_from_memory(png).map_err(|e| format!("decode PNG : {e}"))?;
-    Ok(img.dimensions())
+    image::ImageReader::new(std::io::Cursor::new(png))
+        .with_guessed_format()
+        .map_err(|e| format!("detection format PNG : {e}"))?
+        .into_dimensions()
+        .map_err(|e| format!("dimensions PNG : {e}"))
 }
 
 /// Recadre un PNG sur `(x, y, width, height)` et le re-encode en PNG.
@@ -1626,7 +1753,10 @@ fn visual_diff(baseline_png: &[u8], current_png: &[u8]) -> Result<VisualOutcome,
 
 #[cfg(test)]
 mod tests {
-    use super::{crop_png, selector_assertion_ok, visual_diff};
+    use super::{
+        crop_png, dom_size_guard, filter_state_entries, png_dimensions, selector_assertion_ok,
+        truncate_recent, visual_diff, DOM_MAX_BYTES,
+    };
     use deveye_core::{InteractionCommand, MouseButton, Position};
 
     /// Encode une image RGBA unie de `w`x`h` en PNG (helper de test).
@@ -1756,5 +1886,109 @@ mod tests {
     fn selector_assertion_text_ko_overrides_count_ok() {
         assert!(!selector_assertion_ok(1, Some(1), false));
         assert!(selector_assertion_ok(1, Some(1), true));
+    }
+
+    // ----- B6 : png_dimensions (lecture d'en-tete seule) -----
+
+    #[test]
+    fn png_dimensions_reads_header_without_full_decode() {
+        let src = solid_png(7, 5, [1, 2, 3, 255]);
+        assert_eq!(png_dimensions(&src).unwrap(), (7, 5));
+    }
+
+    #[test]
+    fn png_dimensions_rejects_garbage() {
+        assert!(png_dimensions(b"pas un png").is_err());
+    }
+
+    // ----- B7 : filter_state_entries -----
+
+    fn sample_entries() -> std::collections::BTreeMap<String, serde_json::Value> {
+        let mut entries = std::collections::BTreeMap::new();
+        entries.insert("a".to_string(), serde_json::json!(1));
+        entries.insert("b".to_string(), serde_json::json!(2));
+        entries.insert("c".to_string(), serde_json::json!(3));
+        entries
+    }
+
+    #[test]
+    fn filter_state_entries_none_returns_everything() {
+        let entries = sample_entries();
+        let out = filter_state_entries(&entries, None);
+        assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn filter_state_entries_empty_keys_returns_everything() {
+        let entries = sample_entries();
+        let empty: Vec<String> = vec![];
+        let out = filter_state_entries(&entries, Some(&empty));
+        assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn filter_state_entries_keeps_only_requested_keys() {
+        let entries = sample_entries();
+        let keys = vec!["b".to_string(), "missing".to_string()];
+        let out = filter_state_entries(&entries, Some(&keys));
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out.get(&"b".to_string()).copied(),
+            Some(&serde_json::json!(2))
+        );
+    }
+
+    // ----- B1 : dom_size_guard -----
+
+    #[test]
+    fn dom_size_guard_allows_small_payload() {
+        assert!(dom_size_guard(100).is_none());
+    }
+
+    #[test]
+    fn dom_size_guard_allows_exact_boundary() {
+        assert!(dom_size_guard(DOM_MAX_BYTES).is_none());
+    }
+
+    #[test]
+    fn dom_size_guard_blocks_oversized_payload() {
+        let payload = dom_size_guard(DOM_MAX_BYTES + 1).expect("guard doit se declencher");
+        assert_eq!(payload["reason"], "dom_too_large");
+        assert_eq!(payload["size_bytes"], DOM_MAX_BYTES + 1);
+        assert_eq!(payload["ok"], false);
+    }
+
+    // ----- B4 : truncate_recent -----
+
+    #[test]
+    fn truncate_recent_keeps_last_n_and_flags_truncation() {
+        let (kept, truncated, total) = truncate_recent(vec![1, 2, 3, 4, 5], 2);
+        assert_eq!(kept, vec![4, 5]);
+        assert!(truncated);
+        assert_eq!(total, 5);
+    }
+
+    #[test]
+    fn truncate_recent_no_truncation_when_under_limit() {
+        let (kept, truncated, total) = truncate_recent(vec![1, 2, 3], 10);
+        assert_eq!(kept, vec![1, 2, 3]);
+        assert!(!truncated);
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn truncate_recent_exact_limit_is_not_truncated() {
+        let (kept, truncated, total) = truncate_recent(vec![1, 2, 3], 3);
+        assert_eq!(kept, vec![1, 2, 3]);
+        assert!(!truncated);
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn truncate_recent_zero_limit_drops_everything_but_counts_total() {
+        let (kept, truncated, total) = truncate_recent(vec![1, 2, 3], 0);
+        assert!(kept.is_empty());
+        assert!(truncated);
+        assert_eq!(total, 3);
     }
 }

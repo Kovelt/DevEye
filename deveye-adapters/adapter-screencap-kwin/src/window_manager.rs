@@ -3,6 +3,12 @@
 //! géométrie de [`crate::KwinRenderer`] (script éphémère + callback D-Bus
 //! porté par [`crate::kwin_bridge`]), mais le script appelle l'API
 //! d'activation KWin puis renvoie le `caption` activé.
+//!
+//! Ne consulte volontairement PAS [`crate::resolve_cache`] : son script
+//! combine résolution ET action (rendre la fenêtre active), donc un cache hit
+//! sauterait l'activation elle-même. Il invalide l'entrée après une
+//! activation réussie (une fenêtre qui vient d'être activée/déminimisée peut
+//! avoir changé de position sous certains gestionnaires).
 
 use async_trait::async_trait;
 use zbus::Connection;
@@ -10,6 +16,7 @@ use zbus::Connection;
 use deveye_ports::{PortError, PortResult, WindowManager};
 
 use crate::kwin_bridge::{run_kwin_script, BRIDGE_IFACE, BRIDGE_PATH};
+use crate::resolve_cache;
 
 /// Active une fenêtre KDE/Wayland par sous-chaîne de titre via KWin Scripting.
 #[derive(Clone, Debug)]
@@ -49,10 +56,20 @@ impl WindowManager for KwinWindowManager {
         let (caption, _) = run_kwin_script(&conn, "deveye-activate", &script).await?;
 
         if caption.is_empty() {
+            // Échec = fenêtre introuvable : purge aussi l'entrée de cache pour
+            // ce titre (symétrie avec le succès et avec les invalidations sur
+            // échec de KwinRenderer/KwinWindowGeometry) — une entrée stale ne
+            // doit pas survivre à une activation qui vient d'échouer sur ce
+            // même titre (revue P5).
+            resolve_cache::invalidate(needle).await;
             return Err(PortError::Interaction(format!(
                 "fenêtre introuvable pour activation : {needle}"
             )));
         }
+        // Purge l'entree de cache partagee (cf. crate::resolve_cache) : une
+        // fenetre qui vient d'etre activee/deminimisee peut avoir change de
+        // position, la prochaine resolution doit repartir d'un script frais.
+        resolve_cache::invalidate(needle).await;
         Ok(caption)
     }
 }
