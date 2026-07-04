@@ -1,11 +1,12 @@
 //! Impls stub/noop locales au binaire : `EmptyWindowLister`, `UnsupportedInspector`,
-//! `UnsupportedEvaluator`, `UnsupportedWindowManager`.
+//! `UnsupportedEvaluator`, `UnsupportedWindowManager`, `UnsupportedWindowGeometry`.
 
 use async_trait::async_trait;
 
-use deveye_core::{DomTree, StateDump, WindowInfo};
+use deveye_core::{DomTree, StateDump, WindowInfo, WindowRect};
 use deveye_ports::{
-    AppInspector, Clipboard, JsEvaluator, PortError, PortResult, WindowLister, WindowManager,
+    AppInspector, Clipboard, JsEvaluator, PortError, PortResult, WindowGeometry, WindowLister,
+    WindowManager,
 };
 
 /// `WindowLister` du pont natif (cible `sdk`) : aucune visibilite
@@ -58,6 +59,20 @@ impl WindowManager for UnsupportedWindowManager {
     async fn activate(&self, _title_substring: Option<&str>) -> PortResult<String> {
         Err(PortError::Unsupported(
             "focus_window nécessite KDE/Wayland (KWin Scripting) avec --screencap-window"
+                .to_string(),
+        ))
+    }
+}
+
+/// Geometrie de fenetre indisponible : cible CDP/SDK (webview, pas de fenetre
+/// OS a mesurer) ou session hors KDE/Wayland (pas de KWin Scripting).
+pub(crate) struct UnsupportedWindowGeometry;
+
+#[async_trait]
+impl WindowGeometry for UnsupportedWindowGeometry {
+    async fn geometry(&self, _title_substring: Option<&str>) -> PortResult<WindowRect> {
+        Err(PortError::Unsupported(
+            "window_geometry nécessite KDE/Wayland (KWin Scripting) avec --screencap-window"
                 .to_string(),
         ))
     }

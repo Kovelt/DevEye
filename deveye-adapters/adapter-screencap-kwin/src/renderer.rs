@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::os::fd::AsFd;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use image::{ExtendedColorType, ImageEncoder};
 use nix::fcntl::OFlag;
 use nix::unistd::pipe2;
-use tokio::sync::{oneshot, Mutex};
 use zbus::zvariant::{Fd, OwnedValue, Value};
 use zbus::Connection;
 
@@ -16,40 +14,13 @@ use deveye_core::{Screenshot, Size};
 use deveye_ports::{PortError, PortResult, Renderer};
 
 use crate::error::KwinScreencapError;
-use crate::proxy::{ScreenShot2Proxy, ScriptingProxy};
-
-/// Chemin de l'objet D-Bus que cet adapter sert le temps d'une résolution ;
-/// le script KWin y renvoie l'UUID de la fenêtre par `callDBus`.
-const BRIDGE_PATH: &str = "/deveye/bridge";
-const BRIDGE_IFACE: &str = "org.deveye.KwinBridge";
+use crate::kwin_bridge::{run_kwin_script, BRIDGE_IFACE, BRIDGE_PATH};
+use crate::proxy::ScreenShot2Proxy;
 
 /// Délai d'attente de la lecture du pipe de capture ScreenShot2 : marge large
 /// au-dessus du temps normal de rendu+écriture (quelques dizaines de ms) sans
 /// tenir le gate MCP indéfiniment si KWin ne ferme jamais sa copie du fd.
 const KWIN_PIPE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Compteur monotone pour des noms de plugin/scripts uniques par appel (un
-/// même chemin rechargé ne ré-exécuterait pas le script).
-fn next_id() -> u64 {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    COUNTER.fetch_add(1, Ordering::Relaxed)
-}
-
-/// Interface éphémère servie par l'adapter : le script KWin appelle `Report`
-/// avec l'UUID de la fenêtre trouvée (ou `""`) et sa géométrie `"LxH"`.
-struct Bridge {
-    tx: Mutex<Option<oneshot::Sender<(String, String)>>>,
-}
-
-#[zbus::interface(name = "org.deveye.KwinBridge")]
-impl Bridge {
-    #[zbus(name = "Report")]
-    async fn report(&self, uuid: String, geometry: String) {
-        if let Some(tx) = self.tx.lock().await.take() {
-            let _ = tx.send((uuid, geometry));
-        }
-    }
-}
 
 /// Capture une fenêtre KDE/Wayland via `org.kde.KWin.ScreenShot2`.
 ///
@@ -69,8 +40,8 @@ impl KwinRenderer {
     }
 
     /// Résout `(uuid, taille_logique)` de la première fenêtre dont le titre
-    /// contient `title_substring`, via un script KWin éphémère qui renvoie le
-    /// résultat sur l'interface [`Bridge`] servie sur `conn`.
+    /// contient `title_substring`, via un script KWin éphémère (cycle de vie
+    /// porté par [`run_kwin_script`]).
     async fn resolve_window(
         &self,
         conn: &Connection,
@@ -80,39 +51,9 @@ impl KwinRenderer {
             .map(|n| n.to_string())
             .ok_or_else(|| KwinScreencapError::Dbus("connexion D-Bus sans nom unique".into()))?;
 
-        let (tx, rx) = oneshot::channel();
-        conn.object_server()
-            .at(
-                BRIDGE_PATH,
-                Bridge {
-                    tx: Mutex::new(Some(tx)),
-                },
-            )
-            .await
-            .map_err(|e| KwinScreencapError::Dbus(format!("object_server.at : {e}")))?;
+        let script = build_script(&self.title_substring, &dest);
+        let (uuid, geometry) = run_kwin_script(conn, "deveye-screencap", &script).await?;
 
-        let plugin = format!("deveye-screencap-{}-{}", std::process::id(), next_id());
-        // L11: tempfile cree le fichier avec O_EXCL + nom aleatoire — evite le
-        // TOCTOU d'un chemin predictible sous /tmp.
-        let temp = tempfile::Builder::new()
-            .prefix("deveye-screencap-")
-            .suffix(".js")
-            .tempfile()
-            .map_err(|e| KwinScreencapError::Dbus(format!("tempfile creation : {e}")))?;
-        // N1: ecriture asynchrone via tokio::fs pour ne pas bloquer le runtime.
-        tokio::fs::write(temp.path(), build_script(&self.title_substring, &dest))
-            .await
-            .map_err(|e| KwinScreencapError::Dbus(format!("ecriture script KWin : {e}")))?;
-
-        let result = self.run_script(conn, temp.path(), &plugin, rx).await;
-
-        // Nettoyage best-effort : NamedTempFile supprime le fichier a sa destruction
-        // (drop). La lecture du pipe (std::fs::File::from(read_fd)) se passe dans
-        // spawn_blocking — hors hot-path async, pas de changement necessaire.
-        drop(temp);
-        let _ = conn.object_server().remove::<Bridge, _>(BRIDGE_PATH).await;
-
-        let (uuid, geometry) = result?;
         if uuid.is_empty() {
             return Err(KwinScreencapError::WindowNotFound(
                 self.title_substring.clone(),
@@ -120,36 +61,6 @@ impl KwinRenderer {
         }
         let size = parse_geometry(&geometry).unwrap_or_else(|| Size::new(0, 0));
         Ok((uuid, size))
-    }
-
-    /// Charge + démarre le script, attend la réponse (timeout 4 s), décharge.
-    async fn run_script(
-        &self,
-        conn: &Connection,
-        path: &std::path::Path,
-        plugin: &str,
-        rx: oneshot::Receiver<(String, String)>,
-    ) -> Result<(String, String), KwinScreencapError> {
-        let scripting = ScriptingProxy::new(conn)
-            .await
-            .map_err(|e| KwinScreencapError::Dbus(format!("proxy Scripting : {e}")))?;
-        scripting
-            .load_script(&path.to_string_lossy(), plugin)
-            .await
-            .map_err(|e| KwinScreencapError::Unavailable(format!("loadScript : {e}")))?;
-        scripting
-            .start()
-            .await
-            .map_err(|e| KwinScreencapError::Unavailable(format!("Scripting.start : {e}")))?;
-
-        let received = tokio::time::timeout(Duration::from_secs(4), rx).await;
-        let _ = scripting.unload_script(plugin).await;
-
-        received
-            .map_err(|_| {
-                KwinScreencapError::Unavailable("script KWin sans reponse apres 4 s".into())
-            })?
-            .map_err(|_| KwinScreencapError::Unavailable("canal de resolution ferme".into()))
     }
 }
 
@@ -244,35 +155,9 @@ impl KwinRenderer {
             .map(|n| n.to_string())
             .ok_or_else(|| KwinScreencapError::Dbus("connexion D-Bus sans nom unique".into()))?;
 
-        let (tx, rx) = oneshot::channel();
-        conn.object_server()
-            .at(
-                BRIDGE_PATH,
-                Bridge {
-                    tx: Mutex::new(Some(tx)),
-                },
-            )
-            .await
-            .map_err(|e| KwinScreencapError::Dbus(format!("object_server.at : {e}")))?;
+        let script = build_position_script(&self.title_substring, &dest);
+        let (uuid, pos_str) = run_kwin_script(&conn, "deveye-origin", &script).await?;
 
-        let plugin = format!("deveye-origin-{}-{}", std::process::id(), next_id());
-        let temp = tempfile::Builder::new()
-            .prefix("deveye-origin-")
-            .suffix(".js")
-            .tempfile()
-            .map_err(|e| KwinScreencapError::Dbus(format!("tempfile creation : {e}")))?;
-        tokio::fs::write(
-            temp.path(),
-            build_position_script(&self.title_substring, &dest),
-        )
-        .await
-        .map_err(|e| KwinScreencapError::Dbus(format!("ecriture script KWin : {e}")))?;
-
-        let result = self.run_script(&conn, temp.path(), &plugin, rx).await;
-        drop(temp);
-        let _ = conn.object_server().remove::<Bridge, _>(BRIDGE_PATH).await;
-
-        let (uuid, pos_str) = result?;
         if uuid.is_empty() {
             return Err(KwinScreencapError::WindowNotFound(
                 self.title_substring.clone(),

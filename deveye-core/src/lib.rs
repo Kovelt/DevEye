@@ -18,6 +18,7 @@ pub mod session;
 pub mod snapshot;
 pub mod wait_condition;
 pub mod window_info;
+pub mod window_rect;
 
 pub use command::{CommandDescriptor, InteractionCommand, MouseButton};
 pub use console_error::{ConsoleError, ConsoleLevel};
@@ -26,3 +27,4 @@ pub use session::{AppKind, AppSession};
 pub use snapshot::{DomTree, Position, Screenshot, Size, StateDump};
 pub use wait_condition::{WaitOutcome, WaitPredicate};
 pub use window_info::WindowInfo;
+pub use window_rect::WindowRect;

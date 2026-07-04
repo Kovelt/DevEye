@@ -2,7 +2,7 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Trente-huit outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Quarante-et-un outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `screenshot_region` : capture puis recadre sur (x, y, width, height)
 //! - `screenshot_element` : capture recadrée sur le rect d'un sélecteur CSS
@@ -38,17 +38,26 @@
 //! - `list_commands` : liste les commandes logiques exposées par l'app
 //! - `wait_for_selector` : attend qu'un sélecteur CSS soit présent/visible
 //!   (sans sleep arbitraire)
+//! - `wait_for_text` : attend qu'un texte apparaisse dans le DOM (document
+//!   entier ou un sélecteur donné)
 //! - `find_element` : inspecte un élément (tag, texte, rect, visible, disabled,
-//!   attributs)
+//!   attributs, `value_prop` pour les champs de saisie)
 //! - `assert_selector` : compte les éléments d'un sélecteur (`{ ok, count }`)
 //! - `drag_drop` : glisser-déposer de (from) vers (to)
-//! - `collect_console_errors` : draine les erreurs JS de la page (onerror,
-//!   unhandledrejection, console.error)
-//! - `list_windows` : liste les fenêtres/onglets de la cible (CDP ; vide en SDK)
+//! - `collect_console_errors` : draine les messages console de la page, tous
+//!   niveaux confondus (onerror, unhandledrejection, console.*) ; `levels`
+//!   filtre optionnellement par sévérité
+//! - `list_windows` : liste les fenêtres/onglets de la cible (CDP et kwin-eis
+//!   via KWin Scripting ; vide en SDK)
+//! - `window_geometry` : géométrie écran `{x, y, width, height}` d'une fenêtre
+//!   (KWin Scripting ; `Unsupported` hors KDE/Wayland)
 //! - `wait_condition` : attend un prédicat (dom-selector / state-key /
-//!   screenshot-stable / screenshot-region-stable / log-message) avec timeout
+//!   screenshot-stable / screenshot-region-stable / log-message /
+//!   target-alive / text-content) avec timeout
 //! - `wait_for_log` : attend un log applicatif (contains + level_min)
 //! - `wait_screenshot_region` : attend la stabilité visuelle d'une région
+//! - `wait_target_alive` : attend qu'une cible crashée/relancée redevienne
+//!   joignable (raccourci du prédicat `target-alive`)
 //! - `wait_ready` : attend que l'app publie un state non vide (app prête)
 //! - `target_info` : décrit la cible active et ses capacités (eval_js, dom…)
 //!
@@ -84,7 +93,7 @@ use tracing::debug;
 use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, WaitPredicate};
 use deveye_ports::{
     AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
-    LogSource, PortError, Renderer, WaitCondition, WindowLister, WindowManager,
+    LogSource, PortError, Renderer, WaitCondition, WindowGeometry, WindowLister, WindowManager,
 };
 
 /// Plafond partage par les outils `wait_*` a boucle de polling explicite
@@ -134,6 +143,7 @@ pub struct DeveyePorts {
     pub console_errors: Arc<dyn ConsoleErrorSource>,
     pub wait_condition: Arc<dyn WaitCondition>,
     pub window_manager: Arc<dyn WindowManager>,
+    pub window_geometry: Arc<dyn WindowGeometry>,
     pub clipboard: Arc<dyn Clipboard>,
     pub target_info: TargetInfo,
 }
@@ -154,6 +164,7 @@ pub struct DeveyeMcpServer {
     console_errors: Arc<dyn ConsoleErrorSource>,
     wait_condition: Arc<dyn WaitCondition>,
     window_manager: Arc<dyn WindowManager>,
+    window_geometry: Arc<dyn WindowGeometry>,
     clipboard: Arc<dyn Clipboard>,
     target_info: TargetInfo,
     /// Sérialise les appels d'outils : rmcp les traite en concurrence, mais
@@ -296,6 +307,45 @@ struct WaitForSelectorParams {
     /// toast ou d'une modale après une action.
     #[serde(default)]
     negate: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WaitForTextParams {
+    /// Texte à attendre dans l'`innerText`/`textContent` de l'élément ciblé.
+    text: String,
+    /// Sélecteur CSS de l'élément à observer. Absent : le document entier
+    /// (`document.body`).
+    #[serde(default)]
+    selector: Option<String>,
+    /// Si true, l'élément doit en plus être visible (rect non vide).
+    #[serde(default)]
+    visible: Option<bool>,
+    /// Timeout en millisecondes (défaut 5000, plafond 30000).
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WaitTargetAliveParams {
+    /// Timeout en millisecondes (défaut 5000, plafond 60000).
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CollectConsoleErrorsParams {
+    /// Filtre par sévérité (`"log"`/`"info"`/`"warning"`/`"error"`, insensible
+    /// à la casse). Absent ou vide : tous les niveaux drainés sont renvoyés.
+    #[serde(default)]
+    levels: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WindowGeometryParams {
+    /// Sous-chaîne du titre de la fenêtre (insensible à la casse). Absent :
+    /// la fenêtre `--screencap-window` de la session.
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -476,6 +526,7 @@ impl DeveyeMcpServer {
             console_errors: ports.console_errors,
             wait_condition: ports.wait_condition,
             window_manager: ports.window_manager,
+            window_geometry: ports.window_geometry,
             clipboard: ports.clipboard,
             target_info: ports.target_info,
             gate: Arc::new(tokio::sync::Mutex::new(())),
@@ -493,7 +544,7 @@ impl DeveyeMcpServer {
     /// A8 : acquiert le gate en traçant l'attente ; la libération (durée
     /// comprise) est tracée par le `Drop` de [`GateGuard`]. Instrumenté sur
     /// les outils les plus longs (screenshot, eval_js, click, wait_ready) —
-    /// pas les 38, cf. audit §A8.
+    /// pas les 41, cf. audit §A8.
     async fn acquire_gate(&self, outil: &'static str) -> GateGuard<'_> {
         let inner = self.gate.lock().await;
         debug!(outil, "gate acquis");
@@ -957,7 +1008,38 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Inspecte le premier élément matchant un sélecteur CSS : `{ found, tag, text, rect{x,y,width,height}, visible, disabled, attributes }`. Réponse compacte au lieu de tout le DOM."
+        description = "Attend qu'un texte apparaisse dans l'innerText/textContent d'un élément (`selector`, ou le document entier si absent). Renvoie `{ found, elapsed_ms }` (`isError` si non satisfait). Avec `visible=true`, l'élément doit en plus avoir un rect non vide. Indisponible en kwin-eis (pas de DOM) — le prédicat `text-content` sous-jacent ne s'y satisfait jamais. Défaut 5000 ms, plafond 30000."
+    )]
+    async fn wait_for_text(
+        &self,
+        Parameters(p): Parameters<WaitForTextParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let predicate = WaitPredicate::TextContent {
+            text: p.text,
+            selector: p.selector,
+            visible: p.visible.unwrap_or(false),
+        };
+        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(30_000));
+        let outcome = self
+            .wait_condition
+            .wait_until(predicate, budget)
+            .await
+            .map_err(port_to_mcp)?;
+        if outcome.satisfied {
+            Ok(json_success(&serde_json::json!({
+                "found": true,
+                "elapsed_ms": outcome.elapsed_ms,
+            })))
+        } else {
+            Ok(json_error(&serde_json::json!({
+                "found": false,
+                "elapsed_ms": outcome.elapsed_ms,
+            })))
+        }
+    }
+
+    #[tool(
+        description = "Inspecte le premier élément matchant un sélecteur CSS : `{ found, tag, text, rect{x,y,width,height}, visible, disabled, attributes, value_prop }`. `value_prop` porte la propriété `.value` de l'élément (inputs/select/textarea) — `null` si l'élément n'en a pas (ex. lire une saisie, distinct de `text` qui reste l'`innerText`). Réponse compacte au lieu de tout le DOM."
     )]
     async fn find_element(
         &self,
@@ -975,7 +1057,8 @@ impl DeveyeMcpServer {
                rect: {{ x: r.left, y: r.top, width: r.width, height: r.height }}, \
                visible: r.width > 0 && r.height > 0, \
                disabled: el.disabled === true || el.hasAttribute('disabled'), \
-               attributes: attrs }}; }})()"
+               attributes: attrs, \
+               value_prop: ('value' in el) ? el.value : null }}; }})()"
         );
         let value = self
             .evaluator
@@ -1029,7 +1112,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Attend qu'un prédicat soit satisfait, ou que le timeout expire. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si non satisfait. Prédicats : dom-selector (présence CSS), state-key (valeur dans le state SDK), screenshot-stable (stabilité visuelle pendant threshold_ms). Évite tout sleep arbitraire."
+        description = "Attend qu'un prédicat soit satisfait, ou que le timeout expire. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si non satisfait. Prédicats : dom-selector (présence CSS), state-key (valeur dans le state SDK), screenshot-stable (stabilité visuelle pendant threshold_ms), target-alive (attend qu'une cible crashée redevienne joignable, cf. wait_target_alive), text-content (attend un texte dans le DOM, cf. wait_for_text). Évite tout sleep arbitraire."
     )]
     async fn wait_condition(
         &self,
@@ -1115,6 +1198,26 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
+        description = "Attend que le CANAL D'INTERACTION de la cible redevienne joignable après un crash/redémarrage (sonde eval_js ; sur kwin-eis, sans JS, retombe sur la capture d'écran). Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Raccourci du prédicat target-alive (wait_condition) — seul paramètre : le timeout. Défaut 5000 ms, plafond 60000."
+    )]
+    async fn wait_target_alive(
+        &self,
+        Parameters(p): Parameters<WaitTargetAliveParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let budget = Duration::from_millis(p.timeout_ms.unwrap_or(5_000).min(60_000));
+        let outcome = self
+            .wait_condition
+            .wait_until(WaitPredicate::TargetAlive {}, budget)
+            .await
+            .map_err(port_to_mcp)?;
+        if outcome.satisfied {
+            Ok(json_success(&outcome))
+        } else {
+            Ok(json_error(&outcome))
+        }
+    }
+
+    #[tool(
         description = "Glisse-dépose de (from_x, from_y) vers (to_x, to_y). En CDP : séquence souris native (press/déplacements/release) ; via le pont SDK : PointerEvent JS (support selon le framework de l'app). Renvoie \"ok\"."
     )]
     async fn drag_drop(
@@ -1190,15 +1293,32 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Draine les erreurs console émises par le webview depuis le dernier appel (exceptions non capturées, promesses rejetées, console.error). Renvoie un tableau typé `[{ level, text, url?, line?, timestamp }]` (port ConsoleErrorSource). Un crash JS de la page devient visible à l'agent."
+        description = "Draine les messages console émis par le webview depuis le dernier appel — tous niveaux confondus (exceptions non capturées, promesses rejetées, console.log/info/warn/error). Renvoie un tableau typé `[{ level, text, url?, line?, timestamp }]` (port ConsoleErrorSource). `levels` filtre optionnellement par sévérité (ex. `[\"error\", \"warning\"]`) ; absent ou vide renvoie tout. Un crash JS de la page devient visible à l'agent."
     )]
-    async fn collect_console_errors(&self) -> Result<CallToolResult, McpError> {
+    async fn collect_console_errors(
+        &self,
+        Parameters(p): Parameters<CollectConsoleErrorsParams>,
+    ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let errors = self
+        let mut errors = self
             .console_errors
             .drain_console_errors()
             .await
             .map_err(port_to_mcp)?;
+        if let Some(levels) = &p.levels {
+            if !levels.is_empty() {
+                let voulus: Vec<String> = levels.iter().map(|l| l.to_lowercase()).collect();
+                // Compare via la representation serde (deja "lowercase" par
+                // construction de ConsoleLevel) plutot qu'un match manuel des
+                // variantes : reste correct si l'enum gagne des variantes.
+                errors.retain(|e| {
+                    serde_json::to_value(e.level)
+                        .ok()
+                        .and_then(|v| v.as_str().map(|s| voulus.contains(&s.to_string())))
+                        .unwrap_or(false)
+                });
+            }
+        }
         Ok(json_success(&errors))
     }
 
@@ -1229,6 +1349,22 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
+        description = "Renvoie la géométrie écran `{ x, y, width, height }` de la fenêtre dont le titre contient `title` (ou la fenêtre `--screencap-window` par défaut) via KWin Scripting. Complète `find_element`/`eval_js` (indisponibles en kwin-eis, rendu natif) : convertit un rect DOM en coordonnées écran absolues pour un clic OS-level (EIS) hors du viewport webview. Nécessite KDE/Wayland ; `Unsupported` sinon."
+    )]
+    async fn window_geometry(
+        &self,
+        Parameters(p): Parameters<WindowGeometryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        let rect = self
+            .window_geometry
+            .geometry(p.title.as_deref())
+            .await
+            .map_err(port_to_mcp)?;
+        Ok(json_success(&rect))
+    }
+
+    #[tool(
         description = "Lit le texte du presse-papiers de la session (OS-level via wl-paste sous Wayland). Renvoie `{ text }`. Fiable là où `navigator.clipboard.readText()` lève NotAllowedError (contexte automatisé) et en kwin-eis (pas de WebView). `Unsupported` hors Wayland."
     )]
     async fn clipboard_get(&self) -> Result<CallToolResult, McpError> {
@@ -1250,7 +1386,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Liste les fenêtres/onglets de la cible : `[{ id, title, url, kind }]` (type=page). En CDP via Target.getTargets ; via le pont SDK : liste vide (pas de visibilité inter-fenêtres)."
+        description = "Liste les fenêtres/onglets de la cible : `[{ id, title, url, kind }]`. En CDP via Target.getTargets ; en kwin-eis via KWin Scripting (`url` vide, `kind` = resourceClass) ; via le pont SDK : liste vide (pas de visibilité inter-fenêtres)."
     )]
     async fn list_windows(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
@@ -1327,11 +1463,12 @@ impl ServerHandler for DeveyeMcpServer {
              assert_visual, click, double_click, right_click, hover, \
              click_selector, click_text, eval_js, type_text, press_key, \
              key_combo, navigate, scroll, handle_dialog, upload_file, \
-             focus_window, clipboard_get, clipboard_set, dom, state, \
-             assert_state, logs_tail, invoke_command, list_commands, \
-             wait_for_selector, find_element, assert_selector, drag_drop, \
-             collect_console_errors, list_windows, wait_condition, wait_for_log, \
-             wait_screenshot_region, wait_ready, target_info. \
+             focus_window, window_geometry, clipboard_get, clipboard_set, dom, \
+             state, assert_state, logs_tail, invoke_command, list_commands, \
+             wait_for_selector, wait_for_text, find_element, assert_selector, \
+             drag_drop, collect_console_errors, list_windows, wait_condition, \
+             wait_for_log, wait_screenshot_region, wait_target_alive, \
+             wait_ready, target_info. \
              Appeler target_info en premier pour connaitre les capacites de la \
              cible (eval_js/dom indisponibles en kwin-eis)."
                 .to_string(),

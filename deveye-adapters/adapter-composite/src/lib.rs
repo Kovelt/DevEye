@@ -43,11 +43,39 @@ impl ConsoleErrorSource for NoopConsoleErrorSource {
 /// Collecteur d'erreurs console JS, injecté une fois puis drainé. Pur JS →
 /// fonctionne via CDP comme via la pompe SDK. Renvoie des entrées typées
 /// (level/text/url/line/timestamp) directement désérialisables en `ConsoleError`.
+///
+/// Capture desormais TOUS les niveaux (`error`/`warning`/`log`/`info`/`debug`),
+/// pas seulement `console.error`/`console.warn` — le drain renvoie tout, le
+/// filtrage par niveau se fait en aval (cote MCP). `ConsoleLevel` (deveye-core)
+/// a bien une variante pour chacun de ces niveaux, `Debug` comprise.
+///
+/// Buffer borne a 500 entrees (meme principe que `LOG_BUFFER_CAPACITY` cote
+/// SDK) : au-dela, une entree est evincee et `__deveye_console_dropped__`
+/// incremente (perf B5). L'eviction PRESERVE les erreurs : on retire la plus
+/// ancienne entree NON-`error` ; on ne sacrifie une `error` qu'en dernier
+/// recours (buffer plein d'erreurs). Sans cela, un flot de `console.log`/`info`/
+/// `debug` — desormais capture — pourrait evincer une vraie erreur avant le
+/// drain (regression signalee par la revue T4). Le snippet renvoie
+/// `{ entries, dropped }` ; `drain_console_errors` trace un `warn!` si des
+/// entrees ont ete perdues.
 const CONSOLE_ERRORS_SNIPPET: &str = r#"(function(){
+  var CAP = 500;
   if (!window.__deveye_console_init__) {
     window.__deveye_console_errors__ = [];
+    window.__deveye_console_dropped__ = 0;
     var push = function(level, text, url, line){
-      try { window.__deveye_console_errors__.push({ level: level, text: text, url: url, line: line, timestamp: new Date().toISOString() }); } catch (_) {}
+      try {
+        var buf = window.__deveye_console_errors__;
+        if (buf.length >= CAP) {
+          // Preserve les erreurs : evince la plus ancienne entree non-error,
+          // sinon (buffer 100% erreurs) la plus ancienne tout court.
+          var idx = buf.findIndex(function(x){ return x.level !== 'error'; });
+          if (idx < 0) { idx = 0; }
+          buf.splice(idx, 1);
+          window.__deveye_console_dropped__++;
+        }
+        buf.push({ level: level, text: text, url: url, line: line, timestamp: new Date().toISOString() });
+      } catch (_) {}
     };
     window.addEventListener('error', function(e){
       push('error', String((e && (e.message || e.error)) || 'error'), (e && e.filename) || null, (e && e.lineno) || null);
@@ -55,13 +83,24 @@ const CONSOLE_ERRORS_SNIPPET: &str = r#"(function(){
     window.addEventListener('unhandledrejection', function(e){
       push('error', String(e && e.reason), null, null);
     });
-    var origErr = console.error;
-    console.error = function(){ push('error', Array.prototype.map.call(arguments, String).join(' '), null, null); if (origErr) { origErr.apply(console, arguments); } };
-    var origWarn = console.warn;
-    console.warn = function(){ push('warning', Array.prototype.map.call(arguments, String).join(' '), null, null); if (origWarn) { origWarn.apply(console, arguments); } };
+    var wrapConsole = function(method, level){
+      var orig = console[method];
+      console[method] = function(){
+        push(level, Array.prototype.map.call(arguments, String).join(' '), null, null);
+        if (orig) { orig.apply(console, arguments); }
+      };
+    };
+    wrapConsole('error', 'error');
+    wrapConsole('warn', 'warning');
+    wrapConsole('log', 'log');
+    wrapConsole('info', 'info');
+    wrapConsole('debug', 'debug');
     window.__deveye_console_init__ = true;
   }
-  return window.__deveye_console_errors__.splice(0);
+  var entries = window.__deveye_console_errors__.splice(0);
+  var dropped = window.__deveye_console_dropped__;
+  window.__deveye_console_dropped__ = 0;
+  return { entries: entries, dropped: dropped };
 })()"#;
 
 /// `ConsoleErrorSource` générique : injecte un collecteur JS via l'évaluateur
@@ -75,18 +114,34 @@ pub struct JsConsoleErrorSource {
 impl ConsoleErrorSource for JsConsoleErrorSource {
     async fn drain_console_errors(&self) -> PortResult<Vec<ConsoleError>> {
         let value = self.evaluator.evaluate(CONSOLE_ERRORS_SNIPPET).await?;
-        // Parse element par element : un element corrompu ne doit jamais faire
-        // disparaitre les autres ("unwrap_or_default()" global = inversion du sens).
-        let arr = match value {
-            serde_json::Value::Array(a) => a,
+        // Le snippet renvoie `{ entries: [...], dropped: N }`. `dropped > 0`
+        // signale que des messages ont ete evinces (buffer plein) avant ce
+        // drain : on le trace pour que la perte ne soit pas totalement muette.
+        let (arr, dropped) = match value {
+            serde_json::Value::Object(mut o) => {
+                let dropped = o
+                    .get("dropped")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                match o.remove("entries") {
+                    Some(serde_json::Value::Array(a)) => (a, dropped),
+                    _ => (Vec::new(), dropped),
+                }
+            }
             other => {
                 eprintln!(
-                    "deveye-server: drain_console_errors: valeur JS inattendue (non-tableau : {}), buffer ignore",
+                    "deveye-server: drain_console_errors: valeur JS inattendue ({}), buffer ignore",
                     other
                 );
                 return Ok(Vec::new());
             }
         };
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                "console: buffer plein, {dropped} entree(s) evincee(s) avant drain"
+            );
+        }
         let mut out = Vec::with_capacity(arr.len());
         for (i, elem) in arr.into_iter().enumerate() {
             match serde_json::from_value::<ConsoleError>(elem) {
@@ -290,6 +345,74 @@ impl CompositeWaitCondition {
                     .iter()
                     .any(|e| e.level >= min && e.message.contains(contains.as_str())))
             }
+            WaitPredicate::TargetAlive {} => {
+                // Sonde le CANAL D'INTERACTION reel via `evaluator.evaluate` :
+                // c'est lui que l'agent utilisera ensuite, et sa chaine de repli
+                // en mode auto (CDP -> SDK) reste faite de vrais transports. NE
+                // PAS sonder le renderer en premier : en mode auto il est
+                // enveloppe dans un FallbackRenderer dont le repli capture
+                // l'ecran OS-level et REUSSIT meme quand le transport CDP est
+                // mort -> faux "vivant" (revue T4). Sur kwin-eis l'evaluator
+                // renvoie `Unsupported` (pas de JS) : la seulement, "une image
+                // est capturable" est le seul signal de vie, on retombe donc
+                // sur le renderer.
+                //
+                // Ne PAS utiliser `absorb_transient` : ce predicat attend la
+                // RESURRECTION d'une cible dont le transport vient de mourir —
+                // toute erreur transitoire (y compris `Network`) est "pas encore
+                // vivante", jamais un echec de `wait_until` (meme intention que
+                // `wait_ready`).
+                match self.evaluator.evaluate("1").await {
+                    Ok(_) => Ok(true),
+                    // Cible sans JS (kwin-eis) : la capture est le seul signal.
+                    Err(PortError::Unsupported(_)) => match self.renderer.screenshot().await {
+                        Ok(_) => Ok(true),
+                        Err(_) => Ok(false),
+                    },
+                    Err(_) => Ok(false),
+                }
+            }
+            WaitPredicate::TextContent {
+                text,
+                selector,
+                visible,
+            } => {
+                let text_json = serde_json::to_string(text).unwrap_or_default();
+                let el_expr = match selector {
+                    Some(s) => {
+                        let sel = serde_json::to_string(s).unwrap_or_default();
+                        format!("document.querySelector({sel})")
+                    }
+                    // Pas de selecteur => le document entier (`body`).
+                    None => "document.body".to_string(),
+                };
+                // Meme structure que DomSelector : le snippet renvoie un
+                // booleen pur, aucune negation cote JS (coherence/robustesse
+                // aux exceptions deja actee pour DomSelector).
+                let snippet = if *visible {
+                    format!(
+                        "(function(){{ const el = {el_expr}; \
+                         if (!el) return false; \
+                         const r = el.getBoundingClientRect(); \
+                         if (!(r.width > 0 && r.height > 0)) return false; \
+                         return (el.innerText || el.textContent || '').includes({text_json}); }})()"
+                    )
+                } else {
+                    format!(
+                        "(function(){{ const el = {el_expr}; \
+                         if (!el) return false; \
+                         return (el.innerText || el.textContent || '').includes({text_json}); }})()"
+                    )
+                };
+                // Meme filtre que DomSelector : erreur JS transitoire => false,
+                // seule Network propage. Sur kwin-eis (pas de DOM), l'evaluator
+                // renvoie `Unsupported`, absorbe comme transitoire — ce predicat
+                // ne se satisfera donc jamais la-bas (documente sur la variante).
+                match absorb_transient(self.evaluator.evaluate(&snippet).await, "text-content")? {
+                    Some(value) => Ok(value.as_bool().unwrap_or(false)),
+                    None => Ok(false),
+                }
+            }
         }
     }
 }
@@ -357,6 +480,36 @@ mod tests {
     // Timestamp RFC3339 fixe utilise dans les donnees de test (evite le besoin
     // d'une dependance directe a `chrono` dans le binaire).
     const TS: &str = "2026-01-01T00:00:00Z";
+
+    /// `drain_console_errors` parse la forme `{ entries, dropped }` renvoyee par
+    /// le snippet : entrees typees remontees (y compris `debug`), element
+    /// corrompu ignore sans faire disparaitre les autres, `dropped` non fatal.
+    #[tokio::test]
+    async fn drain_console_parses_entries_and_tolerates_corrupt_element() {
+        struct FixedEval(serde_json::Value);
+        #[async_trait]
+        impl JsEvaluator for FixedEval {
+            async fn evaluate(&self, _: &str) -> PortResult<serde_json::Value> {
+                Ok(self.0.clone())
+            }
+        }
+        let payload = serde_json::json!({
+            "dropped": 3,
+            "entries": [
+                { "level": "debug", "text": "d", "url": null, "line": null, "timestamp": TS },
+                { "level": "PAS_UN_NIVEAU", "text": "corrompu", "timestamp": TS },
+                { "level": "error", "text": "boom", "url": null, "line": null, "timestamp": TS },
+            ],
+        });
+        let src = JsConsoleErrorSource {
+            evaluator: Arc::new(FixedEval(payload)),
+        };
+        let out = src.drain_console_errors().await.expect("drain ok");
+        // 2 entrees valides (debug + error), la corrompue est ignoree.
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].level, ConsoleLevel::Debug);
+        assert_eq!(out[1].level, ConsoleLevel::Error);
+    }
 
     /// `LogSource` stub : buffer vide. Permet de construire un
     /// `CompositeWaitCondition` dans les tests qui n'exercent pas le predicat
@@ -984,6 +1137,244 @@ mod tests {
         assert!(
             matches!(result, Err(PortError::Network(_))),
             "une erreur Network doit se propager, recu: {result:?}"
+        );
+    }
+
+    // ----- D2-TargetAlive -----
+
+    /// Renderer qui echoue N fois (erreur non-Network) puis renvoie une
+    /// capture fixe : simule une cible qui vient de crasher/redemarrer et
+    /// redevient joignable apres quelques hoquets.
+    struct FlakyRenderer {
+        remaining_failures: std::sync::Mutex<u32>,
+        png: Vec<u8>,
+        size: Size,
+    }
+    #[async_trait]
+    impl Renderer for FlakyRenderer {
+        async fn screenshot(&self) -> PortResult<Screenshot> {
+            let mut remaining = self.remaining_failures.lock().unwrap();
+            if *remaining > 0 {
+                *remaining -= 1;
+                Err(PortError::Unsupported(
+                    "cible pas encore relancee".to_string(),
+                ))
+            } else {
+                Ok(Screenshot::new_png(self.png.clone(), self.size))
+            }
+        }
+        async fn viewport_size(&self) -> PortResult<Size> {
+            Ok(self.size)
+        }
+    }
+
+    /// `TargetAlive` : l'evaluateur (canal d'interaction) echoue 2 fois puis
+    /// repond => le predicat doit finir par etre satisfait (transport revenu).
+    #[tokio::test]
+    async fn composite_target_alive_satisfied_after_transport_recovers() {
+        struct FlakyEval {
+            remaining_failures: std::sync::Mutex<u32>,
+        }
+        #[async_trait]
+        impl JsEvaluator for FlakyEval {
+            async fn evaluate(&self, _script: &str) -> PortResult<serde_json::Value> {
+                let mut n = self.remaining_failures.lock().unwrap();
+                if *n > 0 {
+                    *n -= 1;
+                    Err(PortError::Network("transport mort".to_string()))
+                } else {
+                    Ok(serde_json::json!(1))
+                }
+            }
+        }
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(FlakyEval {
+                remaining_failures: std::sync::Mutex::new(2),
+            }),
+            inspector: Arc::new(UnusedInsp),
+            // Le renderer NE doit PAS etre sonde tant que l'evaluateur repond :
+            // un renderer qui panique verifie qu'on ne l'atteint jamais ici.
+            renderer: Arc::new(FlakyRenderer {
+                remaining_failures: std::sync::Mutex::new(0),
+                png: solid_png(2, 2),
+                size: Size::new(2, 2),
+            }),
+            log_source: Arc::new(EmptyLog),
+        };
+        let outcome = cond
+            .wait_until(WaitPredicate::TargetAlive {}, Duration::from_millis(2000))
+            .await
+            .expect("wait_until ne doit jamais renvoyer Err pour TargetAlive");
+        assert!(
+            outcome.satisfied,
+            "doit finir par etre satisfait une fois le transport retabli"
+        );
+    }
+
+    /// `TargetAlive` : une erreur `PortError::Network` de l'evaluateur ne doit
+    /// PAS se propager — c'est l'etat attendu pendant qu'une cible redemarre —
+    /// et ne doit PAS non plus etre masquee par un renderer OS-level encore
+    /// capturable (le bug bloquant de la revue T4 : faux "vivant" en mode auto).
+    #[tokio::test]
+    async fn composite_target_alive_network_does_not_propagate_nor_falls_back_to_renderer() {
+        struct NetworkEval;
+        #[async_trait]
+        impl JsEvaluator for NetworkEval {
+            async fn evaluate(&self, _script: &str) -> PortResult<serde_json::Value> {
+                Err(PortError::Network("connexion perdue".to_string()))
+            }
+        }
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(NetworkEval),
+            inspector: Arc::new(UnusedInsp),
+            // Renderer TOUJOURS capturable (simule le repli OS-level du mode
+            // auto) : ne doit PAS suffire a declarer la cible vivante.
+            renderer: Arc::new(ConstRenderer {
+                png: solid_png(2, 2),
+                size: Size::new(2, 2),
+            }),
+            log_source: Arc::new(EmptyLog),
+        };
+        let outcome = cond
+            .wait_until(WaitPredicate::TargetAlive {}, Duration::from_millis(80))
+            .await
+            .expect("TargetAlive ne doit jamais propager d'erreur, meme Network");
+        assert!(
+            !outcome.satisfied,
+            "transport mort => pas vivant, meme si l'ecran reste capturable"
+        );
+    }
+
+    /// `TargetAlive` sur kwin-eis : l'evaluateur renvoie `Unsupported` (pas de
+    /// JS), on retombe sur `renderer.screenshot()` comme seul signal de vie.
+    #[tokio::test]
+    async fn composite_target_alive_falls_back_to_renderer_when_eval_unsupported() {
+        struct UnsupportedEval;
+        #[async_trait]
+        impl JsEvaluator for UnsupportedEval {
+            async fn evaluate(&self, _script: &str) -> PortResult<serde_json::Value> {
+                Err(PortError::Unsupported("pas de JS en kwin-eis".to_string()))
+            }
+        }
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(UnsupportedEval),
+            inspector: Arc::new(UnusedInsp),
+            renderer: Arc::new(ConstRenderer {
+                png: solid_png(2, 2),
+                size: Size::new(2, 2),
+            }),
+            log_source: Arc::new(EmptyLog),
+        };
+        let outcome = cond
+            .wait_until(WaitPredicate::TargetAlive {}, Duration::from_millis(2000))
+            .await
+            .expect("wait_until ne doit jamais renvoyer Err pour TargetAlive");
+        assert!(
+            outcome.satisfied,
+            "kwin-eis : capture reussie => cible vivante"
+        );
+    }
+
+    // ----- D1-TextContent -----
+
+    /// `TextContent` : un evaluateur qui renvoie `true` satisfait le
+    /// predicat immediatement (sans selecteur : verifie sur `document.body`).
+    #[tokio::test]
+    async fn composite_text_content_satisfied_when_evaluator_returns_true() {
+        struct TrueEval;
+        #[async_trait]
+        impl JsEvaluator for TrueEval {
+            async fn evaluate(&self, _: &str) -> PortResult<serde_json::Value> {
+                Ok(serde_json::json!(true))
+            }
+        }
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(TrueEval),
+            inspector: Arc::new(UnusedInsp),
+            renderer: Arc::new(ConstRenderer {
+                png: solid_png(2, 2),
+                size: Size::new(2, 2),
+            }),
+            log_source: Arc::new(EmptyLog),
+        };
+        let outcome = cond
+            .wait_until(
+                WaitPredicate::TextContent {
+                    text: "Enregistre".to_string(),
+                    selector: None,
+                    visible: false,
+                },
+                Duration::from_millis(200),
+            )
+            .await
+            .expect("wait_until ne doit pas echouer");
+        assert!(
+            outcome.satisfied,
+            "evaluator renvoyant true doit satisfaire TextContent"
+        );
+    }
+
+    /// `TextContent` : verifie via un evaluateur espion que le snippet cible
+    /// bien `document.body` quand `selector` est absent, et le selecteur
+    /// fourni sinon — couvre la construction de `el_expr`.
+    #[tokio::test]
+    async fn composite_text_content_snippet_targets_selector_or_body() {
+        struct SpyEval {
+            captured: std::sync::Mutex<String>,
+        }
+        #[async_trait]
+        impl JsEvaluator for SpyEval {
+            async fn evaluate(&self, snippet: &str) -> PortResult<serde_json::Value> {
+                *self.captured.lock().unwrap() = snippet.to_string();
+                Ok(serde_json::json!(true))
+            }
+        }
+
+        let spy = Arc::new(SpyEval {
+            captured: std::sync::Mutex::new(String::new()),
+        });
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::clone(&spy) as Arc<dyn JsEvaluator>,
+            inspector: Arc::new(UnusedInsp),
+            renderer: Arc::new(ConstRenderer {
+                png: solid_png(2, 2),
+                size: Size::new(2, 2),
+            }),
+            log_source: Arc::new(EmptyLog),
+        };
+        cond.wait_until(
+            WaitPredicate::TextContent {
+                text: "OK".to_string(),
+                selector: None,
+                visible: false,
+            },
+            Duration::from_millis(200),
+        )
+        .await
+        .expect("wait_until ne doit pas echouer");
+        assert!(
+            spy.captured.lock().unwrap().contains("document.body"),
+            "selecteur absent => doit cibler document.body"
+        );
+
+        cond.wait_until(
+            WaitPredicate::TextContent {
+                text: "OK".to_string(),
+                selector: Some("#status".to_string()),
+                visible: true,
+            },
+            Duration::from_millis(200),
+        )
+        .await
+        .expect("wait_until ne doit pas echouer");
+        let snippet = spy.captured.lock().unwrap().clone();
+        assert!(
+            snippet.contains("document.querySelector(\"#status\")"),
+            "selecteur fourni doit etre utilise tel quel, recu: {snippet}"
+        );
+        assert!(
+            snippet.contains("getBoundingClientRect"),
+            "visible=true doit verifier le rect, recu: {snippet}"
         );
     }
 }

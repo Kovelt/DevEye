@@ -1,7 +1,7 @@
 //! Ports DevEye — traits asynchrones consommés par le binaire orchestrateur
 //! et le serveur MCP, implémentés par les crates `deveye-adapters/*`.
 //!
-//! 11 ports définis :
+//! 12 ports définis :
 //! - [`Clipboard`] — lecture/écriture du presse-papiers de session
 //! - [`CommandRouter`] — envoi de commandes à l'app cible
 //! - [`ConsoleErrorSource`] — drain des erreurs console webview
@@ -11,6 +11,7 @@
 //! - [`LogSource`] — collecte des logs applicatifs
 //! - [`Renderer`] — capture d'écran / rendu visuel
 //! - [`WaitCondition`] — attente de conditions asynchrones
+//! - [`WindowGeometry`] — géométrie écran (position + taille) d'une fenêtre
 //! - [`WindowLister`] — énumération des fenêtres de l'app cible
 //! - [`WindowManager`] — activation (focus OS) d'une fenêtre
 //!
@@ -30,6 +31,7 @@ pub mod js_evaluator;
 pub mod log_source;
 pub mod renderer;
 pub mod wait_condition;
+pub mod window_geometry;
 pub mod window_lister;
 pub mod window_manager;
 
@@ -43,5 +45,6 @@ pub use js_evaluator::JsEvaluator;
 pub use log_source::LogSource;
 pub use renderer::Renderer;
 pub use wait_condition::WaitCondition;
+pub use window_geometry::WindowGeometry;
 pub use window_lister::WindowLister;
 pub use window_manager::WindowManager;

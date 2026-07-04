@@ -85,7 +85,7 @@ dx serve --platform desktop --features deveye
 claude
 ```
 
-Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **38 outils sont disponibles** (1 _(à venir)_ : `resize`) :
+Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **41 outils sont disponibles** (1 _(à venir)_ : `resize`) :
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|

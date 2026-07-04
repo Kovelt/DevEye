@@ -19,11 +19,13 @@ use adapter_dioxus_signals::{
 use adapter_interaction_kwin_eis::KwinEisInteraction;
 use adapter_logs_tracing::SdkTracingLogSource;
 use adapter_mcp_server::{DeveyeMcpServer, DeveyePorts, TargetInfo};
-use adapter_screencap_kwin::{KwinRenderer, KwinWindowManager};
+use adapter_screencap_kwin::{
+    KwinRenderer, KwinWindowGeometry, KwinWindowLister, KwinWindowManager,
+};
 use adapter_screencap_xcap::{MonitorRenderer, XcapRenderer};
 use deveye_ports::{
     AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
-    LogSource, Renderer, WaitCondition, WindowLister, WindowManager,
+    LogSource, Renderer, WaitCondition, WindowGeometry, WindowLister, WindowManager,
 };
 
 use crate::cdp::{build_cdp_filter, try_initial_cdp, LazyCdp};
@@ -31,7 +33,7 @@ use crate::cli::{Args, ScreencapBackend, TargetMode};
 use crate::fallback::{FallbackDom, FallbackEvaluator, FallbackInteraction, FallbackRenderer};
 use crate::stubs::{
     EmptyWindowLister, UnsupportedClipboard, UnsupportedEvaluator, UnsupportedInspector,
-    UnsupportedWindowManager,
+    UnsupportedWindowGeometry, UnsupportedWindowManager,
 };
 
 /// Le quintet pilotant : yeux, mains, DOM, évaluateur JS, liste des fenêtres.
@@ -158,6 +160,49 @@ fn build_window_manager(title: Option<&str>, backend: ScreencapBackend) -> Arc<d
     }
 }
 
+/// Construit le port de geometrie de fenetre (outil `window_geometry`). Actif
+/// des que le screencap passe par KWin, meme SANS `--screencap-window` : le
+/// titre eventuel sert seulement de defaut quand l'appel MCP n'en fournit pas
+/// (`KwinWindowGeometry::geometry` rejette proprement un titre vide). Sinon
+/// stub `Unsupported`. (revue T4 : ne pas exiger `--screencap-window` alors
+/// qu'un titre peut etre passe par l'appel.)
+fn build_window_geometry(
+    title: Option<&str>,
+    backend: ScreencapBackend,
+) -> Arc<dyn WindowGeometry> {
+    let use_kwin = match backend {
+        ScreencapBackend::Kwin => true,
+        ScreencapBackend::Xcap => false,
+        ScreencapBackend::Auto => is_kde_wayland(),
+    };
+    if use_kwin {
+        Arc::new(KwinWindowGeometry::new(title.unwrap_or("")))
+    } else {
+        Arc::new(UnsupportedWindowGeometry)
+    }
+}
+
+/// Construit le lister de fenetres pour la cible kwin-eis (outil
+/// `list_windows`). `KwinWindowLister` enumere tout le workspace et n'a PAS
+/// besoin d'un titre : actif des que le screencap passe par KWin, meme sans
+/// `--screencap-window` (revue T4 — c'est justement l'outil qui sert a
+/// DECOUVRIR le titre a passer ensuite).
+fn build_kwin_window_lister(
+    _title: Option<&str>,
+    backend: ScreencapBackend,
+) -> Arc<dyn WindowLister> {
+    let use_kwin = match backend {
+        ScreencapBackend::Kwin => true,
+        ScreencapBackend::Xcap => false,
+        ScreencapBackend::Auto => is_kde_wayland(),
+    };
+    if use_kwin {
+        Arc::new(KwinWindowLister::new())
+    } else {
+        Arc::new(EmptyWindowLister)
+    }
+}
+
 /// Construit la description statique de la cible (outil `target_info`) selon le
 /// mode choisi : capacites distinctives (DOM/eval_js/console/fenetres) + notes
 /// sur les pieges et indisponibilites propres a chaque cible.
@@ -211,10 +256,14 @@ fn build_target_info(target: TargetMode) -> TargetInfo {
             dom: false,
             state: true,
             console_errors: false,
-            list_windows: false,
+            list_windows: true,
             notes: "Rendu natif, pas de WebView : dom/eval_js/find_element/wait_for_selector \
                     renvoient Unsupported, navigate indisponible. state/logs via le SDK/shim \
-                    de l'app si lance. Yeux et assertions visuelles : screenshot/assert_visual."
+                    de l'app si lance. Yeux et assertions visuelles : screenshot/assert_visual. \
+                    list_windows/window_geometry/focus_window via KWin Scripting : necessitent \
+                    KDE/Wayland. list_windows enumere tout le workspace (aucun titre requis) ; \
+                    window_geometry/focus_window ciblent par titre (celui de l'appel ou, a \
+                    defaut, --screencap-window). Hors KDE/Wayland : liste vide / Unsupported."
                 .to_string(),
         },
     }
@@ -308,7 +357,7 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
                 Arc::new(interaction),
                 Arc::new(UnsupportedInspector),
                 Arc::new(UnsupportedEvaluator),
-                Arc::new(EmptyWindowLister),
+                build_kwin_window_lister(screencap_title.as_deref(), args.screencap_backend),
             )
         }
     };
@@ -358,6 +407,7 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
         console_errors,
         wait_condition,
         window_manager: build_window_manager(screencap_title.as_deref(), args.screencap_backend),
+        window_geometry: build_window_geometry(screencap_title.as_deref(), args.screencap_backend),
         clipboard: build_clipboard(),
         target_info: build_target_info(args.target),
     }))
