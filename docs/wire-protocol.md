@@ -1,6 +1,6 @@
 # Wire Protocol DevEye — Spécification du contrat HTTP SDK
 
-Version du document : 2026-06-24  
+Version du document : 2026-07-04  
 Source de vérité canonique : ce fichier (`docs/wire-protocol.md`).
 
 ---
@@ -25,7 +25,7 @@ La spec est **agnostique du langage** : n'importe quelle techno capable de servi
 
 Le choix du port `31337` est arbitraire et mnémonique. Il doit être surchargeable sans recompilation via `DEVEYE_PORT`, ce qui est indispensable quand plusieurs apps tournent simultanément en dev.
 
-Ref. code : `deveye-sdk/src/lib.rs:48` (`pub const DEFAULT_PORT: u16 = 31337`) et `:61-68` (`Config::default` lit `DEVEYE_PORT`).
+Ref. code : `deveye-sdk/src/lib.rs` — constante `DEFAULT_PORT` (`pub const DEFAULT_PORT: u16 = 31337`) et `impl Default for Config` (lit `DEVEYE_PORT`).
 
 ---
 
@@ -48,9 +48,9 @@ Un SDK conforme dans un autre langage doit être conditionné par un équivalent
 
 Toute requête dont le header `Host` n'est pas `localhost`, `127.0.0.1` ou `[::1]` (avec port optionnel, insensible à la casse pour `localhost`) doit être rejetée avec `403 Forbidden`, **avant** tout traitement de la route.
 
-Ref. code : `deveye-sdk/src/lib.rs:173-197` (`guard_local_host` et `host_is_local`).
+Ref. code : `deveye-sdk/src/lib.rs` — fonctions `guard_local_host` et `host_is_local`.
 
-Valeurs acceptées par `host_is_local` (ref. tests `:314-330`) :
+Valeurs acceptées par `host_is_local` (ref. tests `host_is_local_accepts_loopback_forms` / `host_is_local_rejects_foreign_hosts`) :
 
 ```
 localhost
@@ -119,7 +119,7 @@ Le SDK expose cinq routes. Toutes retournent `Content-Type: application/json`.
 
 **Sémantique** : lecture non destructive. Plusieurs appels successifs retournent le dernier état connu. L'app cible met à jour `entries` via `set_state(name, value)` (écrasement, dernière écriture gagne).
 
-Ref. code : `deveye-sdk/src/lib.rs:72-75` (struct `StatePayload`), `:232-239` (handler `state_handler`). Côté client : `adapter-dioxus-signals/src/lib.rs` (`DioxusSignalsInspector`) consomme `entries` via `GET /devtools/state` — la forme `{ "entries": {...} }` est validée par les tests `:305-312` du SDK. À ne pas confondre avec `SdkEvaluator` (`adapter-dioxus-signals/src/bridge.rs`) qui emprunte un chemin distinct : `POST /devtools/eval` avec corps `{ "expression": "..." }` (section 3.3).
+Ref. code : `deveye-sdk/src/lib.rs` — struct `StatePayload` et handler `state_handler`. Côté client : `adapter-dioxus-signals/src/lib.rs` (`DioxusSignalsInspector`) consomme `entries` via `GET /devtools/state` — la forme `{ "entries": {...} }` est validée par le test `state_payload_serializes_with_entries_key` du SDK. À ne pas confondre avec `SdkEvaluator` (`adapter-dioxus-signals/src/bridge.rs`) qui emprunte un chemin distinct : `POST /devtools/eval` avec corps `{ "expression": "..." }` (section 3.3).
 
 Exemple :
 
@@ -163,15 +163,15 @@ Exemple :
 }
 ```
 
-**Schéma d'un `LogEvent`** (ref. `deveye-core/src/log_event.rs:27-35`) :
+**Schéma d'un `LogEvent`** (ref. `deveye-core/src/log_event.rs` — struct `LogEvent`) :
 
 | Champ | Type JSON | Obligatoire | Description |
 |---|---|---|---|
-| `level` | string | oui | `"trace"`, `"debug"`, `"info"`, `"warn"` ou `"error"` (minuscules, ref. `:12` `#[serde(rename_all = "lowercase")]`) |
+| `level` | string | oui | `"trace"`, `"debug"`, `"info"`, `"warn"` ou `"error"` (minuscules, ref. attribut `#[serde(rename_all = "lowercase")]` sur l'enum `LogLevel`) |
 | `target` | string | oui | Module émetteur (ex. `my_app::ui::dashboard`) |
 | `message` | string | oui | Texte du message |
 | `timestamp` | string | oui | ISO 8601 / RFC 3339 avec offset UTC (`Z`) |
-| `fields` | objet JSON | non | Absent ou null si aucune paire `key=value` tracing. Ref. `:33` `#[serde(default, skip_serializing_if = "serde_json::Value::is_null")]` |
+| `fields` | objet JSON | non | Absent ou null si aucune paire `key=value` tracing. Ref. attribut `#[serde(default, skip_serializing_if = "serde_json::Value::is_null")]` sur le champ `fields` de `LogEvent` |
 
 **Codes HTTP** :
 
@@ -185,7 +185,7 @@ Exemple :
 
 Le poll est **destructif**. L'appel `GET /devtools/logs/poll` vide atomiquement le buffer interne et retourne les événements accumulés depuis le dernier poll. Un second appel immédiat retourne `{ "events": [] }`. Il n'y a pas de curseur, pas d'acquittement, pas de replay.
 
-Ref. code : `deveye-sdk/src/lib.rs:241-248` — `guard.drain(..)` vide le `VecDeque` en une seule opération sous le verrou :
+Ref. code : `deveye-sdk/src/lib.rs` — handler `logs_poll_handler` : `guard.drain(..)` vide le `VecDeque` en une seule opération sous le verrou :
 
 ```rust
 async fn logs_poll_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
@@ -202,9 +202,9 @@ async fn logs_poll_handler(State(registry): State<Arc<Registry>>) -> impl IntoRe
 
 Si `deveye-server` s'arrête ou crashe entre deux polls, les événements déjà drainés sont **perdus définitivement**. Ceux qui n'ont pas encore été pollés restent dans le buffer SDK tant que l'app cible tourne. À la reconnexion, le prochain poll récupère le contenu restant (éventuellement tronqué si le buffer a débordé).
 
-**Politique de buffer plein** : `drop-oldest`. La capacité maximale est `1024` événements (ref. `deveye-sdk/src/lib.rs:52` `pub const LOG_BUFFER_CAPACITY: usize = 1024`). Quand le buffer est plein, les événements les plus anciens sont écrasés par les nouveaux. Un SDK conforme DOIT implémenter une politique bornée ; la capacité exacte est paramétrable mais doit être documentée.
+**Politique de buffer plein** : `drop-oldest`. La capacité maximale est `1024` événements (ref. `deveye-sdk/src/lib.rs` — constante `LOG_BUFFER_CAPACITY`). Quand le buffer est plein, les événements les plus anciens sont écrasés par les nouveaux. Un SDK conforme DOIT implémenter une politique bornée ; la capacité exacte est paramétrable mais doit être documentée.
 
-**Timeout client recommandé** : 10 secondes (ref. `adapter-logs-tracing/src/lib.rs:18` `const SDK_HTTP_TIMEOUT: Duration = Duration::from_secs(10)`). Ce timeout évite de bloquer Claude indéfiniment si l'app cible est figée (breakpoint, deadlock UI).
+**Timeout client recommandé** : ce que configure effectivement `adapter-logs-tracing` (et tout adapter qui parle au SDK) via le client HTTP partagé `deveye_sdk_client::client()` — `CONNECT_TIMEOUT = 3 s` et `REQUEST_TIMEOUT = 15 s` (ref. `deveye-sdk-client/src/lib.rs`). Il n'existe pas de constante `SDK_HTTP_TIMEOUT` dédiée côté `adapter-logs-tracing` : ce crate, comme `adapter-commands-http` et `adapter-dioxus-signals`, réutilise le même `reqwest::Client` préconfiguré pour éviter la répétition. Ce timeout évite de bloquer Claude indéfiniment si l'app cible est figée (breakpoint, deadlock UI).
 
 ---
 
@@ -212,7 +212,7 @@ Si `deveye-server` s'arrête ou crashe entre deux polls, les événements déjà
 
 **Objectif** : évaluer une expression JavaScript dans le webview de l'app cible et retourner le résultat.
 
-**Disponibilité** : uniquement si l'app cible a installé une **pompe d'évaluation** (appel à `take_eval_requests()` côté SDK Rust, ou équivalent). Sans pompe, le SDK retourne `503`.
+**Disponibilité** : uniquement si l'app cible a installé une **pompe d'évaluation** (appel à `take_eval_requests()` côté SDK Rust, ou équivalent). Sans pompe, le SDK retourne `503`. Le SDK retourne aussi `503` si la file d'évaluation est **pleine** (backpressure, cf. ci-dessous) : les deux causes partagent le même code HTTP mais un message distinct (`"aucune pompe d'évaluation enregistrée..."` vs `"file d'évaluation pleine (backpressure)..."`).
 
 Ref. code : `deveye-sdk/src/lib.rs` (struct `EvalRequest` et champ `respond: tokio::sync::oneshot::Sender<Result<serde_json::Value, String>>`).
 
@@ -263,7 +263,7 @@ struct EvalResponse {
 | Code | Cas |
 |---|---|
 | 200 | Expression transmise et exécutée (succès ou erreur JS — voir corps) |
-| 503 Service Unavailable | Aucune pompe d'évaluation enregistrée, ou la pompe s'est arrêtée |
+| 503 Service Unavailable | Aucune pompe d'évaluation enregistrée, la pompe s'est arrêtée, ou la file d'évaluation est pleine (backpressure) |
 | 504 Gateway Timeout | L'app n'a pas répondu dans le délai (10 s) |
 | 500 Internal Server Error | La pompe a abandonné la requête (channel fermé après envoi) |
 | 403 | Header `Host` invalide |
@@ -276,7 +276,7 @@ match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
 
 **Sémantique d'appariement requête/réponse** :
 
-Le SDK crée un canal `oneshot` par requête entrante. Le canal est passé à la pompe de l'app via un `mpsc::UnboundedSender<EvalRequest>`. La pompe reçoit la requête, exécute l'expression dans le webview, et répond sur le `Sender<Result<serde_json::Value, String>>`. Le handler HTTP attend sur le `Receiver` avec un timeout de 10 secondes. Ce mécanisme garantit qu'une réponse correspond exactement à sa requête, sans état partagé entre les requêtes concurrentes.
+Le SDK crée un canal `oneshot` par requête entrante. Le canal est passé à la pompe de l'app via un `mpsc::Sender<EvalRequest>` **borné** (capacité `EVAL_QUEUE_CAPACITY = 32`, cf. `deveye-sdk/src/lib.rs`) — pas un `UnboundedSender` : un canal illimité ferait enfler la mémoire sans limite si l'app cible cesse de drainer sa pompe (figée). Le handler HTTP envoie via `try_send` (non bloquant) : sur file pleine, il répond `503` immédiatement plutôt que d'attendre. La pompe reçoit la requête, exécute l'expression dans le webview, et répond sur le `Sender<Result<serde_json::Value, String>>`. Le handler HTTP attend sur le `Receiver` avec un timeout de 10 secondes. Ce mécanisme garantit qu'une réponse correspond exactement à sa requête, sans état partagé entre les requêtes concurrentes.
 
 **Contrat de la pompe côté app** :
 
@@ -288,9 +288,9 @@ loop {
 }
 ```
 
-La pompe ne doit pas oublier d'envoyer sur `respond` : si elle abandonne le `Sender` sans répondre, le handler HTTP reçoit `500`. Si elle met plus de 10 secondes à répondre, le handler retourne `504` et le client (adapter) reçoit `PortError::Network`.
+La pompe ne doit pas oublier d'envoyer sur `respond` : si elle abandonne le `Sender` sans répondre, le handler HTTP reçoit `500`. Si elle met plus de 10 secondes à répondre, le handler retourne `504` et le client (adapter) reçoit `PortError::Timeout` (et non `PortError::Network` — distinct d'une absence de liaison, cf. `SdkEvaluator::evaluate` ci-dessous).
 
-Côté client : `adapter-dioxus-signals/src/bridge.rs:48-73` (`SdkEvaluator::evaluate`) envoie `POST /devtools/eval` avec le corps `{ "expression": "..." }` et mappe les codes HTTP sur `PortError` :
+Côté client : `adapter-dioxus-signals/src/bridge.rs` (`SdkEvaluator::evaluate`) envoie `POST /devtools/eval` avec le corps `{ "expression": "..." }` et mappe les codes HTTP sur `PortError` :
 
 ```rust
 let url = format!("{}/devtools/eval", self.base_url.trim_end_matches('/'));
@@ -325,7 +325,7 @@ let resp = self
 | `route` | string | oui | Nom de la commande, tel qu'enregistré via `expose_route` |
 | `payload` | JSON | non (défaut `null`) | Arguments de la commande. Schéma défini par l'app cible. |
 
-Ref. code : `deveye-sdk/src/lib.rs:86-91` (struct `CommandRequest` avec `#[serde(default)]` sur `payload`).
+Ref. code : `deveye-sdk/src/lib.rs` — struct `CommandRequest` (avec `#[serde(default)]` sur `payload`).
 
 **Réponse 200** :
 
@@ -339,7 +339,7 @@ Le corps est la valeur JSON retournée par le handler de la commande. Il n'y a p
 }
 ```
 
-Ref. code : `deveye-sdk/src/lib.rs:261-273` (handler `command_handler`).
+Ref. code : `deveye-sdk/src/lib.rs` — handler `command_handler`.
 
 **Codes HTTP** :
 
@@ -349,9 +349,9 @@ Ref. code : `deveye-sdk/src/lib.rs:261-273` (handler `command_handler`).
 | 404 | Route inconnue |
 | 403 | Header `Host` invalide |
 
-**Sémantique** : le handler est exécuté **de façon synchrone** sous le verrou des routes (ref. `:256-263`, le verrou est libéré avant l'exécution — voir commentaire). Le handler reçoit `payload` et retourne un `serde_json::Value`. Il est responsable de sa propre gestion d'erreur ; aucune convention de retour d'erreur n'est imposée à ce niveau (c'est l'app qui décide du schéma de sa réponse).
+**Sémantique** : dans `command_handler`, le verrou de lecture sur les routes n'est tenu que pour cloner le handler (`Arc`) ; il est **relâché avant l'exécution**, qui a lieu dans `tokio::task::spawn_blocking` (le handler peut être bloquant sans figer le runtime SDK, et un panic y est capturé plutôt que de faire tomber le serveur). Le handler reçoit `payload` et retourne un `serde_json::Value`. Il est responsable de sa propre gestion d'erreur ; aucune convention de retour d'erreur n'est imposée à ce niveau (c'est l'app qui décide du schéma de sa réponse).
 
-Côté client : `adapter-commands-http/src/lib.rs:50-54` (struct `CommandRequest`) et `:62-77` (`SdkCommandRouter::invoke`). Un code non-2xx est traduit en `PortError::Route`.
+Côté client : `adapter-commands-http/src/lib.rs` (`SdkCommandRouter::invoke`) — **il n'existe pas de struct `CommandRequest` côté client** : le corps `{ "route": ..., "payload": ... }` est construit directement via `serde_json::json!({ "route": route, "payload": payload })`, sans type dédié (seul le serveur, `deveye-sdk`, a une struct `CommandRequest` pour désérialiser sa requête entrante — cf. section 3.4 ci-dessus). Un code non-2xx est traduit en `PortError::Route` (le corps `{ "error": ... }` est extrait si présent, sinon le texte brut est inclus dans le message).
 
 ---
 
@@ -378,7 +378,7 @@ Tableau JSON de `CommandDescriptor`, trié alphabétiquement par `name` :
 ]
 ```
 
-Schéma d'un `CommandDescriptor` (ref. `deveye-core/src/command.rs:97-100`) :
+Schéma d'un `CommandDescriptor` (ref. `deveye-core/src/command.rs` — struct `CommandDescriptor`) :
 
 | Champ | Type | Description |
 |---|---|---|
@@ -392,7 +392,7 @@ Schéma d'un `CommandDescriptor` (ref. `deveye-core/src/command.rs:97-100`) :
 | 200 | Succès (même si la liste est vide) |
 | 403 | Header `Host` invalide |
 
-Ref. code : `deveye-sdk/src/lib.rs:276-292` (handler `commands_handler`, tri par `a.name.cmp(&b.name)`). Côté client : `adapter-commands-http/src/lib.rs:83-101` (`SdkCommandRouter::list`).
+Ref. code : `deveye-sdk/src/lib.rs` — handler `commands_handler` (tri par `a.name.cmp(&b.name)`). Côté client : `adapter-commands-http/src/lib.rs` (`SdkCommandRouter::list`) — un code non-2xx y est traduit en `PortError::Network` (et non `PortError::Route` : un échec de listing est un problème de liaison/SDK, pas une route inconnue).
 
 ---
 
@@ -420,15 +420,17 @@ Runtime tokio dédié (`once_cell::sync::Lazy`) et locks `tokio::sync` sont cons
 
 ## 5. Tableau récapitulatif des endpoints
 
-| Méthode | Chemin | Destructif | Corps requête | Corps réponse | Timeout client recommandé |
+| Méthode | Chemin | Destructif | Corps requête | Corps réponse | Timeout client réel |
 |---|---|---|---|---|---|
-| GET | `/devtools/state` | non | aucun | `{ "entries": {...} }` | 10 s |
-| GET | `/devtools/logs/poll` | **oui** (drain) | aucun | `{ "events": [...] }` | 10 s |
-| POST | `/devtools/eval` | non | `{ "expression": "..." }` | `{ "value": ... }` ou `{ "error": "..." }` | **20 s** (10 s timeout SDK + marge réseau) |
-| POST | `/devtools/command` | selon commande | `{ "route": "...", "payload": ... }` | JSON libre | 10 s |
-| GET | `/devtools/commands` | non | aucun | `[{ "name": "...", "description": "..." }]` | 10 s |
+| GET | `/devtools/state` | non | aucun | `{ "entries": {...} }` | 15 s (connexion 3 s) |
+| GET | `/devtools/logs/poll` | **oui** (drain) | aucun | `{ "events": [...] }` | 15 s (connexion 3 s) |
+| POST | `/devtools/eval` | non | `{ "expression": "..." }` | `{ "value": ... }` ou `{ "error": "..." }` | 15 s (connexion 3 s) |
+| POST | `/devtools/command` | selon commande | `{ "route": "...", "payload": ... }` | JSON libre | 15 s (connexion 3 s) |
+| GET | `/devtools/commands` | non | aucun | `[{ "name": "...", "description": "..." }]` | 15 s (connexion 3 s) |
 
-Note sur le timeout de `/devtools/eval` : le SDK impose un timeout interne de 10 s (ref. `deveye-sdk/src/lib.rs`, `tokio::time::timeout(Duration::from_secs(10), ...)`). Le client doit prévoir une marge supplémentaire pour le réseau loopback (négligeable en pratique) et la latence de sérialisation. 15-20 s côté client est raisonnable pour éviter un double-timeout. Côté client Rust, un `504` est distingué par `PortError::Timeout` (cf. `adapter-dioxus-signals/src/bridge.rs`).
+Les cinq endpoints partagent le **même** `reqwest::Client`, construit une fois par `deveye_sdk_client::client()` (`CONNECT_TIMEOUT = 3 s`, `REQUEST_TIMEOUT = 15 s`, ref. `deveye-sdk-client/src/lib.rs`) — aucun timeout n'est configuré par endpoint ni par adapter. Il n'existe pas de constante `SDK_HTTP_TIMEOUT`.
+
+Note sur le timeout de `/devtools/eval` : le SDK impose en plus un timeout **interne** de 10 s (ref. `deveye-sdk/src/lib.rs`, `tokio::time::timeout(Duration::from_secs(10), ...)`) avant de répondre `504`. Le `REQUEST_TIMEOUT` de 15 s côté client laisse une marge suffisante (5 s) pour le réseau loopback et la sérialisation sans déclencher de double-timeout. Côté client Rust, un `504` est distingué par `PortError::Timeout` (cf. `adapter-dioxus-signals/src/bridge.rs`).
 
 ---
 

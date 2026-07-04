@@ -15,3 +15,9 @@ deveye-ports = { path = "../../deveye-ports" }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["process", "io-util", "rt", "macros", "time"] }
 tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+# `sync` : Mutex asynchrone serialisant les tests fork+exec (evite ETXTBSY,
+# cf. mod tests) — tenu a travers un await, contrairement au Mutex std.
+tokio = { workspace = true, features = ["sync"] }

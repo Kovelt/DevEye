@@ -24,12 +24,35 @@ use deveye_ports::{Clipboard, PortError, PortResult};
 const WL_CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Presse-papiers Wayland via `wl-copy` / `wl-paste`.
-#[derive(Clone, Debug, Default)]
-pub struct WaylandClipboard;
+#[derive(Clone, Debug)]
+pub struct WaylandClipboard {
+    // Noms/chemins des binaires invoqués. Configurable uniquement pour les
+    // tests (pointer vers un script factice) — en production toujours
+    // "wl-copy"/"wl-paste", résolus via le PATH hérité du process courant.
+    copy_bin: String,
+    paste_bin: String,
+}
 
 impl WaylandClipboard {
     pub fn new() -> Self {
-        Self
+        Self {
+            copy_bin: "wl-copy".to_string(),
+            paste_bin: "wl-paste".to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_binaries(copy_bin: impl Into<String>, paste_bin: impl Into<String>) -> Self {
+        Self {
+            copy_bin: copy_bin.into(),
+            paste_bin: paste_bin.into(),
+        }
+    }
+}
+
+impl Default for WaylandClipboard {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -40,7 +63,7 @@ impl Clipboard for WaylandClipboard {
         // On garde `child` (spawn plutôt que `.output()`) pour pouvoir le
         // tuer si le timeout expire — `.output()` consomme le process et ne
         // laisse aucune prise dessus en cas de blocage.
-        let mut child = tokio::process::Command::new("wl-paste")
+        let mut child = tokio::process::Command::new(&self.paste_bin)
             .arg("--no-newline")
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -90,7 +113,7 @@ impl Clipboard for WaylandClipboard {
         // roundtrip). Un compositeur muet bloque donc `write_all` dès que le
         // texte dépasse la capacité du tube (64 Ko) : toute la séquence
         // écriture + fermeture + attente doit tenir dans le MÊME timeout.
-        let mut child = tokio::process::Command::new("wl-copy")
+        let mut child = tokio::process::Command::new(&self.copy_bin)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -141,5 +164,113 @@ impl Clipboard for WaylandClipboard {
                 )))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+
+    /// Sérialise les tests qui écrivent PUIS exécutent un script factice.
+    /// Sans ça, un test qui `exec()` son script pendant qu'un autre test
+    /// `fork()` (spawn) hérite transitoirement du fd d'écriture (fenêtre
+    /// fork→exec) déclenche `ETXTBSY` (~40 % d'échecs observés en parallèle,
+    /// revue Q6). `tokio::sync::Mutex` (pas `std`) : son garde se tient à
+    /// travers les `.await` des tests sans déclencher `await_holding_lock`, et
+    /// ne s'empoisonne pas sur panic.
+    static EXEC_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Écrit un script shell exécutable `body` sous `dir/name`, renvoie son
+    /// chemin absolu. Un chemin contenant un `/` court-circuite la recherche
+    /// PATH (std/tokio n'y a recours que pour un nom "nu").
+    fn write_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("ecriture script factice");
+        let mut perms = std::fs::metadata(&path)
+            .expect("metadata script factice")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).expect("chmod +x script factice");
+        path
+    }
+
+    #[tokio::test]
+    async fn get_renvoie_chaine_vide_si_code_non_nul() {
+        let _serial = EXEC_SERIAL.lock().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Simule `wl-paste` sortant en erreur "Nothing is copied" : pas une
+        // erreur cote adapter, presse-papiers vide.
+        let paste = write_script(dir.path(), "wl-paste-fake", "exit 1");
+        let clipboard =
+            WaylandClipboard::with_binaries("wl-copy-inutilise", paste.to_str().unwrap());
+
+        let result = clipboard
+            .get()
+            .await
+            .expect("code non nul => chaine vide, pas une erreur");
+        assert_eq!(result, "");
+    }
+
+    #[tokio::test]
+    async fn get_renvoie_lerreur_attendue_si_binaire_absent() {
+        let _serial = EXEC_SERIAL.lock().await;
+        // Nom volontairement farfelu (jamais installe sur aucune machine) :
+        // equivalent a un PATH isole qui ne contient pas le binaire, sans
+        // manipuler la variable d'environnement globale du process de test.
+        let clipboard = WaylandClipboard::with_binaries(
+            "wl-copy-inexistant-deveye-test",
+            "wl-paste-inexistant-deveye-test",
+        );
+
+        let err = clipboard.get().await.expect_err("binaire absent => erreur");
+        assert!(
+            matches!(err, PortError::Unsupported(_)),
+            "attendu PortError::Unsupported, obtenu {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_transmet_le_texte_sur_stdin() {
+        let _serial = EXEC_SERIAL.lock().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out_file = dir.path().join("stdin_capture.txt");
+        // Recopie tout stdin dans un fichier temoin, puis reussit.
+        let copy = write_script(
+            dir.path(),
+            "wl-copy-fake",
+            &format!("cat > '{}'\nexit 0", out_file.display()),
+        );
+        let clipboard =
+            WaylandClipboard::with_binaries(copy.to_str().unwrap(), "wl-paste-inutilise");
+
+        clipboard
+            .set("bonjour le presse-papiers")
+            .await
+            .expect("set doit reussir");
+
+        let captured = std::fs::read_to_string(&out_file).expect("lecture stdin capture");
+        assert_eq!(captured, "bonjour le presse-papiers");
+    }
+
+    #[tokio::test]
+    async fn set_renvoie_lerreur_attendue_si_code_non_nul() {
+        let _serial = EXEC_SERIAL.lock().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Consomme stdin (evite un broken pipe cote ecriture) puis echoue.
+        let copy = write_script(dir.path(), "wl-copy-fake-fail", "cat > /dev/null\nexit 3");
+        let clipboard =
+            WaylandClipboard::with_binaries(copy.to_str().unwrap(), "wl-paste-inutilise");
+
+        let err = clipboard
+            .set("peu importe")
+            .await
+            .expect_err("code non nul => erreur");
+        assert!(
+            matches!(err, PortError::Interaction(_)),
+            "attendu PortError::Interaction, obtenu {err:?}"
+        );
     }
 }

@@ -360,6 +360,101 @@ impl AppInspector for EvalDomInspector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // ---- SdkEvaluator::evaluate — mapping HTTP -> PortError ----------------
+
+    /// POST /devtools/eval 503 (pompe absente) => PortError::Network, pour
+    /// que les compositions a repli sachent basculer.
+    #[tokio::test]
+    async fn evaluate_503_pompe_absente_renvoie_network() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/devtools/eval"))
+            .respond_with(
+                ResponseTemplate::new(503)
+                    .set_body_json(serde_json::json!({ "error": "pompe absente" })),
+            )
+            .mount(&server)
+            .await;
+
+        let evaluator = SdkEvaluator::new(server.uri());
+        let err = evaluator
+            .evaluate("1 + 1")
+            .await
+            .expect_err("503 doit echouer");
+        assert!(
+            matches!(err, PortError::Network(_)),
+            "attendu PortError::Network, obtenu {err:?}"
+        );
+    }
+
+    /// POST /devtools/eval 504 (pompe jointe mais muette) => PortError::Timeout.
+    #[tokio::test]
+    async fn evaluate_504_pompe_muette_renvoie_timeout() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/devtools/eval"))
+            .respond_with(
+                ResponseTemplate::new(504)
+                    .set_body_json(serde_json::json!({ "error": "pompe muette" })),
+            )
+            .mount(&server)
+            .await;
+
+        let evaluator = SdkEvaluator::new(server.uri());
+        let err = evaluator
+            .evaluate("1 + 1")
+            .await
+            .expect_err("504 doit echouer");
+        assert!(
+            matches!(err, PortError::Timeout(_)),
+            "attendu PortError::Timeout, obtenu {err:?}"
+        );
+    }
+
+    /// POST /devtools/eval 500 (pompe abandonnee, oneshot ferme) => PortError::Network.
+    #[tokio::test]
+    async fn evaluate_500_pompe_abandonnee_renvoie_network() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/devtools/eval"))
+            .respond_with(
+                ResponseTemplate::new(500)
+                    .set_body_json(serde_json::json!({ "error": "pompe abandonnee" })),
+            )
+            .mount(&server)
+            .await;
+
+        let evaluator = SdkEvaluator::new(server.uri());
+        let err = evaluator
+            .evaluate("1 + 1")
+            .await
+            .expect_err("500 doit echouer");
+        assert!(
+            matches!(err, PortError::Network(_)),
+            "attendu PortError::Network, obtenu {err:?}"
+        );
+    }
+
+    /// POST /devtools/eval 200 sans champ `value` => Value::Null (pas d'erreur).
+    #[tokio::test]
+    async fn evaluate_200_sans_value_renvoie_null() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/devtools/eval"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let evaluator = SdkEvaluator::new(server.uri());
+        let value = evaluator
+            .evaluate("undefined")
+            .await
+            .expect("200 doit reussir");
+        assert_eq!(value, serde_json::Value::Null);
+    }
 
     #[test]
     fn click_snippet_gauche_active_par_click() {

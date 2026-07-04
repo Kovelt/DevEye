@@ -37,19 +37,23 @@ Cinq cercles, avec la règle d'or : **le sens des dépendances pointe toujours v
 ┌──────────────────────────────────────────────────────────────────┐
 │   ADAPTERS DevEye (cercle extérieur)                              │
 │   - CDP WebView (Chromium / WebView2)                             │
-│   - Screencap xcap (X11 / XWayland / Wayland non-KDE)            │
-│   - Screencap KWin (KDE Wayland, D-Bus ScreenShot2)              │
+│   - Screencap xcap (X11 / XWayland / Wayland non-KDE)             │
+│   - Screencap KWin (KDE Wayland, D-Bus ScreenShot2 + Scripting)   │
 │   - Logs tracing-subscriber                                       │
 │   - Dioxus signals (via SDK opt-in)                               │
 │   - Interaction KWin EIS (injection OS-level Wayland natif)       │
+│   - Clipboard Wayland (wl-copy / wl-paste OS-level)               │
+│   - Composite (WaitCondition polling, ConsoleErrorSource JS,      │
+│     Inspector composite — orchestration sans I/O propre)          │
 │   - MCP server (consomme tout, expose à un client MCP)            │
 │              ┌──────────────────────────────────────┐             │
 │              │  PORTS DevEye (traits Rust)          │             │
 │              │  Renderer, AppInspector,             │             │
 │              │  InteractionSink, JsEvaluator,       │             │
 │              │  LogSource, CommandRouter,           │             │
-│              │  ConsoleErrorSource,                 │             │
-│              │  WaitCondition, WindowLister         │             │
+│              │  ConsoleErrorSource, WaitCondition,  │             │
+│              │  WindowLister, WindowManager,        │             │
+│              │  Clipboard, WindowGeometry           │             │
 │              │  ┌────────────────────────────────┐  │             │
 │              │  │   DOMAIN DevEye — métier pur   │  │             │
 │              │  │   Snapshot, InteractionCommand,│  │             │
@@ -75,7 +79,8 @@ DevEye/
 ├── deveye-core/                ← DOMAINE PUR (aucune dépendance technique)
 │   └── src/
 │       ├── snapshot.rs         # Snapshot { visual, dom, state, timestamp }
-│       ├── command.rs          # InteractionCommand (Click, Hover, Type, KeyPress, Navigate, DragDrop ; Scroll/Resize prévus)
+│       ├── command.rs          # InteractionCommand (Click, Hover, Type, KeyPress, KeyCombo,
+│       │                       # Navigate, DragDrop, Scroll, DoubleClick, HandleDialog, UploadFile)
 │       └── log_event.rs        # LogEvent, niveaux, fields
 │
 ├── deveye-ports/               ← INTERFACES (traits uniquement)
@@ -88,19 +93,25 @@ DevEye/
 │       ├── command_router.rs        # trait CommandRouter
 │       ├── console_error_source.rs  # trait ConsoleErrorSource
 │       ├── wait_condition.rs        # trait WaitCondition
-│       └── window_lister.rs         # trait WindowLister
+│       ├── window_lister.rs         # trait WindowLister
+│       ├── window_manager.rs        # trait WindowManager
+│       ├── clipboard.rs             # trait Clipboard
+│       └── window_geometry.rs       # trait WindowGeometry
 │
 ├── deveye-adapters/                       ← IMPLÉMENTATIONS (un crate par adapter)
 │   ├── adapter-cdp-webview/               # Renderer + InteractionSink + AppInspector + JsEvaluator + WindowLister via CDP
 │   ├── adapter-screencap-xcap/            # Renderer OS-level (xcap — X11 / XWayland / Wayland non-KDE)
-│   ├── adapter-screencap-kwin/            # Renderer KDE Wayland natif (org.kde.KWin.ScreenShot2 D-Bus)
+│   ├── adapter-screencap-kwin/            # Renderer + WindowManager + WindowGeometry + WindowLister KDE Wayland (KWin D-Bus)
 │   ├── adapter-dioxus-signals/            # AppInspector + pont natif (JsEvaluator/InteractionSink) via SDK
 │   ├── adapter-logs-tracing/              # LogSource via le buffer tracing du SDK opt-in
 │   ├── adapter-commands-http/             # CommandRouter via POST /devtools/command + GET /devtools/commands
 │   ├── adapter-interaction-kwin-eis/      # InteractionSink OS-level Wayland natif (KWin EIS)
-│   └── adapter-mcp-server/               # consomme les 9 ports, expose au Model Context Protocol
+│   ├── adapter-clipboard-wayland/         # Clipboard OS-level via wl-copy / wl-paste (Wayland)
+│   ├── adapter-composite/                 # WaitCondition + ConsoleErrorSource + AppInspector composites (sans I/O propre)
+│   └── adapter-mcp-server/               # consomme les 12 ports, expose au Model Context Protocol
 │
 ├── deveye-sdk/                 ← micro-lib opt-in à intégrer dans l'app cible (cfg debug)
+├── deveye-sdk-client/          ← client HTTP partagé (timeouts, URL par défaut) des adapters qui parlent au SDK
 └── deveye-server/              ← BINAIRE orchestrateur (compose les adapters selon les options CLI)
 ```
 
@@ -112,7 +123,7 @@ DevEye/
 
 ---
 
-## Les 9 ports en détail
+## Les 12 ports en détail
 
 ### 1. `Renderer`
 
@@ -152,18 +163,23 @@ pub trait InteractionSink: Send + Sync {
 }
 ```
 
-Variantes de `InteractionCommand` :
+Variantes de `InteractionCommand` (`deveye-core/src/command.rs`) :
 
-- `Click { position, button }` — séquence `mouseMoved` + sleep 60 ms + `mousePressed` + `mouseReleased`. Le `mouseMoved` préalable est indispensable pour déclencher les `onmouseenter` des UI dont des éléments n'apparaissent qu'au hover. Le sleep laisse le temps au framework de re-render avant le press.
+- `Click { position, button }` — séquence `mouseMoved` + sleep 60 ms + `mousePressed` + `mouseReleased`. Le `mouseMoved` préalable est indispensable pour déclencher les `onmouseenter` des UI dont des éléments n'apparaissent qu'au hover. Le sleep laisse le temps au framework de re-render avant le press. `button` (`MouseButton::Left|Right|Middle`, défaut `Left`).
 - `Hover { position }` — `mouseMoved` seul, sans press. Utile pour ouvrir une zone dépendante du hover puis cliquer ailleurs.
 - `Type { text }` — `Input.insertText` (CDP) ou événement `input` synthétique (SDK).
 - `KeyPress { key }` — `Input.dispatchKeyEvent` keyDown + keyUp (CDP) ou `KeyboardEvent` synthétique (SDK).
+- `KeyCombo { modifiers, key }` — combinaison de touches (Ctrl+S, Ctrl+Shift+P, Alt+F4…) : les `modifiers` (`ctrl`/`control`, `shift`, `alt`, `meta`/`super`/`cmd`, insensibles à la casse) sont maintenus pendant la frappe de `key`. Indispensable en complément de `KeyPress`, qui ne porte aucun modificateur.
 - `Navigate { route }` — `Runtime.evaluate` sur le hook routeur exposé côté JS par le SDK opt-in.
 - `DragDrop { from, to }` — séquence pointer/souris native CDP ou `PointerEvent` synthétique (SDK).
-- `Scroll { position, delta_x, delta_y }` *(prévu — pas encore dans `InteractionCommand`)* — `Input.dispatchMouseEvent` type `mouseWheel` ancré à `position` (`delta_y` positif = vers le bas).
-- `Resize { width, height }` *(prévu — pas encore dans `InteractionCommand`)* — `Emulation.setDeviceMetricsOverride`. Émule les métriques de rendu (responsive), ne redimensionne pas la fenêtre OS réelle.
+- `Scroll { position, dx, dy }` — molette/défilement ancré à `position` (`dy > 0` défile vers le bas). En CDP : `Input.dispatchMouseEvent` type `mouseWheel`, qui vise le bon conteneur scrollable. Via le pont SDK : conteneur scrollable sous le point si trouvé, sinon `window`. En kwin-eis : défilement envoyé à la fenêtre focus.
+- `DoubleClick { position }` — double-clic gauche en un seul dispatch worker (édition inline, sélection de mot, ouverture d'item de liste…) ; plus fiable que deux `Click` MCP successifs séparés d'un intervalle imprévisible.
+- `HandleDialog { accept, prompt_text }` — répond à une boîte de dialogue JS (`alert`/`confirm`/`prompt`). CDP-only : le moteur JS est suspendu pendant un dialog, `eval_js` y est impossible.
+- `UploadFile { selector, paths }` — renseigne les fichiers d'un `input[type=file]`. CDP-only (`DOM.setFileInputFiles`) : le verrou de sécurité navigateur interdit de setter `.value` depuis JS.
 
-Adapters : `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK).
+`Resize { width, height }` (`Emulation.setDeviceMetricsOverride`, émulation responsive du moteur de rendu) reste **hors périmètre** — pas encore une variante du domaine (cf. « Hors périmètre actuel »).
+
+Adapters : `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`, toutes variantes), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK ; `Navigate`/`HandleDialog`/`UploadFile` y renvoient `PortError::Unsupported`, sémantique applicative ou WebView impossible OS-level).
 
 ### 4. `JsEvaluator`
 
@@ -230,7 +246,7 @@ pub trait WaitCondition: Send + Sync {
 }
 ```
 
-Attente conditionnelle sur l'état de l'app cible. `WaitPredicate` est une enum (domaine) avec trois variantes : `DomSelector { selector }`, `StateKey { key, expected }`, `ScreenshotStable { threshold_ms }`. Retourne un `WaitOutcome { satisfied, elapsed_ms, detail }` — un timeout n'est pas une erreur (`Err`), c'est un `satisfied: false`. Implémenté par `CompositeWaitCondition` dans `deveye-server` (boucle de polling sur les ports déjà composés). Exposé via l'outil MCP `wait_condition`.
+Attente conditionnelle sur l'état de l'app cible. `WaitPredicate` est une enum (domaine, `deveye-core/src/wait_condition.rs`) avec sept variantes : `DomSelector { selector, visible?, negate? }` (présence CSS, optionnellement visible et/ou inversée — base de `wait_for_gone`), `StateKey { key, expected }` (valeur du state SDK), `ScreenshotStable { threshold_ms }` (deux captures identiques = stabilité visuelle), `ScreenshotRegionStable { x, y, width, height, threshold_ms }` (idem, borné à une région — ignore un curseur clignotant ailleurs dans le viewport), `LogMessage { contains, level_min? }` (attend un message dans le buffer de logs), `TargetAlive {}` (sonde `renderer.screenshot()` : attend qu'une cible crashée redevienne joignable) et `TextContent { text, selector?, visible? }` (texte dans l'`innerText`/`textContent`, indisponible en kwin-eis faute de DOM). Retourne un `WaitOutcome { satisfied, elapsed_ms, detail }` — un timeout n'est pas une erreur (`Err`), c'est un `satisfied: false`. Implémenté par `CompositeWaitCondition` dans `adapter-composite` (boucle de polling sur les ports déjà composés). Exposé via l'outil MCP `wait_condition`, et via les outils dédiés `wait_for_selector`/`wait_for_text`/`wait_for_log`/`wait_screenshot_region`/`wait_target_alive`.
 
 ### 9. `WindowLister`
 
@@ -241,7 +257,41 @@ pub trait WindowLister: Send + Sync {
 }
 ```
 
-Énumère les fenêtres/onglets de la cible. Implémenté par `adapter-cdp-webview` (`Target.getTargets`, filtré sur `type=page`). Le pont natif SDK et le mode `kwin-eis` (cibles sans WebView) renvoient une liste vide — pas une erreur. Exposé via l'outil MCP `list_windows`.
+Énumère les fenêtres/onglets de la cible. Implémenté par `adapter-cdp-webview` (`Target.getTargets`, filtré sur `type=page`) et par `adapter-screencap-kwin` (`KwinWindowLister`, `workspace.windowList()` via KWin Scripting — actif dès que le screencap passe par KWin, y compris en cible `kwin-eis` : donne enfin de la visibilité sur les fenêtres qui peuvent dévier silencieusement les clics EIS). Le pont natif SDK n'a pas de notion d'autres fenêtres et renvoie une liste vide — pas une erreur. Exposé via l'outil MCP `list_windows`.
+
+### 10. `WindowManager`
+
+```rust
+#[async_trait]
+pub trait WindowManager: Send + Sync {
+    async fn activate(&self, title_substring: Option<&str>) -> PortResult<String>;
+}
+```
+
+Donne le focus OS à une fenêtre de l'app cible (le `caption` contenant `title_substring`, insensible à la casse ; `None` cible la fenêtre par défaut de l'adapter, typiquement `--screencap-window`). Motivation propre à `kwin-eis` : KWin EIS route les événements d'entrée vers la fenêtre **active** — une notification Plasma ou un dialog système peut voler le focus et dévier silencieusement tous les clics/saisies vers la mauvaise fenêtre. Implémenté par `adapter-screencap-kwin` (`KwinWindowManager`, via un script KWin). Indisponible hors KDE/Wayland ou en cible CDP → `PortError::Unsupported`. Exposé via l'outil MCP `focus_window`.
+
+### 11. `Clipboard`
+
+```rust
+#[async_trait]
+pub trait Clipboard: Send + Sync {
+    async fn get(&self) -> PortResult<String>;
+    async fn set(&self, text: &str) -> PortResult<()>;
+}
+```
+
+Accès au presse-papiers de la session. Motivation : `navigator.clipboard.readText()` lève `NotAllowedError` en contexte automatisé (pas de geste utilisateur), et en `kwin-eis` il n'y a pas de WebView du tout — un accès OS-level est la seule voie fiable sur toutes les cibles. Implémenté par `adapter-clipboard-wayland` (`wl-copy`/`wl-paste`, Wayland uniquement). Hors Wayland (ou outils `wl-clipboard` absents) → `PortError::Unsupported`. Exposé via les outils MCP `clipboard_get`/`clipboard_set`.
+
+### 12. `WindowGeometry`
+
+```rust
+#[async_trait]
+pub trait WindowGeometry: Send + Sync {
+    async fn geometry(&self, title_substring: Option<&str>) -> PortResult<WindowRect>;
+}
+```
+
+Lit la géométrie écran (position + taille) d'une fenêtre de l'app cible. Motivation propre à `kwin-eis` : le rendu natif (Uno/Skia) n'a pas de viewport CDP — un agent qui doit cliquer à des coordonnées écran (plutôt que logiques webview) a besoin de l'origine réelle de la fenêtre en plus de sa taille. Complète `WindowManager` (focus) et `Renderer` (capture pixels). Implémenté par `adapter-screencap-kwin` (`KwinWindowGeometry`, via un script KWin). Indisponible hors KDE/Wayland ou en cible CDP/SDK → `PortError::Unsupported`. Exposé via l'outil MCP `window_geometry`.
 
 ---
 
@@ -327,7 +377,8 @@ Le contrat complet des routes HTTP du SDK (codes de statut, formes des corps, ga
 - VRT (Visual Regression Testing) — `Diff` est dans le domaine, le comparateur viendra plus tard
 - Replay de `Recording` — tests E2E reproductibles
 - Dashboard HTML pour humain (alternative au MCP)
-- `InteractionCommand::Scroll` et `::Resize` — variantes prévues, pas encore dans le domaine
+- `InteractionCommand::Resize` — variante prévue (`Emulation.setDeviceMetricsOverride`), pas encore dans le domaine. (`Scroll` est livré depuis le sprint 1 du backlog d'outils — cf. `deveye-core/src/command.rs`.)
+- `resize_viewport` (outil MCP correspondant) — mêmes conditions ; **breaking change** sur le trait `Renderer` (6 implémenteurs) si livré
 
 ---
 
