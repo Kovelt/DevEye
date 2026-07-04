@@ -222,7 +222,7 @@ Jalons **M0 à M7 livrés** (25 juin 2026) : infrastructure hexagonale, adapter 
 
 Audit post-M7 (108 constats priorisés, dont le gate MCP T1/M1 bloquant) : [docs/audit-2026-06-25.md](docs/audit-2026-06-25.md).
 
-> **Note** : le développement canonique de DevEye vit dans le dépôt **Chronos** (`crates/deveye`). Ce dépôt est un export miroir obtenu par `git subtree split` ; les crates conservent leurs métadonnées figées. Pour resynchroniser : `just sync-deveye`.
+> **Note** : **ce dépôt est la source de vérité de DevEye** (depuis M0, 25/06/2026). Les apps cibles (Chronos, Atelier) consomment des copies vendored de `deveye-core`/`deveye-ports`/`deveye-sdk`, régénérées par `scripts/sync-deveye.sh` — à ne jamais éditer côté copie : tout correctif naît ici puis est propagé. (Historiquement, DevEye est né dans Chronos `crates/deveye`, d'où les métadonnées de package figées.)
 
 ---
 
