@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use anyhow::Context as _;
+
 use adapter_cdp_webview::CdpClient;
 use adapter_clipboard_wayland::WaylandClipboard;
 use adapter_commands_http::SdkCommandRouter;
@@ -224,7 +226,11 @@ fn build_target_info(target: TargetMode) -> TargetInfo {
 /// [`TargetMode`], application des [`Fallback*`][crate::fallback] et
 /// `Composite*` (adapter-composite), branchement des ports SDK (state, logs,
 /// commandes).
-pub(crate) async fn build_mcp(args: &Args) -> DeveyeMcpServer {
+///
+/// Retourne `Err` si un adapter refuse de demarrer (ex : thread worker EIS,
+/// cf. `TargetMode::KwinEis` ci-dessous) — propage jusqu'a `main()` plutot que
+/// de paniquer (seul point de panique hors tests du binaire avant ce fix, A6).
+pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
     let cdp_filter = build_cdp_filter(args);
 
     // Pieces du pont natif (SDK) : evaluateur JS via la pompe de l'app,
@@ -292,9 +298,14 @@ pub(crate) async fn build_mcp(args: &Args) -> DeveyeMcpServer {
         TargetMode::KwinEis => {
             let window_origin =
                 resolve_kwin_origin(screencap_title.as_deref(), args.screencap_backend).await;
+            // KwinEisInteraction::new echoue seulement si l'OS refuse la creation
+            // du thread worker (RLIMIT_NPROC, OOM...) : propage au lieu du
+            // `.expect` d'origine, qui paniquait tout le binaire (A6).
+            let interaction = KwinEisInteraction::new(window_origin)
+                .context("--target kwin-eis : demarrage du thread worker EIS impossible")?;
             (
                 build_os_renderer(screencap_title.as_deref(), args.screencap_backend),
-                Arc::new(KwinEisInteraction::new(window_origin).expect("worker EIS")),
+                Arc::new(interaction),
                 Arc::new(UnsupportedInspector),
                 Arc::new(UnsupportedEvaluator),
                 Arc::new(EmptyWindowLister),
@@ -336,7 +347,7 @@ pub(crate) async fn build_mcp(args: &Args) -> DeveyeMcpServer {
         log_source: log_source.clone(),
     });
 
-    DeveyeMcpServer::new(DeveyePorts {
+    Ok(DeveyeMcpServer::new(DeveyePorts {
         renderer,
         interaction,
         inspector,
@@ -349,5 +360,5 @@ pub(crate) async fn build_mcp(args: &Args) -> DeveyeMcpServer {
         window_manager: build_window_manager(screencap_title.as_deref(), args.screencap_backend),
         clipboard: build_clipboard(),
         target_info: build_target_info(args.target),
-    })
+    }))
 }

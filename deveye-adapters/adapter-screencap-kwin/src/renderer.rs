@@ -23,6 +23,11 @@ use crate::proxy::{ScreenShot2Proxy, ScriptingProxy};
 const BRIDGE_PATH: &str = "/deveye/bridge";
 const BRIDGE_IFACE: &str = "org.deveye.KwinBridge";
 
+/// Délai d'attente de la lecture du pipe de capture ScreenShot2 : marge large
+/// au-dessus du temps normal de rendu+écriture (quelques dizaines de ms) sans
+/// tenir le gate MCP indéfiniment si KWin ne ferme jamais sa copie du fd.
+const KWIN_PIPE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Compteur monotone pour des noms de plugin/scripts uniques par appel (un
 /// même chemin rechargé ne ré-exécuterait pas le script).
 fn next_id() -> u64 {
@@ -187,10 +192,28 @@ impl Renderer for KwinRenderer {
         // voit jamais EOF.
         drop(write_fd);
 
-        let raw = reader
-            .await
-            .map_err(|e| PortError::Render(format!("join lecteur pipe : {e}")))?
-            .map_err(|e| PortError::from(KwinScreencapError::Pipe(e.to_string())))?;
+        // A4: timeout sur la lecture du pipe — si KWin ne ferme jamais sa copie
+        // du fd (bug/gel côté compositeur), le thread spawn_blocking reste
+        // bloqué dans read_to_end (fuite acceptée) mais le gate MCP est libéré.
+        // Limite assumée : chaque timeout fuit UN thread du pool blocking tokio
+        // (512 par défaut) — des retries en boucle contre un KWin durablement
+        // figé finiraient par l'épuiser. L'appelant (l'agent) ne doit pas
+        // marteler un screenshot qui répond « timeout » ; une lecture non
+        // bloquante (AsyncFd + O_NONBLOCK) est la vraie sortie, prévue en P5.
+        let raw = match tokio::time::timeout(KWIN_PIPE_TIMEOUT, reader).await {
+            Ok(joined) => joined
+                .map_err(|e| PortError::Render(format!("join lecteur pipe : {e}")))?
+                .map_err(|e| PortError::from(KwinScreencapError::Pipe(e.to_string())))?,
+            Err(_) => {
+                tracing::warn!(
+                    "screenshot: timeout {:?} lecture pipe ScreenShot2 (KWin n'a jamais ferme le pipe)",
+                    KWIN_PIPE_TIMEOUT
+                );
+                return Err(PortError::from(KwinScreencapError::Pipe(
+                    "timeout lecture pipe de capture (KWin n'a jamais ferme le pipe)".into(),
+                )));
+            }
+        };
 
         encode_capture(&meta, &raw).map_err(PortError::from)
     }

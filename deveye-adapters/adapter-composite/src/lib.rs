@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use tracing::debug;
 
 use deveye_core::{ConsoleError, DomTree, LogLevel, StateDump, WaitOutcome, WaitPredicate};
 use deveye_ports::{
@@ -155,6 +156,24 @@ fn hash_region(png: &[u8], x: u32, y: u32, width: u32, height: u32) -> PortResul
     Ok(h.finish())
 }
 
+/// A5 : absorbe une erreur transitoire de port exactement comme le fait deja
+/// la branche `DomSelector` depuis M4 — seule `PortError::Network` (transport
+/// mort) est un vrai echec et se propage ; toute autre erreur (app pas encore
+/// demarree, exception ponctuelle...) est journalisee puis traitee comme
+/// "pas encore satisfait" pour laisser le polling continuer. Sans ce filtre
+/// uniforme, une app qui redemarre faisait echouer `wait_*` des le premier
+/// hoquet — l'inverse de leur raison d'etre.
+fn absorb_transient<T>(result: PortResult<T>, predicate: &'static str) -> PortResult<Option<T>> {
+    match result {
+        Ok(v) => Ok(Some(v)),
+        Err(e @ PortError::Network(_)) => Err(e),
+        Err(e) => {
+            debug!(predicate, erreur = %e, "erreur transitoire absorbee");
+            Ok(None)
+        }
+    }
+}
+
 impl CompositeWaitCondition {
     async fn check(&self, predicate: &WaitPredicate) -> PortResult<bool> {
         match predicate {
@@ -181,21 +200,24 @@ impl CompositeWaitCondition {
                 // transitoires. Un selecteur pas-encore-present peut lever une
                 // exception JS benigne — on la traite comme `false` (continuer
                 // le polling). Seule une erreur de transport interrompt l'attente.
-                match self.evaluator.evaluate(&snippet).await {
+                match absorb_transient(self.evaluator.evaluate(&snippet).await, "dom-selector")? {
                     // `negate` : satisfaite quand l'element est absent. On
                     // n'inverse que sur une evaluation REUSSIE — une erreur
                     // transitoire reste "non satisfaite" (continuer le polling),
                     // jamais transformee en faux "disparu".
-                    Ok(value) => {
+                    Some(value) => {
                         let present = value.as_bool().unwrap_or(false);
                         Ok(present ^ *negate)
                     }
-                    Err(e @ PortError::Network(_)) => Err(e),
-                    Err(_) => Ok(false),
+                    None => Ok(false),
                 }
             }
             WaitPredicate::StateKey { key, expected } => {
-                let dump = self.inspector.state_snapshot().await?;
+                let dump =
+                    match absorb_transient(self.inspector.state_snapshot().await, "state-key")? {
+                        Some(d) => d,
+                        None => return Ok(false),
+                    };
                 Ok(dump.entries.get(key) == Some(expected))
             }
             WaitPredicate::ScreenshotStable { threshold_ms } => {
@@ -203,10 +225,22 @@ impl CompositeWaitCondition {
                 // pause demesure a chaque iteration (le timeout global du caller
                 // borne la duree totale, pas chaque check individuel).
                 let capped = (*threshold_ms).min(MAX_SCREENSHOT_STABLE_THRESHOLD_MS);
-                let first = self.renderer.screenshot().await?;
+                let first = match absorb_transient(
+                    self.renderer.screenshot().await,
+                    "screenshot-stable",
+                )? {
+                    Some(s) => s,
+                    None => return Ok(false),
+                };
                 let hash_first = hash_screenshot_bytes(&first.bytes);
                 tokio::time::sleep(Duration::from_millis(capped)).await;
-                let second = self.renderer.screenshot().await?;
+                let second = match absorb_transient(
+                    self.renderer.screenshot().await,
+                    "screenshot-stable",
+                )? {
+                    Some(s) => s,
+                    None => return Ok(false),
+                };
                 let hash_second = hash_screenshot_bytes(&second.bytes);
                 Ok(hash_first == hash_second)
             }
@@ -218,10 +252,25 @@ impl CompositeWaitCondition {
                 threshold_ms,
             } => {
                 let capped = (*threshold_ms).min(MAX_SCREENSHOT_STABLE_THRESHOLD_MS);
-                let first = self.renderer.screenshot().await?;
+                let first = match absorb_transient(
+                    self.renderer.screenshot().await,
+                    "screenshot-region-stable",
+                )? {
+                    Some(s) => s,
+                    None => return Ok(false),
+                };
+                // Une region hors capture est une erreur de parametrage de
+                // l'appelant, pas un etat transitoire de l'app : elle reste
+                // propagee telle quelle (pas de filtre `absorb_transient` ici).
                 let hash_first = hash_region(&first.bytes, *x, *y, *width, *height)?;
                 tokio::time::sleep(Duration::from_millis(capped)).await;
-                let second = self.renderer.screenshot().await?;
+                let second = match absorb_transient(
+                    self.renderer.screenshot().await,
+                    "screenshot-region-stable",
+                )? {
+                    Some(s) => s,
+                    None => return Ok(false),
+                };
                 let hash_second = hash_region(&second.bytes, *x, *y, *width, *height)?;
                 Ok(hash_first == hash_second)
             }
@@ -232,7 +281,10 @@ impl CompositeWaitCondition {
                 // Draine le buffer de logs et teste chaque evenement. Le drain
                 // consomme les logs (cf. doc du predicat) : un match dans cette
                 // iteration suffit a satisfaire l'attente.
-                let events = self.log_source.poll().await?;
+                let events = match absorb_transient(self.log_source.poll().await, "log-message")? {
+                    Some(e) => e,
+                    None => return Ok(false),
+                };
                 let min = level_min.unwrap_or(LogLevel::Trace);
                 Ok(events
                     .iter()
@@ -832,6 +884,106 @@ mod tests {
         assert!(
             !outcome.satisfied,
             "timeout apres erreurs transitoires => satisfied=false"
+        );
+    }
+
+    // ----- A5 : meme filtre generalise aux 4 autres branches -----
+
+    /// `AppInspector` stub qui echoue N fois (erreur non-Network) puis renvoie
+    /// une valeur fixe : simule une app dont le state n'est pas encore publie
+    /// au demarrage.
+    struct FlakyStateInspector {
+        remaining_failures: std::sync::Mutex<u32>,
+    }
+    #[async_trait]
+    impl AppInspector for FlakyStateInspector {
+        async fn dom_snapshot(&self) -> PortResult<DomTree> {
+            Err(PortError::Unsupported("stub".to_string()))
+        }
+        async fn state_snapshot(&self) -> PortResult<StateDump> {
+            let mut remaining = self.remaining_failures.lock().unwrap();
+            if *remaining > 0 {
+                *remaining -= 1;
+                Err(PortError::Inspect("app pas encore prete".to_string()))
+            } else {
+                let mut entries = std::collections::BTreeMap::new();
+                entries.insert("phase".to_string(), serde_json::json!("ready"));
+                Ok(StateDump::new(entries))
+            }
+        }
+    }
+
+    /// A5 — StateKey : l'inspector echoue 2 fois avec une erreur non-Network
+    /// (etat transitoire, ex. app qui demarre) puis renvoie la valeur
+    /// attendue. Le predicat doit finir par etre satisfait : le polling ne
+    /// doit jamais s'interrompre sur ces erreurs (meme filtre que DomSelector,
+    /// generalise par cette correction).
+    #[tokio::test]
+    async fn composite_state_key_transient_errors_then_satisfied() {
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(UnusedEval),
+            inspector: Arc::new(FlakyStateInspector {
+                remaining_failures: std::sync::Mutex::new(2),
+            }),
+            renderer: Arc::new(ConstRenderer {
+                png: solid_png(2, 2),
+                size: Size::new(2, 2),
+            }),
+            log_source: Arc::new(EmptyLog),
+        };
+        let outcome = cond
+            .wait_until(
+                WaitPredicate::StateKey {
+                    key: "phase".to_string(),
+                    expected: serde_json::json!("ready"),
+                },
+                Duration::from_millis(2000),
+            )
+            .await
+            .expect("les erreurs transitoires ne doivent pas propager d'Err");
+        assert!(
+            outcome.satisfied,
+            "doit finir par etre satisfait apres absorption des 2 erreurs transitoires"
+        );
+    }
+
+    /// A5 — StateKey : une `PortError::Network` (transport mort) doit au
+    /// contraire etre PROPAGEE immediatement, sans jamais etre absorbee —
+    /// ce n'est pas un etat transitoire mais un vrai echec de transport.
+    #[tokio::test]
+    async fn composite_state_key_network_error_propagates() {
+        struct NetworkInspector;
+        #[async_trait]
+        impl AppInspector for NetworkInspector {
+            async fn dom_snapshot(&self) -> PortResult<DomTree> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+            async fn state_snapshot(&self) -> PortResult<StateDump> {
+                Err(PortError::Network("connexion perdue".to_string()))
+            }
+        }
+
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(UnusedEval),
+            inspector: Arc::new(NetworkInspector),
+            renderer: Arc::new(ConstRenderer {
+                png: solid_png(2, 2),
+                size: Size::new(2, 2),
+            }),
+            log_source: Arc::new(EmptyLog),
+        };
+        let result = cond
+            .wait_until(
+                WaitPredicate::StateKey {
+                    key: "phase".to_string(),
+                    expected: serde_json::json!("ready"),
+                },
+                Duration::from_millis(100),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(PortError::Network(_))),
+            "une erreur Network doit se propager, recu: {result:?}"
         );
     }
 }

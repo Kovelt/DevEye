@@ -151,12 +151,14 @@ impl EisSession {
             match self.events.next().now_or_never() {
                 None => break, // pas d'evenement pret
                 Some(None) => {
+                    tracing::warn!("pump: flux EIS ferme (deconnexion detectee)");
                     return Err(EisError::Eis(
                         "flux EIS ferme (deconnexion detectee en pump)".into(),
                     ));
                 }
                 Some(Some(Ok(_))) => {} // evenement consomme normalement
                 Some(Some(Err(e))) => {
+                    tracing::warn!("pump: erreur flux EIS (deconnexion/device retire) : {e}");
                     return Err(EisError::Eis(format!(
                         "erreur flux EIS (deconnexion/device retire) : {e}"
                     )));

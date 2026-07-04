@@ -21,6 +21,7 @@ nix = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 # L11: creation de fichier temporaire O_EXCL (nom aleatoire, evite TOCTOU sur /tmp).
 tempfile = "3"
+tracing = "0.1"
 
 [dev-dependencies]
 deveye-ports = { path = "../../deveye-ports" }

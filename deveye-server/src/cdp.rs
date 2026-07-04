@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tracing::warn;
 
 use adapter_cdp_webview::{CdpClient, TargetFilter};
 use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump, WindowInfo};
@@ -74,11 +75,23 @@ impl LazyCdp {
     /// Le client courant s'il est vivant, sinon une (re)connexion. L'echec
     /// est une erreur d'outil ordinaire — jamais la mort du serveur MCP.
     async fn client(&self) -> PortResult<Arc<CdpClient>> {
+        // Le lock 'slot' est tenu pendant toute la (re)connexion ci-dessous —
+        // partagee par les 5 ports CDP (Renderer/InteractionSink/AppInspector/
+        // JsEvaluator/WindowLister). Choix assume : ca evite que deux outils
+        // appeles en parallele pendant un trou de connexion ne declenchent
+        // chacun leur propre CdpClient::connect (double WS, double attach).
+        // Ce n'est sain qu'a partir du correctif A2 (client.rs) : chaque
+        // etape de connect() est desormais bornee — GET /json (10 s), upgrade
+        // WS (10 s), Target.setDiscoverTargets (CDP_RESPONSE_TIMEOUT, 20 s),
+        // attente d'attach (5 s) — soit ~45 s au PIRE cas cumule, au lieu de
+        // pouvoir bloquer indefiniment. Long mais fini : le gate MCP finit
+        // toujours par etre libere avec une erreur actionnable.
         let mut slot = self.slot.lock().await;
         if let Some(client) = slot.as_ref() {
             if !client.is_closed() {
                 return Ok(client.clone());
             }
+            warn!(url = %self.url, "client CDP mort — reconnexion en cours");
         }
         match CdpClient::connect(&self.url, self.filter.clone()).await {
             Ok(client) => {

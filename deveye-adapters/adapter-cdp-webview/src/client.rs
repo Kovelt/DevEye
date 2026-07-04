@@ -11,12 +11,32 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use tokio::time::{timeout, timeout_at, Instant};
 use tokio_tungstenite::{tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream};
+use tracing::{debug, info, warn};
 
 use crate::error::CdpError;
 
 /// URL HTTP par défaut où le webview wry/WebView2 expose CDP quand on lance
 /// l'app avec `--remote-debugging-port=9222`.
 pub const DEFAULT_HTTP_URL: &str = "http://localhost:9222";
+
+/// Délai max d'attente d'une réponse à une commande CDP déjà envoyée : le
+/// navigateur peut ne jamais répondre (page plantée, target détachée sans
+/// event `detachedFromTarget`...) — sans borne, `rx.await` dans
+/// `send_and_wait` tiendrait indéfiniment le gate MCP (audit A1).
+const CDP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Délai de connexion TCP pour le GET `/json/version` (bootstrap HTTP avant
+/// l'upgrade WebSocket).
+const CDP_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Délai total (connexion + réponse) du GET `/json/version` : un navigateur
+/// qui accepte la connexion TCP mais ne répond jamais bloquerait `connect()`
+/// pour toujours sans cette borne (audit A2).
+const CDP_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Délai max pour l'upgrade WebSocket vers l'endpoint browser-level ;
+/// `tokio_tungstenite::connect_async` n'a pas de timeout interne (audit A2).
+const CDP_WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Représente une « target » CDP — typiquement la page principale de l'app.
 #[derive(Clone, Debug, Deserialize)]
@@ -123,6 +143,8 @@ impl CdpClient {
     pub async fn connect(http_url: &str, filter: TargetFilter) -> Result<Self, CdpError> {
         let version_url = format!("{}/json/version", http_url.trim_end_matches('/'));
         let http = reqwest::Client::builder()
+            .connect_timeout(CDP_HTTP_CONNECT_TIMEOUT)
+            .timeout(CDP_HTTP_TIMEOUT)
             .build()
             .map_err(|e| CdpError::Connect(e.to_string()))?;
         let version: BrowserVersion = http
@@ -134,9 +156,19 @@ impl CdpClient {
             .await
             .map_err(|e| CdpError::Connect(format!("JSON {version_url} : {e}")))?;
 
-        let (ws_stream, _) = tokio_tungstenite::connect_async(&version.ws_url)
-            .await
-            .map_err(|e| CdpError::Connect(format!("WS {} : {e}", version.ws_url)))?;
+        let (ws_stream, _) = timeout(
+            CDP_WS_CONNECT_TIMEOUT,
+            tokio_tungstenite::connect_async(&version.ws_url),
+        )
+        .await
+        .map_err(|_| {
+            CdpError::Connect(format!(
+                "WS {} : timeout de connexion ({} s)",
+                version.ws_url,
+                CDP_WS_CONNECT_TIMEOUT.as_secs()
+            ))
+        })?
+        .map_err(|e| CdpError::Connect(format!("WS {} : {e}", version.ws_url)))?;
         let (sink, stream) = ws_stream.split();
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Message>();
@@ -170,6 +202,7 @@ impl CdpClient {
         // appels suivants ré-attendront via `wait_attached`.
         let _ = timeout(Duration::from_secs(5), client.inner.attached.notified()).await;
 
+        info!(url = http_url, "connexion CDP établie");
         Ok(client)
     }
 
@@ -192,7 +225,7 @@ impl CdpClient {
         }))
         .map_err(|e| CdpError::Decode(format!("encode request : {e}")))?;
 
-        let result = self.send_and_wait(id, payload).await?;
+        let result = self.send_and_wait(id, method, payload).await?;
         serde_json::from_value(result).map_err(|e| CdpError::Decode(format!("typed result : {e}")))
     }
 
@@ -210,21 +243,46 @@ impl CdpClient {
         }))
         .map_err(|e| CdpError::Decode(format!("encode request : {e}")))?;
 
-        let result = self.send_and_wait(id, payload).await?;
+        let result = self.send_and_wait(id, method, payload).await?;
         serde_json::from_value(result).map_err(|e| CdpError::Decode(format!("typed result : {e}")))
     }
 
-    async fn send_and_wait(&self, id: u64, payload: String) -> Result<Value, CdpError> {
+    async fn send_and_wait(
+        &self,
+        id: u64,
+        method: &str,
+        payload: String,
+    ) -> Result<Value, CdpError> {
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().await.insert(id, tx);
         self.inner
             .cmd_tx
             .send(Message::Text(payload))
             .map_err(|e| CdpError::Send(e.to_string()))?;
-        match rx.await {
-            Ok(Ok(v)) => Ok(v),
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(CdpError::Receive("flux WebSocket fermé".into())),
+        debug!(id, method, "commande CDP envoyée");
+        let sent_at = Instant::now();
+        match timeout(CDP_RESPONSE_TIMEOUT, rx).await {
+            Ok(Ok(Ok(v))) => {
+                debug!(
+                    id,
+                    elapsed_ms = sent_at.elapsed().as_millis() as u64,
+                    "réponse CDP reçue"
+                );
+                Ok(v)
+            }
+            Ok(Ok(Err(e))) => Err(e),
+            Ok(Err(_)) => Err(CdpError::Receive("flux WebSocket fermé".into())),
+            Err(_) => {
+                // Timeout : retirer l'entrée 'pending' (sinon fuite mémoire —
+                // la HashMap grossirait indéfiniment si le navigateur reste
+                // muet). CdpError::Receive se mappe vers PortError::Network,
+                // ce qui déclenche le fallback CDP->SDK du mode auto (voulu).
+                self.inner.pending.lock().await.remove(&id);
+                warn!(id, method, "timeout en attente de la réponse CDP (20 s)");
+                Err(CdpError::Receive(
+                    "timeout en attente de la réponse CDP (20 s)".into(),
+                ))
+            }
         }
     }
 
@@ -298,6 +356,9 @@ fn spawn_reader(mut stream: WsRead, inner: Arc<CdpInner>) {
             }
         }
         // Le flux est fermé : marque le client mort puis libère les awaiters.
+        // C'est le seul signal de fermeture — `is_closed()` fait le reste
+        // (LazyCdp::client() reconnecte au prochain appel, cf. cdp.rs).
+        warn!("WebSocket CDP fermé — le client sera reconnecté au prochain appel");
         inner.closed.store(true, Ordering::SeqCst);
         let mut pending = inner.pending.lock().await;
         for (_, tx) in pending.drain() {

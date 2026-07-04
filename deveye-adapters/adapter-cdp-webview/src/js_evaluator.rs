@@ -42,6 +42,15 @@ impl JsEvaluator for CdpClient {
                     "returnByValue": true,
                     "awaitPromise": true,
                     "userGesture": true,
+                    // Avec awaitPromise:true, une Promise jamais résolue
+                    // tiendrait l'appel (et donc le gate MCP) indéfiniment ;
+                    // cette borne côté navigateur complète le timeout côté
+                    // client (audit A1/C2-a) et doit rester STRICTEMENT
+                    // INFÉRIEURE à CDP_RESPONSE_TIMEOUT (20 s) pour que le
+                    // navigateur réponde par une erreur propre avant que le
+                    // client n'abandonne (session CDP saine, pas d'entrée
+                    // pending orpheline).
+                    "timeout": 15000,
                 }),
             )
             .await
