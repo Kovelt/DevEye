@@ -112,7 +112,10 @@ async fn wire_protocol_contract_end_to_end() {
     assert_eq!(body["pong"], serde_json::json!(true));
     assert_eq!(body["echo"]["x"], serde_json::json!(1));
 
-    // route inconnue => 404 + { error } mentionnant la route.
+    // route inconnue => 404 + corps minimal { "error": "inconnue" }. La route
+    // n'est PAS repetee dans le corps : elle est deja portee par
+    // `PortError::Route` cote client, dont le Display la prefixe — la repeter
+    // donnait « commande X : commande inconnue : X » (audit C2-b, F2 Chronos).
     let resp = http
         .post(url("/devtools/command"))
         .header(HOST, "localhost")
@@ -122,7 +125,8 @@ async fn wire_protocol_contract_end_to_end() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["error"]
+    assert_eq!(body["error"], serde_json::json!("inconnue"));
+    assert!(!body["error"]
         .as_str()
         .unwrap_or_default()
         .contains("inexistante"));

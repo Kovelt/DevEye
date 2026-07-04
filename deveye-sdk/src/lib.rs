@@ -434,9 +434,11 @@ async fn command_handler(
         }
         None => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!("commande inconnue : {}", body.route)
-            })),
+            // Corps minimal : la route est déjà portée par `PortError::Route`
+            // côté client, dont le Display la préfixe (« commande {route} :
+            // {message} ») — la répéter ici donnait « commande X : commande
+            // inconnue : X » (constaté au banc d'essai Chronos, 28/06, F2).
+            Json(serde_json::json!({ "error": "inconnue" })),
         )
             .into_response(),
     }

@@ -125,6 +125,12 @@ impl MessageVisitor {
 }
 
 impl Visit for MessageVisitor {
+    // Convention (banc d'essai DevEye, 28 juin 2026) : le `message` est rendu
+    // via `{:?}`. Pour `info!("… {}", x)` la valeur est un `fmt::Arguments` dont
+    // `Debug` délègue à `Display` → pas de guillemets. Idem `info!(message = %x)`.
+    // En revanche `info!(message = ?x)` avec `x: &str`/`String` produit
+    // `"…"` (guillemets parasites). Règle : ne PAS utiliser `message = ?x` —
+    // interpoler (`info!("{x:?}")`) ou préférer `message = %x`.
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             let mut buf = String::new();
