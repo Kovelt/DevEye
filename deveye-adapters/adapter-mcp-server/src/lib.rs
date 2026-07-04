@@ -79,12 +79,19 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, WaitPredicate};
 use deveye_ports::{
     AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
     LogSource, Renderer, WaitCondition, WindowLister, WindowManager,
 };
+
+/// Plafond partage par les outils `wait_*` a boucle de polling explicite
+/// (`wait_condition`, `wait_for_log`, `wait_screenshot_region` l'appliquent
+/// deja en local) : borne a 60 s le temps de blocage cote agent MCP, quel que
+/// soit le `timeout_ms` demande. `wait_ready` (A5) etait le seul sans plafond.
+const WAIT_TIMEOUT_MAX_MS: u64 = 60_000;
 
 /// Description statique de la cible active et de ses capacites, renvoyee par
 /// l'outil `target_info`. Construite par `deveye-server` (compose) selon le
@@ -158,6 +165,23 @@ pub struct DeveyeMcpServer {
     /// l'accès et le déclare unread.
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
+}
+
+/// A8 : garde du gate instrumentee — la duree de detention n'est mesurable
+/// qu'a la liberation (`Drop`), le mutex lui-meme ne portant aucun hook. Sans
+/// cette trace, un gel (cf. A1-A4) ne permet pas de savoir quel outil tenait
+/// le gate au moment du blocage.
+struct GateGuard<'a> {
+    _inner: tokio::sync::MutexGuard<'a, ()>,
+    outil: &'static str,
+    acquired_at: Instant,
+}
+
+impl Drop for GateGuard<'_> {
+    fn drop(&mut self) {
+        let duree_ms = self.acquired_at.elapsed().as_millis() as u64;
+        debug!(outil = self.outil, duree_ms, "gate libere");
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -466,9 +490,23 @@ impl DeveyeMcpServer {
         Ok(())
     }
 
+    /// A8 : acquiert le gate en traçant l'attente ; la libération (durée
+    /// comprise) est tracée par le `Drop` de [`GateGuard`]. Instrumenté sur
+    /// les outils les plus longs (screenshot, eval_js, click, wait_ready) —
+    /// pas les 38, cf. audit §A8.
+    async fn acquire_gate(&self, outil: &'static str) -> GateGuard<'_> {
+        let inner = self.gate.lock().await;
+        debug!(outil, "gate acquis");
+        GateGuard {
+            _inner: inner,
+            outil,
+            acquired_at: Instant::now(),
+        }
+    }
+
     #[tool(description = "Capture un screenshot PNG du viewport de l'app cible (image MCP).")]
     async fn screenshot(&self) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
+        let _serial = self.acquire_gate("screenshot").await;
         let shot = self.renderer.screenshot().await.map_err(internal)?;
         let b64 = B64.encode(&shot.bytes);
         // Contenu `image` (et non `text`) : le client MCP affiche le PNG —
@@ -605,7 +643,7 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<ClickParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
+        let _serial = self.acquire_gate("click").await;
         let cmd = InteractionCommand::click(Position::new(p.x, p.y));
         self.interaction.dispatch(cmd).await.map_err(internal)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
@@ -722,7 +760,7 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<EvalParams>,
     ) -> Result<CallToolResult, McpError> {
-        let _serial = self.gate.lock().await;
+        let _serial = self.acquire_gate("eval_js").await;
         let value = self
             .evaluator
             .evaluate(&p.expression)
@@ -956,13 +994,11 @@ impl DeveyeMcpServer {
             .get("text")
             .and_then(|v| v.as_str())
             .map(str::to_owned);
-        let mut ok = actual_count >= 1;
-        if let Some(expected) = &p.expected_text {
-            ok = ok && actual_text.as_deref() == Some(expected.as_str());
-        }
-        if let Some(expected) = p.expected_count {
-            ok = ok && actual_count == expected;
-        }
+        let text_ok = match &p.expected_text {
+            Some(expected) => actual_text.as_deref() == Some(expected.as_str()),
+            None => true,
+        };
+        let ok = selector_assertion_ok(actual_count, p.expected_count, text_ok);
         let payload = serde_json::json!({
             "ok": ok,
             "selector": p.selector,
@@ -1207,7 +1243,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Attend que l'app cible publie un state non vide (signe qu'elle est prête), au plus `timeout_ms` ms (poll toutes les 200 ms). Évite les captures/clics prématurés juste après le lancement. `isError` si le délai expire."
+        description = "Attend que l'app cible publie un state non vide (signe qu'elle est prête), au plus `timeout_ms` ms (poll toutes les 200 ms, plafond 60000). Évite les captures/clics prématurés juste après le lancement. `isError` si le délai expire."
     )]
     async fn wait_ready(
         &self,
@@ -1216,12 +1252,30 @@ impl DeveyeMcpServer {
         // Gate locke PAR ITERATION (snapshot atomique), relache pendant le sleep
         // — cf. M1 : un wait observationnel ne doit pas bloquer les autres outils.
         let start = Instant::now();
-        let budget = Duration::from_millis(p.timeout_ms);
+        let budget = Duration::from_millis(p.timeout_ms.min(WAIT_TIMEOUT_MAX_MS));
+        let mut erreur_notifiee = false;
         loop {
             let ready = {
+                // Lock direct (pas `acquire_gate`) : instrumenter le gate a
+                // chaque tick de 200 ms noierait les logs debug sans information.
                 let _serial = self.gate.lock().await;
-                let dump = self.inspector.state_snapshot().await.map_err(internal)?;
-                !dump.entries.is_empty()
+                // A5 : ABSORBE TOUTES les erreurs, y compris `PortError::Network`
+                // — contrairement au filtre de `CompositeWaitCondition` (qui
+                // propage Network comme un vrai echec de transport). Ici c'est
+                // l'inverse : la raison d'etre de `wait_ready` est d'attendre le
+                // DEMARRAGE de la cible, et "connexion refusee" tant que le SDK
+                // n'ecoute pas encore EST l'etat transitoire nominal, pas une
+                // panne. Une erreur ne doit donc jamais faire echouer l'attente
+                // avant l'expiration du budget.
+                match self.inspector.state_snapshot().await {
+                    Ok(dump) => !dump.entries.is_empty(),
+                    Err(e) if !erreur_notifiee => {
+                        erreur_notifiee = true;
+                        debug!(erreur = %e, "wait_ready: erreur absorbee (demarrage en cours, tracee une seule fois)");
+                        false
+                    }
+                    Err(_) => false,
+                }
             };
             if ready {
                 return Ok(json_success(&serde_json::json!({
@@ -1282,6 +1336,26 @@ fn json_error<T: Serialize>(value: &T) -> CallToolResult {
     CallToolResult::error(vec![Content::text(
         serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
     )])
+}
+
+/// A7 : decision pure d'`assert_selector`, extraite pour etre testable sans
+/// I/O. Le garde precedent (`actual_count >= 1`) ecrasait toute demande
+/// `expected_count: Some(0)` — l'assertion d'ABSENCE etait inexprimable, elle
+/// echouait systematiquement meme quand elle etait vraie. `expected_count`
+/// fixe desormais le critere de comptage a la place du `>= 1` implicite
+/// (qui ne reste le defaut que si `expected_count` est absent) ; `text_ok`
+/// (deja resolu par l'appelant : `true` si `expected_text` est absent) est
+/// applique par-dessus.
+fn selector_assertion_ok(
+    actual_count: usize,
+    expected_count: Option<usize>,
+    text_ok: bool,
+) -> bool {
+    let count_ok = match expected_count {
+        Some(n) => actual_count == n,
+        None => actual_count >= 1,
+    };
+    count_ok && text_ok
 }
 
 fn internal<E: std::fmt::Display>(err: E) -> McpError {
@@ -1374,7 +1448,7 @@ fn visual_diff(baseline_png: &[u8], current_png: &[u8]) -> Result<VisualOutcome,
 
 #[cfg(test)]
 mod tests {
-    use super::{crop_png, visual_diff};
+    use super::{crop_png, selector_assertion_ok, visual_diff};
     use deveye_core::{InteractionCommand, MouseButton, Position};
 
     /// Encode une image RGBA unie de `w`x`h` en PNG (helper de test).
@@ -1473,5 +1547,36 @@ mod tests {
         let v = serde_json::to_value(&cmd).unwrap();
         assert_eq!(v["button"], "right");
         assert_eq!(v["kind"], "click");
+    }
+
+    // ----- A7 : selector_assertion_ok -----
+
+    #[test]
+    fn selector_assertion_expected_count_zero_with_zero_elements_is_ok() {
+        // Assertion d'ABSENCE : c'est precisement le cas que l'ancien garde
+        // `actual_count >= 1` rendait inexprimable.
+        assert!(selector_assertion_ok(0, Some(0), true));
+    }
+
+    #[test]
+    fn selector_assertion_expected_count_zero_with_one_element_is_ko() {
+        assert!(!selector_assertion_ok(1, Some(0), true));
+    }
+
+    #[test]
+    fn selector_assertion_none_with_zero_elements_is_ko() {
+        // Sans expected_count, le defaut reste "au moins un element present".
+        assert!(!selector_assertion_ok(0, None, true));
+    }
+
+    #[test]
+    fn selector_assertion_none_with_two_elements_is_ok() {
+        assert!(selector_assertion_ok(2, None, true));
+    }
+
+    #[test]
+    fn selector_assertion_text_ko_overrides_count_ok() {
+        assert!(!selector_assertion_ok(1, Some(1), false));
+        assert!(selector_assertion_ok(1, Some(1), true));
     }
 }

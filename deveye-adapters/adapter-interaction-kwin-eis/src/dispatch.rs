@@ -12,9 +12,30 @@ use deveye_ports::{InteractionSink, PortError, PortResult};
 
 use crate::connection::{EisAction, KwinEisInteraction};
 
+/// Nom court de la variante, sans ses champs (donnees potentiellement
+/// sensibles ou volumineuses).
+fn command_kind(command: &InteractionCommand) -> &'static str {
+    match command {
+        InteractionCommand::Click { .. } => "click",
+        InteractionCommand::Hover { .. } => "hover",
+        InteractionCommand::Type { .. } => "type",
+        InteractionCommand::KeyPress { .. } => "key-press",
+        InteractionCommand::KeyCombo { .. } => "key-combo",
+        InteractionCommand::Navigate { .. } => "navigate",
+        InteractionCommand::DragDrop { .. } => "drag-drop",
+        InteractionCommand::Scroll { .. } => "scroll",
+        InteractionCommand::DoubleClick { .. } => "double-click",
+        InteractionCommand::HandleDialog { .. } => "handle-dialog",
+        InteractionCommand::UploadFile { .. } => "upload-file",
+    }
+}
+
 #[async_trait]
 impl InteractionSink for KwinEisInteraction {
     async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
+        // Nom de variante SEUL : le Debug complet embarquerait le texte tape
+        // (`Type`) ou des chemins (`UploadFile`) dans les logs debug.
+        tracing::debug!(commande = command_kind(&command), "dispatch EIS");
         let (ox, oy) = self.origin().await;
         let to_abs = |p: Position| ((p.x + ox) as f64, (p.y + oy) as f64);
 
@@ -66,6 +87,10 @@ impl InteractionSink for KwinEisInteraction {
             }
         };
 
-        self.submit(action).await
+        let result = self.submit(action).await;
+        if let Err(ref e) = result {
+            tracing::warn!("erreur du worker EIS lors du dispatch : {e}");
+        }
+        result
     }
 }

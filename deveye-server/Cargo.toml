@@ -31,3 +31,6 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+tracing = "0.1"
+# Sortie des traces sur STDERR uniquement : stdout est le canal MCP (stdio).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }

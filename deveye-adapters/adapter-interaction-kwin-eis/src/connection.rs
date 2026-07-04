@@ -1,5 +1,6 @@
 use std::os::fd::OwnedFd;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot, Mutex};
 use zbus::Connection as ZbusConn;
@@ -30,15 +31,58 @@ trait KwinEis {
     fn connect_to_eis(&self, capabilities: i32) -> zbus::Result<(zbus::zvariant::OwnedFd, i32)>;
 }
 
+/// Borne chacune des 3 étapes bloquantes de l'ouverture EIS (connexion D-Bus
+/// session, appel `connectToEIS`, handshake EI) : c'est l'unique thread worker
+/// EIS, sérialisé pour tout le process, qui les exécute — un KWin muet
+/// figerait sinon toutes les interactions OS-level pour toujours (audit A3).
+const EIS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Le handshake EI contient sa PROPRE attente de device (`RESUME_TIMEOUT` =
+/// 5 s, session.rs) : cette borne externe doit rester strictement au-dessus,
+/// sinon elle court-circuite la boucle interne et son erreur fine (« device
+/// resume ») devient inatteignable. 12 s = 5 s de resume + marge handshake.
+const EIS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(12);
+
+/// Attend `fut` borné par `budget` ; mutualise le mapping
+/// timeout -> `EisError::Eis` (message + `warn!`) pour les 3 étapes ci-dessous.
+async fn with_timeout<T, E>(
+    step: &str,
+    budget: Duration,
+    fut: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, EisError>
+where
+    EisError: From<E>,
+{
+    match tokio::time::timeout(budget, fut).await {
+        Ok(inner) => inner.map_err(EisError::from),
+        Err(_) => {
+            let msg = format!("timeout {step} ({} s)", budget.as_secs());
+            tracing::warn!("{msg}");
+            Err(EisError::Eis(msg))
+        }
+    }
+}
+
 /// Ouvre une session EIS via KWin et renvoie le file descriptor brut.
 ///
 /// Le bus de **session** est toujours utilisé (jamais le bus système). Sous
 /// Plasma 5 ou hors KDE, le service ou l'interface EIS est absent : l'erreur
 /// D-Bus remonte telle quelle, jamais de `panic!`.
 async fn acquire_eis() -> Result<(OwnedFd, ZbusConn), EisError> {
-    let conn = ZbusConn::session().await?;
+    let conn = with_timeout(
+        "connexion D-Bus session",
+        EIS_CONNECT_TIMEOUT,
+        ZbusConn::session(),
+    )
+    .await?;
     let proxy = KwinEisProxy::new(&conn).await?;
-    let (fd, _serial) = proxy.connect_to_eis(CAP_KEYBOARD | CAP_POINTER).await?;
+    let (fd, _serial) = with_timeout(
+        "connectToEIS",
+        EIS_CONNECT_TIMEOUT,
+        proxy.connect_to_eis(CAP_KEYBOARD | CAP_POINTER),
+    )
+    .await?;
+    tracing::info!("connexion EIS etablie via KWin (connectToEIS)");
     // KWin lie la validité du fd EIS à la durée de vie de `conn` : on la rend
     // pour la garder ouverte tant que la session EI vit.
     Ok((OwnedFd::from(fd), conn))
@@ -47,7 +91,18 @@ async fn acquire_eis() -> Result<(OwnedFd, ZbusConn), EisError> {
 /// Ouvre une session EI complète (D-Bus `connectToEIS` + handshake + device prêt).
 pub(crate) async fn open_session() -> Result<EisSession, EisError> {
     let (fd, dbus) = acquire_eis().await?;
-    EisSession::connect(fd, dbus).await
+    // La connexion D-Bus `dbus` est deplacee DANS `EisSession::connect` : si le
+    // handshake time out, elle est droppee avec le futur annule (comportement
+    // voulu, aucune session n'a ete etablie) — l'invariant "conn reste ouverte"
+    // ne s'applique qu'a la session vivante, geree par EisSession ensuite.
+    let session = with_timeout(
+        "handshake EIS",
+        EIS_HANDSHAKE_TIMEOUT,
+        EisSession::connect(fd, dbus),
+    )
+    .await?;
+    tracing::info!("handshake EIS termine, session EI prete");
+    Ok(session)
 }
 
 /// Action résolue (coordonnées déjà converties en absolu écran) transmise au

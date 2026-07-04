@@ -16,13 +16,30 @@ mod stubs;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use tracing_subscriber::EnvFilter;
 
 use cli::Args;
 
+/// Sortie des traces sur STDERR exclusivement : stdout est le canal MCP
+/// (stdio), une seule ligne de log dessus corromprait le protocole cote
+/// client. `RUST_LOG` pilote le filtre (`info` par defaut si absent/invalide).
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing();
+
     let args = Args::parse();
-    let mcp = compose::build_mcp(&args).await;
+    let mcp = compose::build_mcp(&args)
+        .await
+        .context("composition des adapters echouee au demarrage")?;
     if args.serve_mcp {
         mcp.serve_stdio()
             .await
