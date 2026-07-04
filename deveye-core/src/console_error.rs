@@ -2,9 +2,16 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Sévérité d'une entrée console navigateur.
+///
+/// L'ordre de déclaration porte la comparaison `Ord` (du moins au plus grave) :
+/// utilisé pour filtrer par seuil. `Debug` est le moins sévère — ajouté quand le
+/// collecteur console a été étendu à tous les niveaux (`console.debug` inclus),
+/// sinon ces entrées, émises avec `level:"debug"`, échouaient au parse et
+/// disparaissaient silencieusement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ConsoleLevel {
+    Debug,
     Log,
     Info,
     Warning,
@@ -37,6 +44,18 @@ mod tests {
             serde_json::to_value(ConsoleLevel::Warning).unwrap(),
             json!("warning")
         );
+    }
+
+    #[test]
+    fn debug_level_parses_and_orders_below_the_rest() {
+        // `console.debug` remonte `level:"debug"` : doit parser (sinon perte
+        // silencieuse) et se classer comme le moins sévère.
+        assert_eq!(
+            serde_json::from_value::<ConsoleLevel>(json!("debug")).unwrap(),
+            ConsoleLevel::Debug
+        );
+        assert!(ConsoleLevel::Debug < ConsoleLevel::Log);
+        assert!(ConsoleLevel::Debug < ConsoleLevel::Error);
     }
 
     #[test]

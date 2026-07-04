@@ -13,6 +13,9 @@ pub enum KwinScreencapError {
     #[error("le script KWin n'a pas repondu (ScreenShot2/Scripting indisponible ?) : {0}")]
     Unavailable(String),
 
+    #[error("le script KWin n'a pas repondu dans le delai imparti : {0}")]
+    Timeout(String),
+
     #[error("lecture du pipe KWin : {0}")]
     Pipe(String),
 
@@ -28,6 +31,10 @@ impl From<KwinScreencapError> for PortError {
             KwinScreencapError::WindowNotFound(_) | KwinScreencapError::Unavailable(_) => {
                 PortError::Unsupported(err.to_string())
             }
+            // Un KWin qui n'a pas repondu a temps n'est PAS "plateforme non
+            // supportee" : c'est un hoquet transitoire, distinct pour que
+            // l'appelant (ex. focus_window) puisse retenter (revue T4).
+            KwinScreencapError::Timeout(_) => PortError::Timeout(err.to_string()),
             _ => PortError::Render(err.to_string()),
         }
     }

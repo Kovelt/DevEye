@@ -10,7 +10,7 @@ Conçu pour les apps Dioxus desktop, il se branche aussi sur n'importe quelle ci
 
 ## Caractéristiques clés
 
-### 38 outils MCP, en six familles
+### 41 outils MCP, en six familles
 
 | Famille | Outils |
 |---|---|
@@ -35,7 +35,7 @@ Détail complet des paramètres et valeurs de retour : [docs/usage.md](docs/usag
 
 ### Architecture hexagonale
 
-11 ports (traits Rust purs dans `deveye-ports`), un adapter par technologie, un binaire orchestrateur (`deveye-server`) qui les compose selon les options CLI. Ajouter une cible = nouvel adapter, pas de refonte.
+12 ports (traits Rust purs dans `deveye-ports`), un adapter par technologie, un binaire orchestrateur (`deveye-server`) qui les compose selon les options CLI. Ajouter une cible = nouvel adapter, pas de refonte.
 
 ---
 
@@ -150,10 +150,10 @@ Client MCP (Claude Code)
 └────────────┬────────────────────┘
              │
      ┌───────┴────────┐
-     │  adapter-mcp-  │  expose les 38 outils MCP
+     │  adapter-mcp-  │  expose les 41 outils MCP
      │  server        │  (sérialise les appels — 1 à la fois)
      └───────┬────────┘
-             │ implémente les 11 ports (traits deveye-ports)
+             │ implémente les 12 ports (traits deveye-ports)
     ┌────────┼────────────────────┐
     │        │                    │
     ▼        ▼                    ▼
@@ -171,7 +171,7 @@ App WebView                App native
     (HTTP :31337)
 ```
 
-Les 11 ports : `Renderer`, `AppInspector`, `InteractionSink`, `JsEvaluator`, `LogSource`, `CommandRouter`, `ConsoleErrorSource`, `WaitCondition`, `WindowLister`, `WindowManager`, `Clipboard`.
+Les 12 ports : `Renderer`, `AppInspector`, `InteractionSink`, `JsEvaluator`, `LogSource`, `CommandRouter`, `ConsoleErrorSource`, `WaitCondition`, `WindowLister`, `WindowManager`, `Clipboard`, `WindowGeometry`.
 
 Architecture détaillée (hexagonale, ports, robustesse CDP, reconnexion paresseuse) : [docs/architecture.md](docs/architecture.md).
 
@@ -195,7 +195,7 @@ DevEye/
 │   ├── adapter-commands-http/    # CommandRouter via POST /devtools/command + GET /devtools/commands
 │   ├── adapter-interaction-kwin-eis/ # InteractionSink OS-level Wayland natif (KWin EIS)
 │   ├── adapter-clipboard-wayland/ # Clipboard OS-level via wl-copy / wl-paste (Wayland)
-│   ├── adapter-mcp-server/       # Consomme les 11 ports, expose les 38 outils MCP via rmcp/stdio
+│   ├── adapter-mcp-server/       # Consomme les 12 ports, expose les 41 outils MCP via rmcp/stdio
 │   └── adapter-composite/        # Adapters composites génériques (ConsoleErrorSource JS, WaitCondition, Inspector)
 └── docs/
     ├── architecture.md           # Ports, adapters, robustesse CDP, sécurité
@@ -223,7 +223,7 @@ Les tests live KWin/EIS (session Wayland requise) sont marqués `#[ignore]` et e
 
 ## Statut / contexte
 
-Jalons **M0 à M7 livrés** (25 juin 2026) : infrastructure hexagonale, adapter CDP avec reconnexion paresseuse, pont natif SDK Linux, capture KWin Wayland, injection KWin EIS, CI GitLab. Surface étendue ensuite à **11 ports / 38 outils MCP** (sprints d'outils, juin 2026 — cf. [docs/tools-backlog-2026-06-26.md](docs/tools-backlog-2026-06-26.md)).
+Jalons **M0 à M7 livrés** (25 juin 2026) : infrastructure hexagonale, adapter CDP avec reconnexion paresseuse, pont natif SDK Linux, capture KWin Wayland, injection KWin EIS, CI GitLab. Surface étendue ensuite à **12 ports / 41 outils MCP** (sprints d'outils, juin 2026 — cf. [docs/tools-backlog-2026-06-26.md](docs/tools-backlog-2026-06-26.md)).
 
 Audit post-M7 (108 constats priorisés, dont le gate MCP T1/M1 bloquant) : [docs/audit-2026-06-25.md](docs/audit-2026-06-25.md).
 

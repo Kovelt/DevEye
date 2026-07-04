@@ -25,10 +25,15 @@
 #![deny(rust_2018_idioms)]
 
 mod error;
+mod kwin_bridge;
 mod proxy;
 mod renderer;
+mod window_geometry;
+mod window_lister;
 mod window_manager;
 
 pub use error::KwinScreencapError;
 pub use renderer::KwinRenderer;
+pub use window_geometry::KwinWindowGeometry;
+pub use window_lister::KwinWindowLister;
 pub use window_manager::KwinWindowManager;
