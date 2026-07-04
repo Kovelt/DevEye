@@ -1,13 +1,15 @@
 # DevEye — workspace autonome.
 #
-# Outil d'observation/pilotage d'apps Dioxus en dev (screenshot, click, eval,
-# DOM, logs…), extrait de Chronos (crates/deveye) par `git subtree split` en
-# préservant l'historique. Les crates gardent leurs métadonnées de package
-# figées ; seul ce manifeste de workspace définit les dépendances partagées
-# (auparavant héritées du workspace Chronos).
+# Outil d'observation/pilotage d'apps en dev (screenshot, click, eval,
+# DOM, logs…), originellement extrait de Chronos (crates/deveye) par
+# `git subtree split`. Les crates gardent leurs métadonnées de package
+# figées ; seul ce manifeste de workspace définit les dépendances partagées.
 #
-# Note : le développement actif de DevEye continue dans le repo Chronos
-# (crates/deveye) ; ce dépôt est un export miroir à resynchroniser.
+# CE DÉPÔT EST LA SOURCE DE VÉRITÉ (depuis M0, 25/06/2026). Les copies
+# vendored consommées par les apps cibles (Chronos/crates/deveye,
+# Atelier/deveye — deveye-core/ports/sdk uniquement) sont régénérées par
+# scripts/sync-deveye.sh et ne doivent JAMAIS être éditées directement ;
+# tout correctif naît ici puis est propagé par le script.
 
 [workspace]
 resolver = "2"

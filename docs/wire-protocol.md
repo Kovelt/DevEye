@@ -331,11 +331,11 @@ Ref. code : `deveye-sdk/src/lib.rs:86-91` (struct `CommandRequest` avec `#[serde
 
 Le corps est la valeur JSON retournée par le handler de la commande. Il n'y a pas d'enveloppe : si le handler retourne `{ "ok": true }`, la réponse HTTP est directement `{ "ok": true }`. Si le handler retourne une chaîne, la réponse est une chaîne JSON.
 
-**Réponse 404** :
+**Réponse 404** (corps minimal : la route n'est pas répétée, elle est déjà portée par `PortError::Route` côté client — audit C2-b) :
 
 ```json
 {
-  "error": "commande inconnue : <route>"
+  "error": "inconnue"
 }
 ```
 
@@ -486,7 +486,7 @@ Cette liste est le guide opérationnel pour le shim .NET `Atlas.DevEye` (jalon M
 - [ ] Exposer une fonction `expose_route(name, description, handler)` appelable depuis l'app hôte.
 - [ ] Lire `{ "route": "...", "payload": ... }` (payload peut être null ou absent).
 - [ ] Exécuter le handler correspondant, retourner son résultat JSON avec 200.
-- [ ] Retourner `{ "error": "commande inconnue : <route>" }` avec 404 si la route est inconnue.
+- [ ] Retourner `{ "error": "inconnue" }` avec 404 si la route est inconnue.
 
 ### `GET /devtools/commands`
 

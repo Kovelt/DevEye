@@ -84,7 +84,7 @@ use tracing::debug;
 use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, WaitPredicate};
 use deveye_ports::{
     AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
-    LogSource, Renderer, WaitCondition, WindowLister, WindowManager,
+    LogSource, PortError, Renderer, WaitCondition, WindowLister, WindowManager,
 };
 
 /// Plafond partage par les outils `wait_*` a boucle de polling explicite
@@ -507,7 +507,7 @@ impl DeveyeMcpServer {
     #[tool(description = "Capture un screenshot PNG du viewport de l'app cible (image MCP).")]
     async fn screenshot(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.acquire_gate("screenshot").await;
-        let shot = self.renderer.screenshot().await.map_err(internal)?;
+        let shot = self.renderer.screenshot().await.map_err(port_to_mcp)?;
         let b64 = B64.encode(&shot.bytes);
         // Contenu `image` (et non `text`) : le client MCP affiche le PNG —
         // c'est ce qui rend l'outil utilisable comme « yeux ».
@@ -525,7 +525,7 @@ impl DeveyeMcpServer {
         Parameters(p): Parameters<ScreenshotRegionParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let shot = self.renderer.screenshot().await.map_err(internal)?;
+        let shot = self.renderer.screenshot().await.map_err(port_to_mcp)?;
         let cropped = crop_png(&shot.bytes, p.x, p.y, p.width, p.height).map_err(internal)?;
         let b64 = B64.encode(&cropped);
         Ok(CallToolResult::success(vec![Content::image(
@@ -552,14 +552,18 @@ impl DeveyeMcpServer {
              if (r.width === 0 || r.height === 0) return {{ found: false, reason: 'not_visible' }}; \
              return {{ found: true, x: r.left, y: r.top, width: r.width, height: r.height }}; }})()"
         );
-        let rect = self.evaluator.evaluate(&snippet).await.map_err(internal)?;
+        let rect = self
+            .evaluator
+            .evaluate(&snippet)
+            .await
+            .map_err(port_to_mcp)?;
         if !rect.get("found").and_then(|v| v.as_bool()).unwrap_or(false) {
             return Ok(json_error(&rect));
         }
         // 2) Capturer puis recadrer. Le PNG peut etre en pixels physiques
         // (HiDPI) alors que le rect est en pixels CSS : on met a l'echelle par
         // le ratio dimensions-PNG / viewport-logique.
-        let shot = self.renderer.screenshot().await.map_err(internal)?;
+        let shot = self.renderer.screenshot().await.map_err(port_to_mcp)?;
         let (pw, ph) = png_dimensions(&shot.bytes).map_err(internal)?;
         let scale_x = if shot.viewport.width > 0 {
             pw as f64 / shot.viewport.width as f64
@@ -592,7 +596,7 @@ impl DeveyeMcpServer {
         Parameters(p): Parameters<AssertVisualParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let shot = self.renderer.screenshot().await.map_err(internal)?;
+        let shot = self.renderer.screenshot().await.map_err(port_to_mcp)?;
         // Recadrage optionnel : les 4 bornes doivent etre fournies ensemble.
         let current = match (p.x, p.y, p.width, p.height) {
             (Some(x), Some(y), Some(w), Some(h)) => {
@@ -645,7 +649,7 @@ impl DeveyeMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.acquire_gate("click").await;
         let cmd = InteractionCommand::click(Position::new(p.x, p.y));
-        self.interaction.dispatch(cmd).await.map_err(internal)?;
+        self.interaction.dispatch(cmd).await.map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -661,7 +665,7 @@ impl DeveyeMcpServer {
             position: Position::new(p.x, p.y),
             button: MouseButton::Right,
         };
-        self.interaction.dispatch(cmd).await.map_err(internal)?;
+        self.interaction.dispatch(cmd).await.map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -676,7 +680,7 @@ impl DeveyeMcpServer {
         self.interaction
             .dispatch(InteractionCommand::double_click(Position::new(p.x, p.y)))
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -689,7 +693,7 @@ impl DeveyeMcpServer {
         self.interaction
             .dispatch(InteractionCommand::type_text(p.text))
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -704,7 +708,7 @@ impl DeveyeMcpServer {
         self.interaction
             .dispatch(InteractionCommand::key(p.key))
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -719,7 +723,7 @@ impl DeveyeMcpServer {
         self.interaction
             .dispatch(InteractionCommand::key_combo(p.modifiers, p.key))
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -734,7 +738,7 @@ impl DeveyeMcpServer {
         self.interaction
             .dispatch(InteractionCommand::navigate(p.route))
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -749,7 +753,7 @@ impl DeveyeMcpServer {
         self.interaction
             .dispatch(InteractionCommand::hover(Position::new(p.x, p.y)))
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -765,7 +769,7 @@ impl DeveyeMcpServer {
             .evaluator
             .evaluate(&p.expression)
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(json_success(&value))
     }
 
@@ -806,7 +810,11 @@ impl DeveyeMcpServer {
     /// ou `{{ok: false, reason}}`) puis clique au centre trouvé par vrais
     /// événements souris CDP — mêmes événements qu'un humain, focus compris.
     async fn click_located(&self, snippet: &str) -> Result<CallToolResult, McpError> {
-        let value = self.evaluator.evaluate(snippet).await.map_err(internal)?;
+        let value = self
+            .evaluator
+            .evaluate(snippet)
+            .await
+            .map_err(port_to_mcp)?;
         let found = value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
         if !found {
             // H1 : element absent ou invisible — erreur semantique (isError=true)
@@ -818,7 +826,7 @@ impl DeveyeMcpServer {
         self.interaction
             .dispatch(InteractionCommand::click(Position::new(x, y)))
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(json_success(
             &serde_json::json!({ "ok": true, "x": x, "y": y }),
         ))
@@ -827,14 +835,14 @@ impl DeveyeMcpServer {
     #[tool(description = "Récupère le DOM courant de l'app cible (JSON sérialisé).")]
     async fn dom(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let tree = self.inspector.dom_snapshot().await.map_err(internal)?;
+        let tree = self.inspector.dom_snapshot().await.map_err(port_to_mcp)?;
         Ok(json_success(&tree.tree))
     }
 
     #[tool(description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé).")]
     async fn state(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let dump = self.inspector.state_snapshot().await.map_err(internal)?;
+        let dump = self.inspector.state_snapshot().await.map_err(port_to_mcp)?;
         Ok(json_success(&dump.entries))
     }
 
@@ -855,7 +863,7 @@ impl DeveyeMcpServer {
                 })));
             }
         };
-        let dump = self.inspector.state_snapshot().await.map_err(internal)?;
+        let dump = self.inspector.state_snapshot().await.map_err(port_to_mcp)?;
         let mut mismatches = Vec::new();
         for (key, want) in expected {
             let actual = dump.entries.get(key);
@@ -881,7 +889,7 @@ impl DeveyeMcpServer {
     )]
     async fn logs_tail(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let events = self.log_source.poll().await.map_err(internal)?;
+        let events = self.log_source.poll().await.map_err(port_to_mcp)?;
         Ok(json_success(&events))
     }
 
@@ -897,7 +905,7 @@ impl DeveyeMcpServer {
             .command_router
             .invoke(&p.name, p.args)
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(json_success(&value))
     }
 
@@ -906,7 +914,7 @@ impl DeveyeMcpServer {
     )]
     async fn list_commands(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let descriptors = self.command_router.list().await.map_err(internal)?;
+        let descriptors = self.command_router.list().await.map_err(port_to_mcp)?;
         Ok(json_success(&descriptors))
     }
 
@@ -932,7 +940,7 @@ impl DeveyeMcpServer {
             .wait_condition
             .wait_until(predicate, budget)
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         if outcome.satisfied {
             Ok(json_success(&serde_json::json!({
                 "found": true,
@@ -969,7 +977,11 @@ impl DeveyeMcpServer {
                disabled: el.disabled === true || el.hasAttribute('disabled'), \
                attributes: attrs }}; }})()"
         );
-        let value = self.evaluator.evaluate(&snippet).await.map_err(internal)?;
+        let value = self
+            .evaluator
+            .evaluate(&snippet)
+            .await
+            .map_err(port_to_mcp)?;
         Ok(json_success(&value))
     }
 
@@ -988,7 +1000,11 @@ impl DeveyeMcpServer {
              const text = count > 0 ? (nodes[0].innerText || nodes[0].textContent || '').trim() : null; \
              return {{ count, text }}; }})()"
         );
-        let value = self.evaluator.evaluate(&snippet).await.map_err(internal)?;
+        let value = self
+            .evaluator
+            .evaluate(&snippet)
+            .await
+            .map_err(port_to_mcp)?;
         let actual_count = value.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let actual_text = value
             .get("text")
@@ -1031,7 +1047,7 @@ impl DeveyeMcpServer {
             .wait_condition
             .wait_until(predicate, timeout)
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         if outcome.satisfied {
             Ok(json_success(&outcome))
         } else {
@@ -1063,7 +1079,7 @@ impl DeveyeMcpServer {
             .wait_condition
             .wait_until(predicate, budget)
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         if outcome.satisfied {
             Ok(json_success(&outcome))
         } else {
@@ -1090,7 +1106,7 @@ impl DeveyeMcpServer {
             .wait_condition
             .wait_until(predicate, budget)
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         if outcome.satisfied {
             Ok(json_success(&outcome))
         } else {
@@ -1110,7 +1126,7 @@ impl DeveyeMcpServer {
             Position::new(p.from_x, p.from_y),
             Position::new(p.to_x, p.to_y),
         );
-        self.interaction.dispatch(cmd).await.map_err(internal)?;
+        self.interaction.dispatch(cmd).await.map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -1125,7 +1141,7 @@ impl DeveyeMcpServer {
         self.interaction
             .dispatch(InteractionCommand::handle_dialog(p.accept, p.prompt_text))
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -1140,7 +1156,7 @@ impl DeveyeMcpServer {
         self.interaction
             .dispatch(InteractionCommand::upload_file(p.selector, p.paths))
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -1169,7 +1185,7 @@ impl DeveyeMcpServer {
         self.interaction
             .dispatch(InteractionCommand::scroll(anchor, dx, dy))
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -1182,7 +1198,7 @@ impl DeveyeMcpServer {
             .console_errors
             .drain_console_errors()
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(json_success(&errors))
     }
 
@@ -1206,7 +1222,7 @@ impl DeveyeMcpServer {
             .window_manager
             .activate(p.title_pattern.as_deref())
             .await
-            .map_err(internal)?;
+            .map_err(port_to_mcp)?;
         Ok(json_success(
             &serde_json::json!({ "ok": true, "title": title }),
         ))
@@ -1217,7 +1233,7 @@ impl DeveyeMcpServer {
     )]
     async fn clipboard_get(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let text = self.clipboard.get().await.map_err(internal)?;
+        let text = self.clipboard.get().await.map_err(port_to_mcp)?;
         Ok(json_success(&serde_json::json!({ "text": text })))
     }
 
@@ -1229,7 +1245,7 @@ impl DeveyeMcpServer {
         Parameters(p): Parameters<ClipboardSetParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        self.clipboard.set(&p.text).await.map_err(internal)?;
+        self.clipboard.set(&p.text).await.map_err(port_to_mcp)?;
         Ok(CallToolResult::success(vec![Content::text("ok")]))
     }
 
@@ -1238,7 +1254,11 @@ impl DeveyeMcpServer {
     )]
     async fn list_windows(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let windows = self.window_lister.list_windows().await.map_err(internal)?;
+        let windows = self
+            .window_lister
+            .list_windows()
+            .await
+            .map_err(port_to_mcp)?;
         Ok(json_success(&windows))
     }
 
@@ -1360,6 +1380,25 @@ fn selector_assertion_ok(
 
 fn internal<E: std::fmt::Display>(err: E) -> McpError {
     McpError::internal_error(err.to_string(), None)
+}
+
+/// Convertit une `PortError` en `McpError` en distinguant qui est responsable :
+/// - `Route` (commande logique inconnue) et `Interaction` (dispatch invalide)
+/// sont imputables a l'appelant MCP (parametres incorrects) -> -32602
+/// `invalid_params`, comme pour toute erreur de requete mal formee.
+/// - tout le reste (Render, Inspect, Log, Network, Protocol, Console, Timeout,
+/// Unsupported) reste une panne d'infra cote adapter/cible -> -32603
+/// `internal_error`, code inchange.
+/// Portage du banc d'essai Chronos du 28/06 (audit C2-c) : verifie en
+/// conditions reelles que « route inconnue » y remontait -32602 au lieu du
+/// -32603 aplati que produisait `internal` jusque-la.
+fn port_to_mcp(err: PortError) -> McpError {
+    match &err {
+        PortError::Route { .. } | PortError::Interaction(_) => {
+            McpError::invalid_params(err.to_string(), None)
+        }
+        _ => McpError::internal_error(err.to_string(), None),
+    }
 }
 
 /// Dimensions `(width, height)` d'un PNG sans le décoder entièrement en mémoire
