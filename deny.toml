@@ -1,0 +1,32 @@
+# cargo-deny — audit des dependances (audit du 04/07/2026, item I3).
+# Lancer : `cargo deny check advisories bans sources` (job CI `audit-deps`).
+# Le check `licenses` n'est volontairement pas active : outil interne
+# proprietaire, pas de redistribution — a revoir si le projet est publie.
+
+[advisories]
+version = 2
+# RUSTSEC : vulnerabilites et crates non maintenues. `unmaintained` cadre au
+# workspace : xcap et consorts tirent des crates d'ecosysteme X11/Wayland au
+# rythme de maintenance inegal, on ne veut pas echouer sur du transitif profond.
+unmaintained = "workspace"
+ignore = [
+    # quick-xml 0.30.0 : deux DoS (run-time quadratique / allocation namespace
+    # non bornee). Tire UNIQUEMENT en build-dependency par xcb (lui-meme via
+    # xcap) pour parser les definitions de protocole X11 A LA COMPILATION —
+    # jamais expose a une entree runtime non fiable. Pas de version corrigee
+    # atteignable sans bump de xcb/xcap. A lever quand xcap remonte quick-xml.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
+
+[bans]
+# Les doublons de versions gonflent les temps de build sans casser : warn.
+multiple-versions = "warn"
+wildcards = "deny"
+# Les dependances path internes du workspace n'ont pas de version : ce sont
+# des "wildcards" legitimes, pas des dependances flottantes de crates.io.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

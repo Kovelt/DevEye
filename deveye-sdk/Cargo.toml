@@ -2,10 +2,11 @@
 name = "deveye-sdk"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.81"
+rust-version = "1.88"
 license = "LicenseRef-Proprietary"
 authors = ["NuvoraCode <contact@nuvoracode.fr>"]
 description = "SDK opt-in DevEye : micro-serveur HTTP local pour exposer le state d'une app en dev."
+publish = false  # crate interne proprietaire, jamais publiee sur crates.io
 
 # Métadonnées figées localement — cf. deveye-core/Cargo.toml.
 # Ce crate est destiné à être ajouté en dependency par l'app cible

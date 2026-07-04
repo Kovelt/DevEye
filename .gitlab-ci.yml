@@ -19,12 +19,13 @@ default:
       - target/
   before_script:
     # Dependances systeme des adapters Linux :
-    #   xcap (screenshot)  -> libxcb, libxrandr
+    #   xcap (screenshot)  -> libxcb, libxrandr, libgbm (backend Wayland
+    #                          libwayshot depuis xcap 0.9)
     #   zbus (KWin D-Bus)  -> libdbus
     #   xkbcommon (EIS)    -> libxkbcommon ; reis est pur Rust (pas de libei)
     - apt-get update -qq
     - apt-get install -y --no-install-recommends
-        libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev
+        libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev libgbm-dev
     - rustup component add rustfmt clippy
 
 fmt:
@@ -41,3 +42,27 @@ test:
   stage: check
   script:
     - cargo test --workspace
+
+# Le binaire reellement distribue (.mcp.json pointe un build release) n'etait
+# jamais construit ni teste en CI ; or debug et release divergent (overflow
+# arithmetique : panique en debug, wrap silencieux en release). Audit I1.
+release:
+  stage: check
+  script:
+    - cargo build --release -p deveye-server
+    - cargo test --workspace --release
+
+# Verifie le plancher annonce par rust-version (1.81 sur les 15 crates) —
+# rust:latest ne le garantit pas. Audit I4.
+msrv:
+  stage: check
+  image: rust:1.88
+  script:
+    - cargo check --workspace --all-targets
+
+# Vulnerabilites RustSec + doublons de versions (deny.toml). Audit I3.
+audit-deps:
+  stage: check
+  script:
+    - command -v cargo-deny >/dev/null || cargo install cargo-deny --locked
+    - cargo deny check advisories bans sources

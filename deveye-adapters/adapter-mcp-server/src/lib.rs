@@ -1383,12 +1383,14 @@ fn internal<E: std::fmt::Display>(err: E) -> McpError {
 }
 
 /// Convertit une `PortError` en `McpError` en distinguant qui est responsable :
+///
 /// - `Route` (commande logique inconnue) et `Interaction` (dispatch invalide)
-/// sont imputables a l'appelant MCP (parametres incorrects) -> -32602
-/// `invalid_params`, comme pour toute erreur de requete mal formee.
+///   sont imputables a l'appelant MCP (parametres incorrects) -> -32602
+///   `invalid_params`, comme pour toute erreur de requete mal formee.
 /// - tout le reste (Render, Inspect, Log, Network, Protocol, Console, Timeout,
-/// Unsupported) reste une panne d'infra cote adapter/cible -> -32603
-/// `internal_error`, code inchange.
+///   Unsupported) reste une panne d'infra cote adapter/cible -> -32603
+///   `internal_error`, code inchange.
+///
 /// Portage du banc d'essai Chronos du 28/06 (audit C2-c) : verifie en
 /// conditions reelles que « route inconnue » y remontait -32602 au lieu du
 /// -32603 aplati que produisait `internal` jusque-la.

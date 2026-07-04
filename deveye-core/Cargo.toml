@@ -2,10 +2,11 @@
 name = "deveye-core"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.81"
+rust-version = "1.88"
 license = "LicenseRef-Proprietary"
 authors = ["NuvoraCode <contact@nuvoracode.fr>"]
 description = "Domaine pur de DevEye : AppSession, Snapshot, InteractionCommand, Recording, Diff."
+publish = false  # crate interne proprietaire, jamais publiee sur crates.io
 
 # Métadonnées figées localement (et non héritées du workspace Chronos) pour préparer
 # la migration vers un repo dédié `git.nuvoracode.fr/deveye` via `git subtree split`.
