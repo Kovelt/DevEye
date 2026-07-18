@@ -45,6 +45,7 @@ PROJETS_ROOT="$(cd "${DEVEYE_ROOT}/.." && pwd)"
 
 ATELIER_DEVEYE="${PROJETS_ROOT}/Atelier/deveye"
 CHRONOS_DEVEYE="${PROJETS_ROOT}/Chronos/crates/deveye"
+XVII_DEVEYE="${PROJETS_ROOT}/XVII/deveye"
 
 CRATES=("deveye-core" "deveye-ports" "deveye-sdk")
 
@@ -94,7 +95,7 @@ write_vendored_md() {
 # --check : derive canonique/copies, sans ecriture. 0 = tout a jour.
 if [[ "${MODE}" == "check" ]]; then
   drift=0
-  for dest_root in "${ATELIER_DEVEYE}" "${CHRONOS_DEVEYE}"; do
+  for dest_root in "${ATELIER_DEVEYE}" "${CHRONOS_DEVEYE}" "${XVII_DEVEYE}"; do
     [[ -d "${dest_root}" ]] || { echo "(ignore : ${dest_root} absent)"; continue; }
     for crate in "${CRATES[@]}"; do
       src_hash="$(hash_crate "${DEVEYE_ROOT}" "${crate}")"
@@ -154,7 +155,9 @@ sync_to() {
 
 sync_to "${ATELIER_DEVEYE}" "Atelier/deveye"
 sync_to "${CHRONOS_DEVEYE}" "Chronos/crates/deveye"
+sync_to "${XVII_DEVEYE}" "XVII/deveye"
 
 echo "Sync termine. Pensez a verifier que les consommateurs compilent :"
 echo "  (cd \"${PROJETS_ROOT}/Atelier\" && cargo check --features deveye)"
 echo "  (cd \"${PROJETS_ROOT}/Chronos\" && cargo check --features deveye)"
+echo "  (cd \"${PROJETS_ROOT}/XVII\" && cargo check -p xvii-app --features deveye)"
