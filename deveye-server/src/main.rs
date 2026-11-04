@@ -15,7 +15,6 @@ mod fallback;
 mod stubs;
 
 use anyhow::{Context, Result};
-use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use cli::Args;
@@ -36,7 +35,7 @@ fn init_tracing() {
 async fn main() -> Result<()> {
     init_tracing();
 
-    let args = Args::parse();
+    let args = Args::parse_checked();
     let mcp = compose::build_mcp(&args)
         .await
         .context("composition des adapters echouee au demarrage")?;

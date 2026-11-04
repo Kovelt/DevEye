@@ -1,5 +1,7 @@
 //! Impls stub/noop locales au binaire : `EmptyWindowLister`, `UnsupportedInspector`,
-//! `UnsupportedEvaluator`, `UnsupportedWindowManager`, `UnsupportedWindowGeometry`.
+//! `UnsupportedEvaluator`, `UnsupportedWindowManager`, `UnsupportedWindowGeometry`,
+//! `UnsupportedClipboard`. Les messages sont GENERIQUES (aucune cible nommee) :
+//! ces stubs servent toutes les cibles natives (kwin-eis, x11...).
 
 use async_trait::async_trait;
 
@@ -20,7 +22,7 @@ impl WindowLister for EmptyWindowLister {
     }
 }
 
-/// Inspecteur DOM indisponible (cible `kwin-eis` : rendu natif, sans WebView).
+/// Inspecteur DOM indisponible (cible native : rendu sans WebView).
 /// Le state applicatif continue d'arriver par le SDK (state_inspector dedie).
 pub(crate) struct UnsupportedInspector;
 
@@ -28,24 +30,24 @@ pub(crate) struct UnsupportedInspector;
 impl AppInspector for UnsupportedInspector {
     async fn dom_snapshot(&self) -> PortResult<DomTree> {
         Err(PortError::Unsupported(
-            "DOM indisponible en mode kwin-eis (rendu natif, pas de WebView)".to_string(),
+            "DOM indisponible sur cette cible (rendu natif, pas de WebView)".to_string(),
         ))
     }
     async fn state_snapshot(&self) -> PortResult<StateDump> {
         Err(PortError::Unsupported(
-            "state DOM indisponible en mode kwin-eis".to_string(),
+            "state DOM indisponible sur cette cible (rendu natif)".to_string(),
         ))
     }
 }
 
-/// Evaluateur JS indisponible (cible `kwin-eis` : pas de WebView a piloter).
+/// Evaluateur JS indisponible (cible native : pas de WebView a piloter).
 pub(crate) struct UnsupportedEvaluator;
 
 #[async_trait]
 impl JsEvaluator for UnsupportedEvaluator {
     async fn evaluate(&self, _expression: &str) -> PortResult<serde_json::Value> {
         Err(PortError::Unsupported(
-            "eval JS indisponible en mode kwin-eis (rendu natif, pas de WebView)".to_string(),
+            "eval JS indisponible sur cette cible (rendu natif, pas de WebView)".to_string(),
         ))
     }
 }
@@ -78,19 +80,21 @@ impl WindowGeometry for UnsupportedWindowGeometry {
     }
 }
 
-/// Presse-papiers indisponible : session hors Wayland (pas de wl-clipboard).
+/// Presse-papiers indisponible : session hors Wayland (pas de wl-clipboard), ou
+/// cible isolee (x11) qui ne doit jamais toucher le presse-papiers de la
+/// session vivante.
 pub(crate) struct UnsupportedClipboard;
 
 #[async_trait]
 impl Clipboard for UnsupportedClipboard {
     async fn get(&self) -> PortResult<String> {
         Err(PortError::Unsupported(
-            "presse-papiers indisponible hors session Wayland".to_string(),
+            "presse-papiers indisponible sur cette cible (session Wayland requise)".to_string(),
         ))
     }
     async fn set(&self, _text: &str) -> PortResult<()> {
         Err(PortError::Unsupported(
-            "presse-papiers indisponible hors session Wayland".to_string(),
+            "presse-papiers indisponible sur cette cible (session Wayland requise)".to_string(),
         ))
     }
 }

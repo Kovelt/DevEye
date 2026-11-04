@@ -161,7 +161,7 @@ const DOM_MAX_BYTES: usize = 100_000;
 /// pour le decouvrir.
 #[derive(Clone, Debug, Serialize)]
 pub struct TargetInfo {
-    /// Mode actif : "auto" | "cdp" | "sdk" | "kwin-eis".
+    /// Mode actif : "auto" | "cdp" | "sdk" | "kwin-eis" | "x11".
     pub target: String,
     /// Comment les yeux (screenshot) sont obtenus.
     pub eyes: String,

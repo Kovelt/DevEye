@@ -30,15 +30,15 @@ pub(crate) fn build_cdp_filter(args: &Args) -> TargetFilter {
     }
 }
 
-/// Tente la connexion initiale au CDP. Renvoie `None` si la cible est `sdk` ou
-/// `kwin-eis` (pas de navigateur), ou si le CDP est injoignable au demarrage
+/// Tente la connexion initiale au CDP. Renvoie `None` si la cible n'utilise pas
+/// de navigateur (`sdk`, `kwin-eis`, `x11`), ou si le CDP est injoignable au demarrage
 /// (erreur non fatale — la reconnexion se fera au premier appel d'outil).
 pub(crate) async fn try_initial_cdp(
     url: &str,
     filter: TargetFilter,
     target: TargetMode,
 ) -> Option<Arc<CdpClient>> {
-    if matches!(target, TargetMode::Sdk | TargetMode::KwinEis) {
+    if !target.uses_cdp() {
         return None;
     }
     match CdpClient::connect(url, filter).await {

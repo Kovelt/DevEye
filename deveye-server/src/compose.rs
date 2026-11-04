@@ -12,6 +12,7 @@ use adapter_clipboard_wayland::WaylandClipboard;
 use adapter_commands_http::SdkCommandRouter;
 use adapter_composite::{
     CompositeInspector, CompositeWaitCondition, JsConsoleErrorSource, NoopConsoleErrorSource,
+    RouteDomInspector, DEFAULT_DOM_ROUTE,
 };
 use adapter_dioxus_signals::{
     DioxusSignalsInspector, EvalDomInspector, JsInteraction, SdkEvaluator,
@@ -23,6 +24,7 @@ use adapter_screencap_kwin::{
     KwinRenderer, KwinWindowGeometry, KwinWindowLister, KwinWindowManager,
 };
 use adapter_screencap_xcap::{MonitorRenderer, XcapRenderer};
+use adapter_x11::{X11Config, X11Target};
 use deveye_ports::{
     AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
     LogSource, Renderer, WaitCondition, WindowGeometry, WindowLister, WindowManager,
@@ -266,6 +268,28 @@ fn build_target_info(target: TargetMode) -> TargetInfo {
                     defaut, --screencap-window). Hors KDE/Wayland : liste vide / Unsupported."
                 .to_string(),
         },
+        TargetMode::X11 => TargetInfo {
+            target: "x11".to_string(),
+            eyes: "GetImage du serveur X prive, rogne a la fenetre (--window)".to_string(),
+            hands: "injection XTEST reelle sur le serveur X prive (souris, molette, clavier du serveur)"
+                .to_string(),
+            eval_js: false,
+            dom: true,
+            state: true,
+            console_errors: false,
+            list_windows: true,
+            notes: "Serveur X explicite (--display), jamais la session vivante : display < 100, \
+                    $DISPLAY et XWayland refuses. Pas de WebView : eval_js/find_element/\
+                    wait_for_selector/click_text renvoient Unsupported, navigate/handle_dialog/\
+                    upload_file aussi. dom = reponse de la route `ui.widgets` de l'app (rects en \
+                    coordonnees fenetre : cliquer au centre avec `click`), vide d'erreur Inspect \
+                    si l'app ne l'expose pas ; state/logs/commandes via le SDK (--sdk-url). \
+                    Attentes : wait_condition (state-key, screenshot-stable, log-message). \
+                    Clavier = celui du serveur X ; un caractere absent est injecte par remappage \
+                    temporaire. Molette : un cran par tranche de 120 px de dx/dy. Presse-papiers \
+                    indisponible."
+                .to_string(),
+        },
     }
 }
 
@@ -294,6 +318,10 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
     // (re)tente l'attache. L'essai immediat ne sert qu'a loguer.
     let initial: Option<Arc<CdpClient>> =
         try_initial_cdp(&args.cdp_url, cdp_filter.clone(), args.target).await;
+
+    // Cible X11 (si choisie) : fournit aussi le focus et la geometrie de fenetre,
+    // sans passer par les helpers KWin (leur predicat de session ne s'applique pas).
+    let mut x11_target: Option<Arc<X11Target>> = None;
 
     let (renderer, interaction, dom_inspector, evaluator, window_lister): Pilotage = match args
         .target
@@ -360,6 +388,38 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
                 build_kwin_window_lister(screencap_title.as_deref(), args.screencap_backend),
             )
         }
+        // Serveur X prive explicite : yeux GetImage, mains XTEST, fenetres
+        // QueryTree. Le DOM est la route `ui.widgets` de l'app (via le SDK) ;
+        // pas de JS. Aucun build_kwin_* ici.
+        TargetMode::X11 => {
+            let display = args
+                .display
+                .clone()
+                .context("--target x11 : --display est obligatoire (aucun repli sur $DISPLAY)")?;
+            let target = Arc::new(
+                X11Target::new(X11Config {
+                    display,
+                    window: screencap_title.clone(),
+                    class: args.x11_class.clone(),
+                })
+                .context("--target x11 : display refuse par la garde d'isolation")?,
+            );
+            eprintln!(
+                "deveye-server : cible x11 sur le display {} (serveur prive ; fenetre : {}).",
+                target.display_id(),
+                screencap_title.as_deref().unwrap_or("ecran entier"),
+            );
+            let router: Arc<dyn CommandRouter> =
+                Arc::new(SdkCommandRouter::new(args.sdk_url.clone()));
+            x11_target = Some(target.clone());
+            (
+                target.clone(),
+                target.clone(),
+                Arc::new(RouteDomInspector::new(router, DEFAULT_DOM_ROUTE)),
+                Arc::new(UnsupportedEvaluator),
+                target,
+            )
+        }
     };
 
     // State inspector + logs + commandes logiques via le SDK opt-in cote app
@@ -378,16 +438,15 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
     // Ports d'orchestration (M6), composes sur les ports deja construits :
     // erreurs console par injection JS, attente conditionnelle multi-predicats.
     //
-    // En mode kwin-eis il n'y a pas de WebView : l'evaluateur renverrait
+    // Sur une cible native (kwin-eis, x11) il n'y a pas de WebView : l'evaluateur renverrait
     // PortError::Unsupported a chaque drain. On branche un noop plutot que de
     // propager une fausse erreur (absence de console != erreur du port).
-    let console_errors: Arc<dyn ConsoleErrorSource> = if matches!(args.target, TargetMode::KwinEis)
-    {
-        Arc::new(NoopConsoleErrorSource)
-    } else {
+    let console_errors: Arc<dyn ConsoleErrorSource> = if args.target.has_js() {
         Arc::new(JsConsoleErrorSource {
             evaluator: evaluator.clone(),
         })
+    } else {
+        Arc::new(NoopConsoleErrorSource)
     };
     let wait_condition: Arc<dyn WaitCondition> = Arc::new(CompositeWaitCondition {
         evaluator: evaluator.clone(),
@@ -395,6 +454,23 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
         renderer: renderer.clone(),
         log_source: log_source.clone(),
     });
+
+    // Focus et geometrie : l'adapter X11 les sert lui-meme ; sinon KWin/stubs.
+    let (window_manager, window_geometry): (Arc<dyn WindowManager>, Arc<dyn WindowGeometry>) =
+        match &x11_target {
+            Some(t) => (t.clone(), t.clone()),
+            None => (
+                build_window_manager(screencap_title.as_deref(), args.screencap_backend),
+                build_window_geometry(screencap_title.as_deref(), args.screencap_backend),
+            ),
+        };
+    // Presse-papiers : jamais celui de la session vivante depuis une cible X11
+    // isolee (le stub generique repond Unsupported).
+    let clipboard: Arc<dyn Clipboard> = if x11_target.is_some() {
+        Arc::new(UnsupportedClipboard)
+    } else {
+        build_clipboard()
+    };
 
     Ok(DeveyeMcpServer::new(DeveyePorts {
         renderer,
@@ -406,9 +482,69 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
         window_lister,
         console_errors,
         wait_condition,
-        window_manager: build_window_manager(screencap_title.as_deref(), args.screencap_backend),
-        window_geometry: build_window_geometry(screencap_title.as_deref(), args.screencap_backend),
-        clipboard: build_clipboard(),
+        window_manager,
+        window_geometry,
+        clipboard,
         target_info: build_target_info(args.target),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// La description de la cible X11 annonce les capacites reelles : dom par
+    /// route (true), pas de JS ni de console, state du SDK, fenetres listables.
+    #[test]
+    fn x11_target_info_matches_the_wiring() {
+        let info = build_target_info(TargetMode::X11);
+        assert_eq!(info.target, "x11");
+        assert!(info.dom && info.state && info.list_windows);
+        assert!(!info.eval_js && !info.console_errors);
+        assert!(info.eyes.contains("GetImage") && info.hands.contains("XTEST"));
+        assert!(info.notes.contains("ui.widgets") && info.notes.contains("--display"));
+    }
+
+    /// `has_js` pilote la console : les cibles natives n'ont pas de console JS.
+    #[test]
+    fn native_targets_have_no_js_console() {
+        assert!(!TargetMode::X11.has_js() && !TargetMode::KwinEis.has_js());
+        assert!(TargetMode::Cdp.has_js() && TargetMode::Sdk.has_js() && TargetMode::Auto.has_js());
+    }
+
+    fn x11_args(extra: &[&str]) -> Args {
+        use clap::Parser as _;
+        Args::try_parse_from(
+            ["deveye-server", "--target", "x11"]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        )
+        .expect("arguments valides")
+    }
+
+    /// La garde refuse a la composition (donc au demarrage du serveur), avant tout
+    /// acces reseau ou X : display bas, forme non locale.
+    #[tokio::test]
+    async fn x11_composition_refuses_unsafe_displays() {
+        for bad in [":0", ":1", ":99", "localhost:250", "250"] {
+            let err = build_mcp(&x11_args(&["--display", bad]))
+                .await
+                .map(|_| ())
+                .unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("garde"), "{bad} : {msg}");
+        }
+    }
+
+    /// Un display valide compose sans se connecter (connexion paresseuse).
+    #[tokio::test]
+    async fn x11_composition_is_lazy() {
+        // :258 : valide pour la garde ; aucun serveur n'est requis a la composition.
+        let ok = build_mcp(&x11_args(&["--display", ":258", "--window", "Synth"])).await;
+        // Un autre uid pourrait posseder X258 : la garde refuserait alors, ce qui
+        // reste un refus propre (jamais un panic).
+        if let Err(e) = ok {
+            assert!(format!("{e:#}").contains("garde"), "{e:#}");
+        }
+    }
 }

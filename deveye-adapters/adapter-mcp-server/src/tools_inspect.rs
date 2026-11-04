@@ -255,7 +255,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Liste les fenêtres/onglets de la cible : `[{ id, title, url, kind }]`. En CDP via Target.getTargets ; en kwin-eis via KWin Scripting (`url` vide, `kind` = resourceClass) ; via le pont SDK : liste vide (pas de visibilité inter-fenêtres)."
+        description = "Liste les fenêtres/onglets de la cible : `[{ id, title, url, kind }]`. En CDP via Target.getTargets ; en kwin-eis via KWin Scripting (`url` vide, `kind` = resourceClass) ; en x11 via QueryTree (fenêtres visibles titrées/classées, `id` = identifiant X hexadécimal, `kind` = x11-window) ; via le pont SDK : liste vide (pas de visibilité inter-fenêtres)."
     )]
     pub(crate) async fn list_windows(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
@@ -268,7 +268,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Renvoie la géométrie écran `{ x, y, width, height }` de la fenêtre dont le titre contient `title` (ou la fenêtre `--screencap-window` par défaut) via KWin Scripting. Complète `find_element`/`eval_js` (indisponibles en kwin-eis, rendu natif) : convertit un rect DOM en coordonnées écran absolues pour un clic OS-level (EIS) hors du viewport webview. Nécessite KDE/Wayland ; sinon résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
+        description = "Renvoie la géométrie écran `{ x, y, width, height }` de la fenêtre dont le titre contient `title` (ou la fenêtre `--screencap-window` / `--window` par défaut) via KWin Scripting (kwin-eis) ou TranslateCoordinates (x11). Complète `find_element`/`eval_js` (indisponibles en kwin-eis, rendu natif) : convertit un rect DOM en coordonnées écran absolues pour un clic OS-level (EIS) hors du viewport webview. Nécessite KDE/Wayland ou la cible x11 ; sinon résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
     )]
     pub(crate) async fn window_geometry(
         &self,
@@ -284,7 +284,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Donne le focus OS à une fenêtre (par sous-chaîne de titre, ou la fenêtre --screencap-window par défaut). Crucial en kwin-eis : KWin EIS route les événements vers la fenêtre active ; une notification ou un dialog système peut détourner les clics sans erreur. À appeler avant une séquence d'interaction. Renvoie `{ ok, title }`. Nécessite KDE/Wayland (KWin Scripting) ; sinon résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
+        description = "Donne le focus OS à une fenêtre (par sous-chaîne de titre, ou la fenêtre --screencap-window par défaut). Crucial en kwin-eis : KWin EIS route les événements vers la fenêtre active ; une notification ou un dialog système peut détourner les clics sans erreur. À appeler avant une séquence d'interaction. Renvoie `{ ok, title }`. Nécessite KDE/Wayland (KWin Scripting) ou la cible x11 ; sinon résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
     )]
     pub(crate) async fn focus_window(
         &self,

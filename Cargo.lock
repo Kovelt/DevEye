@@ -873,6 +873,7 @@ dependencies = [
  "adapter-mcp-server",
  "adapter-screencap-kwin",
  "adapter-screencap-xcap",
+ "adapter-x11",
  "anyhow",
  "async-trait",
  "clap",
