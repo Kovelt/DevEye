@@ -3,8 +3,9 @@
 //!
 //! Ce crate centralise les briques d'orchestration testables sans I/O reelle :
 //! sources d'erreurs console JS, condition d'attente multi-predicats,
-//! inspecteur composant DOM + state. Ces types fonctionnent pour toutes les
-//! cibles sans impl par adapter.
+//! inspecteur composant DOM + state, inspecteur « DOM par route » pour les
+//! applications natives. Ces types fonctionnent pour toutes les cibles sans impl
+//! par adapter.
 //!
 //! Issu de `deveye-server::orchestration` (refacto hexagonale lot C) :
 //! les adapters composites n'ont pas leur place dans le binaire orchestrateur.
@@ -19,8 +20,8 @@ use tracing::debug;
 
 use deveye_core::{ConsoleError, DomTree, LogLevel, StateDump, WaitOutcome, WaitPredicate};
 use deveye_ports::{
-    AppInspector, ConsoleErrorSource, JsEvaluator, LogSource, PortError, PortResult, Renderer,
-    WaitCondition,
+    AppInspector, CommandRouter, ConsoleErrorSource, JsEvaluator, LogSource, PortError, PortResult,
+    Renderer, WaitCondition,
 };
 
 // ── ConsoleErrorSource ────────────────────────────────────────────────────────
@@ -511,6 +512,80 @@ impl AppInspector for CompositeInspector {
 
     async fn state_snapshot(&self) -> PortResult<StateDump> {
         self.state.state_snapshot().await
+    }
+}
+
+// ── RouteDomInspector ─────────────────────────────────────────────────────────
+
+/// Route par defaut de [`RouteDomInspector`] : l'application cible la sert avec
+/// la description JSON de ses widgets (`deveye_sdk::expose_route("ui.widgets", ..)`).
+pub const DEFAULT_DOM_ROUTE: &str = "ui.widgets";
+
+/// `AppInspector` dont le « DOM » est la reponse d'une route de commande de
+/// l'application cible.
+///
+/// Pour les applications natives sans WebView ni CDP (egui, imgui, Skia...),
+/// l'arbre d'interface n'existe que dans l'application : elle l'expose via le
+/// SDK opt-in comme une commande (`POST /devtools/command`) et ce type le sert
+/// au port `AppInspector`, donc a l'outil MCP `dom`.
+///
+/// Contrat :
+/// - requete : `router.invoke(route, {})` ;
+/// - reponse : la valeur JSON du handler, **sans interpretation ni
+///   transformation**, enveloppee telle quelle dans [`DomTree`] (le schema des
+///   noeuds appartient a l'application) ;
+/// - cout : rien tant que `dom` n'est pas appele (aucune surveillance en
+///   arriere-plan) ; l'outil `dom` refuse les arbres > ~100 Ko.
+///
+/// `state_snapshot` n'est pas fourni (`Unsupported`) : composer avec un
+/// [`CompositeInspector`] dont la partie `state` vient du SDK.
+pub struct RouteDomInspector {
+    router: Arc<dyn CommandRouter>,
+    route: String,
+}
+
+impl RouteDomInspector {
+    /// Inspecteur sur `route` ([`DEFAULT_DOM_ROUTE`] si `route` est vide).
+    pub fn new(router: Arc<dyn CommandRouter>, route: impl Into<String>) -> Self {
+        let route = route.into();
+        Self {
+            router,
+            route: if route.is_empty() {
+                DEFAULT_DOM_ROUTE.to_string()
+            } else {
+                route
+            },
+        }
+    }
+
+    /// Nom de la route interrogee.
+    pub fn route(&self) -> &str {
+        &self.route
+    }
+}
+
+#[async_trait]
+impl AppInspector for RouteDomInspector {
+    async fn dom_snapshot(&self) -> PortResult<DomTree> {
+        match self.router.invoke(&self.route, serde_json::json!({})).await {
+            Ok(tree) => Ok(DomTree::new(tree)),
+            // Route inconnue / handler en echec : erreur d'inspection explicite
+            // (l'application ne sert pas l'arbre), pas une panne de liaison.
+            Err(PortError::Route { route, message }) => Err(PortError::Inspect(format!(
+                "route `{route}` indisponible : {message} — l'application cible \
+                 expose-t-elle l'arbre d'interface via deveye-sdk ?"
+            ))),
+            // Network (SDK injoignable) et le reste : tels quels.
+            Err(other) => Err(other),
+        }
+    }
+
+    async fn state_snapshot(&self) -> PortResult<StateDump> {
+        Err(PortError::Unsupported(
+            "RouteDomInspector ne fournit que le DOM ; composer avec CompositeInspector \
+             pour le state"
+                .to_string(),
+        ))
     }
 }
 
@@ -1580,5 +1655,140 @@ mod tests {
             snippet.contains("getBoundingClientRect"),
             "visible=true doit verifier le rect, recu: {snippet}"
         );
+    }
+    // ── RouteDomInspector ────────────────────────────────────────────────────
+
+    /// Routeur factice : enregistre les appels et rejoue une reponse fixe.
+    struct FakeRouter {
+        calls: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+        reply: std::sync::Mutex<Option<PortResult<serde_json::Value>>>,
+    }
+
+    impl FakeRouter {
+        fn replying(reply: PortResult<serde_json::Value>) -> Arc<Self> {
+            Arc::new(Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+                reply: std::sync::Mutex::new(Some(reply)),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl CommandRouter for FakeRouter {
+        async fn invoke(
+            &self,
+            route: &str,
+            payload: serde_json::Value,
+        ) -> PortResult<serde_json::Value> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((route.to_string(), payload));
+            self.reply
+                .lock()
+                .unwrap()
+                .take()
+                .expect("une seule reponse")
+        }
+        async fn list(&self) -> PortResult<Vec<deveye_core::CommandDescriptor>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// La reponse du handler est passee telle quelle dans `DomTree`, sur la route
+    /// demandee, avec un payload objet vide.
+    #[tokio::test]
+    async fn route_dom_wraps_the_handler_json_untouched() {
+        let tree = serde_json::json!({
+            "window": { "width": 1240, "height": 900 },
+            "widgets": [{ "id": "vcf/cutoff", "rect": [10, 20, 56, 68] }],
+        });
+        let router = FakeRouter::replying(Ok(tree.clone()));
+        let insp = RouteDomInspector::new(router.clone(), "ui.widgets");
+        let dom = insp.dom_snapshot().await.expect("dom ok");
+        assert_eq!(dom.tree, tree);
+        let calls = router.calls.lock().unwrap();
+        assert_eq!(
+            *calls,
+            vec![("ui.widgets".to_string(), serde_json::json!({}))]
+        );
+    }
+
+    /// Route vide -> route par defaut ; route personnalisee respectee.
+    #[tokio::test]
+    async fn route_dom_default_and_custom_route() {
+        let router = FakeRouter::replying(Ok(serde_json::json!([])));
+        let insp = RouteDomInspector::new(router.clone(), "");
+        assert_eq!(insp.route(), DEFAULT_DOM_ROUTE);
+        insp.dom_snapshot().await.unwrap();
+        assert_eq!(router.calls.lock().unwrap()[0].0, "ui.widgets");
+
+        let router = FakeRouter::replying(Ok(serde_json::Value::Null));
+        let insp = RouteDomInspector::new(router.clone(), "app.tree");
+        assert_eq!(insp.route(), "app.tree");
+        insp.dom_snapshot().await.unwrap();
+        assert_eq!(router.calls.lock().unwrap()[0].0, "app.tree");
+    }
+
+    /// Route inconnue -> `Inspect` explicite (l'app ne sert pas l'arbre) ;
+    /// SDK injoignable -> `Network` inchange (les compositions a repli en
+    /// dependent).
+    #[tokio::test]
+    async fn route_dom_error_mapping() {
+        let unknown = FakeRouter::replying(Err(PortError::Route {
+            route: "ui.widgets".into(),
+            message: "route inconnue".into(),
+        }));
+        let err = RouteDomInspector::new(unknown, "ui.widgets")
+            .dom_snapshot()
+            .await
+            .unwrap_err();
+        match err {
+            PortError::Inspect(m) => {
+                assert!(
+                    m.contains("ui.widgets") && m.contains("route inconnue"),
+                    "{m}"
+                )
+            }
+            other => panic!("attendu Inspect, recu {other:?}"),
+        }
+
+        let down = FakeRouter::replying(Err(PortError::Network("refuse".into())));
+        let err = RouteDomInspector::new(down, "ui.widgets")
+            .dom_snapshot()
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PortError::Network(_)), "{err:?}");
+    }
+
+    /// `state_snapshot` n'est pas servi ; sous `CompositeInspector` le state
+    /// vient de l'autre source.
+    #[tokio::test]
+    async fn route_dom_has_no_state_but_composes() {
+        let router = FakeRouter::replying(Ok(serde_json::json!({ "n": 1 })));
+        let dom: Arc<dyn AppInspector> = Arc::new(RouteDomInspector::new(router, "ui.widgets"));
+        let err = dom.state_snapshot().await.unwrap_err();
+        assert!(matches!(err, PortError::Unsupported(_)));
+
+        struct StateOnly;
+        #[async_trait]
+        impl AppInspector for StateOnly {
+            async fn dom_snapshot(&self) -> PortResult<DomTree> {
+                Ok(DomTree::new(serde_json::Value::Null))
+            }
+            async fn state_snapshot(&self) -> PortResult<StateDump> {
+                Ok(StateDump::new(
+                    [("k".to_string(), serde_json::json!(1))]
+                        .into_iter()
+                        .collect(),
+                ))
+            }
+        }
+        let both = CompositeInspector {
+            dom,
+            state: Arc::new(StateOnly),
+        };
+        assert_eq!(both.dom_snapshot().await.unwrap().tree["n"], 1);
+        assert_eq!(both.state_snapshot().await.unwrap().entries["k"], 1);
     }
 }
