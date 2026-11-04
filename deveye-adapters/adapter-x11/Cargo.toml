@@ -1,0 +1,33 @@
+[package]
+name = "adapter-x11"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.88"
+license = "LicenseRef-Proprietary"
+authors = ["NuvoraCode <contact@nuvoracode.fr>"]
+description = "Adapter DevEye : cible X11 isolee (yeux GetImage, mains XTEST, fenetres QueryTree) pour tout serveur X prive (Xvfb) — aucune dependance a xcap ni a un gestionnaire de fenetres."
+publish = false  # crate interne proprietaire, jamais publiee sur crates.io
+
+# Metadonnees alignees sur les autres crates du workspace — cf. deveye-core/Cargo.toml.
+
+[dependencies]
+deveye-core = { path = "../../deveye-core" }
+deveye-ports = { path = "../../deveye-ports" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time"] }
+# Client X11 en Rust pur (aucune FFI, aucun unsafe) : connexion, QueryTree,
+# GetImage, GetKeyboardMapping et l'extension XTEST (injection d'evenements).
+x11rb = { version = "0.13", features = ["xtest"] }
+# Encodage PNG des captures (version alignee sur le reste du workspace).
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Table keysym <-> Unicode (formes historiques comme EuroSign) ; deja dans le
+# Cargo.lock via xkbcommon, Rust pur.
+xkeysym = "0.2"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Client X11 de test : fenetre sonde qui compte les evenements recus.
+x11rb = { version = "0.13", features = ["xtest"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
