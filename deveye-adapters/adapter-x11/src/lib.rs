@@ -47,9 +47,13 @@
 mod conn;
 mod error;
 pub mod guard;
+pub mod input;
+pub mod keys;
 pub mod windows;
 
 pub use crate::conn::PixelFormat;
 pub use crate::error::X11Error;
 pub use crate::guard::{check_display, parse_display, DisplayId, GuardError, MIN_DISPLAY_NUMBER};
+pub use crate::input::{execute, lower, to_steps, Action, Emitter, Step};
+pub use crate::keys::{KeyAction, Keymap};
 pub use crate::windows::{pick_window, WinNode};
