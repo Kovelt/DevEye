@@ -42,6 +42,7 @@ Cinq cercles, avec la règle d'or : **le sens des dépendances pointe toujours v
 │   - Logs tracing-subscriber                                       │
 │   - Dioxus signals (via SDK opt-in)                               │
 │   - Interaction KWin EIS (injection OS-level Wayland natif)       │
+│   - X11 (serveur X privé : GetImage + XTEST + QueryTree, x11rb)   │
 │   - Clipboard Wayland (wl-copy / wl-paste OS-level)               │
 │   - Composite (WaitCondition polling, ConsoleErrorSource JS,      │
 │     Inspector composite — orchestration sans I/O propre)          │
@@ -107,7 +108,8 @@ DevEye/
 │   ├── adapter-commands-http/             # CommandRouter via POST /devtools/command + GET /devtools/commands
 │   ├── adapter-interaction-kwin-eis/      # InteractionSink OS-level Wayland natif (KWin EIS)
 │   ├── adapter-clipboard-wayland/         # Clipboard OS-level via wl-copy / wl-paste (Wayland)
-│   ├── adapter-composite/                 # WaitCondition + ConsoleErrorSource + AppInspector composites (sans I/O propre)
+│   ├── adapter-x11/                       # Renderer + InteractionSink + WindowLister + WindowGeometry + WindowManager sur un serveur X privé (x11rb pur Rust, XTEST)
+│   ├── adapter-composite/                 # WaitCondition + ConsoleErrorSource + AppInspector composites (sans I/O propre) ; RouteDomInspector (DOM par route de commande)
 │   └── adapter-mcp-server/               # consomme les 12 ports, expose au Model Context Protocol
 │
 ├── deveye-sdk/                 ← micro-lib opt-in à intégrer dans l'app cible (cfg debug)
@@ -179,7 +181,7 @@ Variantes de `InteractionCommand` (`deveye-core/src/command.rs`) :
 
 `Resize { width, height }` (`Emulation.setDeviceMetricsOverride`, émulation responsive du moteur de rendu) reste **hors périmètre** — pas encore une variante du domaine (cf. « Hors périmètre actuel »).
 
-Adapters : `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`, toutes variantes), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK ; `Navigate`/`HandleDialog`/`UploadFile` y renvoient `PortError::Unsupported`, sémantique applicative ou WebView impossible OS-level).
+Adapters : `adapter-x11` (XTEST `FakeInput` sur un serveur X privé — gestes interpolés, clavier du serveur, remappage temporaire des caractères absents ; `Navigate`/`HandleDialog`/`UploadFile` → `Unsupported`), `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`, toutes variantes), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK ; `Navigate`/`HandleDialog`/`UploadFile` y renvoient `PortError::Unsupported`, sémantique applicative ou WebView impossible OS-level).
 
 ### 4. `JsEvaluator`
 
@@ -257,7 +259,7 @@ pub trait WindowLister: Send + Sync {
 }
 ```
 
-Énumère les fenêtres/onglets de la cible. Implémenté par `adapter-cdp-webview` (`Target.getTargets`, filtré sur `type=page`) et par `adapter-screencap-kwin` (`KwinWindowLister`, `workspace.windowList()` via KWin Scripting — actif dès que le screencap passe par KWin, y compris en cible `kwin-eis` : donne enfin de la visibilité sur les fenêtres qui peuvent dévier silencieusement les clics EIS). Le pont natif SDK n'a pas de notion d'autres fenêtres et renvoie une liste vide — pas une erreur. Exposé via l'outil MCP `list_windows`.
+Énumère les fenêtres/onglets de la cible. Implémenté par `adapter-cdp-webview` (`Target.getTargets`, filtré sur `type=page`) et par `adapter-screencap-kwin` (`KwinWindowLister`, `workspace.windowList()` via KWin Scripting — actif dès que le screencap passe par KWin, y compris en cible `kwin-eis` : donne enfin de la visibilité sur les fenêtres qui peuvent dévier silencieusement les clics EIS). Le pont natif SDK n'a pas de notion d'autres fenêtres et renvoie une liste vide — pas une erreur. Pour la cible `x11`, `adapter-x11` l'implémente par `QueryTree` récursif depuis la racine (fenêtres `Viewable` titrées ou classées ; titres `_NET_WM_NAME` → `WM_NAME` → `WM_CLASS`, sans gestionnaire de fenêtres). Exposé via l'outil MCP `list_windows`.
 
 ### 10. `WindowManager`
 
@@ -268,7 +270,7 @@ pub trait WindowManager: Send + Sync {
 }
 ```
 
-Donne le focus OS à une fenêtre de l'app cible (le `caption` contenant `title_substring`, insensible à la casse ; `None` cible la fenêtre par défaut de l'adapter, typiquement `--screencap-window`). Motivation propre à `kwin-eis` : KWin EIS route les événements d'entrée vers la fenêtre **active** — une notification Plasma ou un dialog système peut voler le focus et dévier silencieusement tous les clics/saisies vers la mauvaise fenêtre. Implémenté par `adapter-screencap-kwin` (`KwinWindowManager`, via un script KWin). Indisponible hors KDE/Wayland ou en cible CDP → `PortError::Unsupported`. Exposé via l'outil MCP `focus_window`.
+Donne le focus OS à une fenêtre de l'app cible (le `caption` contenant `title_substring`, insensible à la casse ; `None` cible la fenêtre par défaut de l'adapter, typiquement `--screencap-window`). Motivation propre à `kwin-eis` : KWin EIS route les événements d'entrée vers la fenêtre **active** — une notification Plasma ou un dialog système peut voler le focus et dévier silencieusement tous les clics/saisies vers la mauvaise fenêtre. Implémenté par `adapter-screencap-kwin` (`KwinWindowManager`, via un script KWin) et, en cible `x11`, par `adapter-x11` (`SetInputFocus` + passage au premier plan : sans gestionnaire de fenêtres c'est le seul moyen de fixer le focus clavier). Indisponible hors KDE/Wayland ou en cible CDP → `PortError::Unsupported`. Exposé via l'outil MCP `focus_window`.
 
 ### 11. `Clipboard`
 
@@ -291,7 +293,7 @@ pub trait WindowGeometry: Send + Sync {
 }
 ```
 
-Lit la géométrie écran (position + taille) d'une fenêtre de l'app cible. Motivation propre à `kwin-eis` : le rendu natif (Uno/Skia) n'a pas de viewport CDP — un agent qui doit cliquer à des coordonnées écran (plutôt que logiques webview) a besoin de l'origine réelle de la fenêtre en plus de sa taille. Complète `WindowManager` (focus) et `Renderer` (capture pixels). Implémenté par `adapter-screencap-kwin` (`KwinWindowGeometry`, via un script KWin). Indisponible hors KDE/Wayland ou en cible CDP/SDK → `PortError::Unsupported`. Exposé via l'outil MCP `window_geometry`.
+Lit la géométrie écran (position + taille) d'une fenêtre de l'app cible. Motivation propre à `kwin-eis` : le rendu natif (Uno/Skia) n'a pas de viewport CDP — un agent qui doit cliquer à des coordonnées écran (plutôt que logiques webview) a besoin de l'origine réelle de la fenêtre en plus de sa taille. Complète `WindowManager` (focus) et `Renderer` (capture pixels). Implémenté par `adapter-screencap-kwin` (`KwinWindowGeometry`, via un script KWin) et, en cible `x11`, par `adapter-x11` (`TranslateCoordinates` relu à chaque appel — jamais d'origine figée). Indisponible hors KDE/Wayland ou en cible CDP/SDK → `PortError::Unsupported`. Exposé via l'outil MCP `window_geometry`.
 
 ---
 
@@ -333,11 +335,12 @@ L'attachement direct à un *target page* s'est révélé fragile : à chaque rec
 
 Conséquence : un hot-reload ne nécessite plus de reconnexion manuelle du MCP. Le binaire `deveye-server` reste vivant et bascule tout seul sur la nouvelle page dès qu'elle apparaît.
 
-**Reconnexion paresseuse (`LazyCdp`, `--target`)** : `deveye-server` n'exige plus le navigateur au démarrage. La façade `LazyCdp` (re)connecte **à la demande** : chaque appel d'outil dont le WebSocket est mort retente l'attache via `/json/version`. Un navigateur absent au boot ou fermé en cours de session n'est donc pas fatal — l'outil renvoie une erreur actionnable tant que le CDP manque, puis repart seul. Le drapeau `--target {auto|cdp|sdk|kwin-eis}` choisit la source des yeux/mains :
+**Reconnexion paresseuse (`LazyCdp`, `--target`)** : `deveye-server` n'exige plus le navigateur au démarrage. La façade `LazyCdp` (re)connecte **à la demande** : chaque appel d'outil dont le WebSocket est mort retente l'attache via `/json/version`. Un navigateur absent au boot ou fermé en cours de session n'est donc pas fatal — l'outil renvoie une erreur actionnable tant que le CDP manque, puis repart seul. Le drapeau `--target {auto|cdp|sdk|kwin-eis|x11}` choisit la source des yeux/mains :
 
 - `auto` — tente CDP puis bascule **appel par appel** sur le pont natif du SDK (Linux/WebKitGTK).
 - `cdp` / `sdk` — forcent l'un ou l'autre.
 - `kwin-eis` — injection d'entrée OS-level via `org.kde.KWin.EIS.RemoteDesktop` (Wayland natif KDE, sans XWayland ni shim dans l'app). C'est la voie « mains » pour les cibles sans WebView ni SDK, notamment atlas Uno desktop (rendu Skia). Les yeux viennent du screencap (`adapter-screencap-kwin` en KDE/Wayland, xcap sinon) ; DOM et JS sont indisponibles (`PortError::Unsupported`).
+- `x11` — serveur X **privé et explicite** (`--display`, sans repli sur `$DISPLAY`) piloté par `adapter-x11` : yeux `GetImage` de la racine rognée à la fenêtre, mains XTEST, fenêtres `QueryTree`, focus `SetInputFocus`. Pas de JS ; le « DOM » est la réponse de la route de commande `ui.widgets` de l'app (`RouteDomInspector` dans `adapter-composite`, au-dessus du `CommandRouter` du SDK, sans changement de `deveye-core`/`deveye-ports`). Garde d'isolation non contournable (display < 100, `$DISPLAY`, uid du socket, extension `XWAYLAND`). Seule une coupure de transport donne `PortError::Network` — c'est la seule erreur sur laquelle les façades de repli basculent —, et la connexion est paresseuse (reconnexion après redémarrage du serveur X). Le composé `x11` n'appelle aucun `build_kwin_*` et ne touche jamais le presse-papiers de la session.
 
 Détails opérationnels : [`usage.md`](./usage.md).
 
@@ -357,7 +360,7 @@ Pour que DevEye reste un outil générique réutilisable par n'importe quelle ap
 
 ## Sécurité
 
-Tout DevEye est **dev-only**. Cinq garde-fous :
+Tout DevEye est **dev-only**. Cinq garde-fous côté SDK (la cible `x11` ajoute une garde d'isolation propre, cf. [`usage.md`](./usage.md)) :
 
 1. **SDK strictement `cfg(debug_assertions)`** — le binaire release de l'app cible n'embarque aucune ligne DevEye. Filet de sécurité en plus de la garde côté appelant : `deveye_sdk::init` est un **no-op en build release**, donc le serveur de debug ne peut pas fuiter en production même si l'intégrateur oublie son `#[cfg(debug_assertions)]`.
 2. **Bind localhost uniquement** — le mini serveur SDK écoute sur `127.0.0.1`, jamais `0.0.0.0`.

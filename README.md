@@ -2,7 +2,7 @@
 
 **Outillage dev-only pour observer et piloter une app graphique vivante depuis un agent IA.**
 DevEye expose un serveur MCP (Model Context Protocol) que Claude Code — ou tout autre client MCP — utilise pour capturer des screenshots, envoyer des clics/saisies, inspecter le DOM, lire les logs et attendre des conditions, sans intervention humaine.
-Conçu pour les apps Dioxus desktop, il se branche aussi sur n'importe quelle cible WebView (Chrome DevTools Protocol), app native Wayland, ou app .NET/Uno.
+Conçu pour les apps Dioxus desktop, il se branche aussi sur n'importe quelle cible WebView (Chrome DevTools Protocol), app native Wayland, app X11 native dans un serveur isolé (egui, GTK, Qt…), ou app .NET/Uno.
 
 > Outil interne, **dev-only**. N'a pas vocation à être déployé en production.
 
@@ -24,7 +24,7 @@ Conçu pour les apps Dioxus desktop, il se branche aussi sur n'importe quelle ci
 
 Détail complet des paramètres et valeurs de retour : [docs/usage.md](docs/usage.md).
 
-### 4 familles de cibles (`--target`)
+### 5 familles de cibles (`--target`)
 
 | Mode | Description |
 |---|---|
@@ -32,6 +32,7 @@ Détail complet des paramètres et valeurs de retour : [docs/usage.md](docs/usag
 | `cdp` | Chrome DevTools Protocol — webview Chromium (Dioxus/wry sous Windows, Brave/Chrome standalone) |
 | `sdk` | Pont natif via `deveye-sdk` embarqué dans l'app (Linux/WebKitGTK, Wayland sans CDP) |
 | `kwin-eis` | Injection OS-level via KWin EIS (`org.kde.KWin.EIS.RemoteDesktop`) — cibles sans WebView ni SDK (ex. Uno/Skia) ; yeux par screencap |
+| `x11` | Serveur X **privé et explicite** (`--display :250`, typiquement Xvfb) : yeux `GetImage`, mains XTEST, fenêtres `QueryTree` — toute app X11 native (egui, GTK, Qt…), sans WebView ni gestionnaire de fenêtres. Refuse structurellement la session graphique vivante |
 
 ### Architecture hexagonale
 
@@ -48,6 +49,7 @@ DevEye est strictement gardé contre toute fuite en production :
 - **Garde Host anti DNS-rebinding** — le middleware `guard_local_host` rejette en `403` toute requête dont le header `Host` n'est pas `localhost`/`127.0.0.1`/`[::1]`, avant toute route.
 - **CORS deny-all** — aucune politique CORS permissive.
 - **`#[forbid(unsafe_code)]`** — posé sur `deveye-sdk` et `adapter-mcp-server`.
+- **Cible `x11` isolée par construction** — `--display` est obligatoire (aucun repli sur `$DISPLAY`) ; l'adapter refuse un display non local, un numéro < 100 (donc pas le `Xvfb :99` habituel des CI : prendre `:100` ou plus), le display de la session courante, un socket appartenant à un autre uid et tout serveur annonçant l'extension `XWAYLAND`. Il n'existe aucune option pour lever ces refus.
 - **Canal d'éval borné (backpressure)** — la file des requêtes d'évaluation JS est bornée (capacité 32) : si la pompe de l'app ne draine plus (app figée), `POST /devtools/eval` répond `503` « file pleine » au lieu de laisser la mémoire enfler. Le buffer de logs est, lui, plafonné à 1 024 événements (drop-oldest).
 
 Contrat complet du wire protocol HTTP SDK : [docs/wire-protocol.md](docs/wire-protocol.md).
@@ -58,13 +60,14 @@ Contrat complet du wire protocol HTTP SDK : [docs/wire-protocol.md](docs/wire-pr
 
 ### Prérequis
 
-- Toolchain Rust **stable** (`rustup update stable`) — MSRV : 1.81
+- Toolchain Rust **stable** (`rustup update stable`) — MSRV : 1.88
 - Bibliothèques système (les mêmes que le `before_script` CI) :
   - Fedora : `sudo dnf install libxcb-devel libXrandr-devel dbus-devel libxkbcommon-devel mesa-libgbm-devel`
   - Debian/Ubuntu : `sudo apt install libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev libgbm-dev`
 
   (xcap → libxcb/libXrandr + libgbm ; zbus → libdbus ; injection EIS → libxkbcommon)
 - Pour les cibles KWin : session KDE Plasma Wayland
+- Pour la cible `x11` : un serveur X privé (`Xvfb`, paquet `xorg-x11-server-Xvfb` / `xvfb`) — aucune bibliothèque système en plus (client X11 en Rust pur)
 - Un client MCP (Claude Code recommandé)
 
 ### Build
@@ -95,6 +98,16 @@ Le binaire atterrit dans `target/release/deveye-server`.
 ./target/release/deveye-server \
   --target kwin-eis \
   --screencap-window atlas \
+  --serve-mcp
+
+# Mode x11 (app X11 native dans un Xvfb privé — display >= 100, jamais la session vivante)
+Xvfb :250 -nolisten tcp -screen 0 1400x1000x24 &
+DISPLAY=:250 ./mon-app &          # l'app tourne SUR le serveur privé
+./target/release/deveye-server \
+  --target x11 \
+  --display :250 \
+  --window "Mon App" \
+  --sdk-url http://127.0.0.1:31400 \
   --serve-mcp
 
 # CDP sur un navigateur externe (tête WASM sur localhost:5000)
@@ -157,14 +170,14 @@ Client MCP (Claude Code)
     ┌────────┼────────────────────┐
     │        │                    │
     ▼        ▼                    ▼
-adapter-   adapter-           adapter-
-cdp-       screencap-kwin /   interaction-
-webview    xcap               kwin-eis
-    │                             │
-    ▼                             ▼
-App WebView                App native
-(Dioxus/wry,              (Uno/Skia, etc.)
- Chromium CDP)
+adapter-   adapter-           adapter-           adapter-
+cdp-       screencap-kwin /   interaction-       x11
+webview    xcap               kwin-eis           (GetImage + XTEST
+    │                             │               + QueryTree)
+    ▼                             ▼                    │
+App WebView                App native                  ▼
+(Dioxus/wry,              (Uno/Skia, etc.)      App X11 native dans
+ Chromium CDP)                                  un serveur X privé
          │ (opt-in, cfg debug)
          ▼
     deveye-sdk
@@ -182,7 +195,7 @@ Architecture détaillée (hexagonale, ports, robustesse CDP, reconnexion paresse
 ```
 DevEye/
 ├── deveye-core/                  # Domaine pur — types métier (Snapshot, InteractionCommand, LogEvent…)
-├── deveye-ports/                 # Interfaces — 9 traits Rust sans dépendance technique
+├── deveye-ports/                 # Interfaces — 12 traits Rust sans dépendance technique
 ├── deveye-sdk/                   # Micro-lib opt-in à embarquer dans l'app cible (cfg debug_assertions)
 ├── deveye-sdk-client/            # Client HTTP du SDK (partagé entre les adapters)
 ├── deveye-server/                # Binaire orchestrateur — compose les adapters selon la CLI
@@ -195,8 +208,9 @@ DevEye/
 │   ├── adapter-commands-http/    # CommandRouter via POST /devtools/command + GET /devtools/commands
 │   ├── adapter-interaction-kwin-eis/ # InteractionSink OS-level Wayland natif (KWin EIS)
 │   ├── adapter-clipboard-wayland/ # Clipboard OS-level via wl-copy / wl-paste (Wayland)
+│   ├── adapter-x11/              # Renderer + InteractionSink + WindowLister + WindowGeometry + WindowManager sur un serveur X privé (x11rb, XTEST)
 │   ├── adapter-mcp-server/       # Consomme les 12 ports, expose les 41 outils MCP via rmcp/stdio
-│   └── adapter-composite/        # Adapters composites génériques (ConsoleErrorSource JS, WaitCondition, Inspector)
+│   └── adapter-composite/        # Adapters composites génériques (ConsoleErrorSource JS, WaitCondition, Inspector, DOM par route)
 └── docs/
     ├── architecture.md           # Ports, adapters, robustesse CDP, sécurité
     ├── usage.md                  # Guide d'usage pratique, tous les outils MCP, troubleshooting
@@ -219,6 +233,12 @@ cargo test --workspace
 
 Les tests live KWin/EIS (session Wayland requise) sont marqués `#[ignore]` et exclus du `cargo test` standard.
 
+Les tests d'intégration de la cible X11 démarrent **leur propre Xvfb privé** (display libre entre `:251` et `:259`, sans écoute TCP, arrêté à la fin) ; ils sont aussi `#[ignore]` :
+
+```bash
+cargo test -p adapter-x11 -- --ignored --test-threads=1
+```
+
 ---
 
 ## Statut / contexte
@@ -233,6 +253,6 @@ Audit post-M7 (108 constats priorisés, dont le gate MCP T1/M1 bloquant) : [docs
 
 ## Docs
 
-- [docs/usage.md](docs/usage.md) — outils MCP détaillés, configuration client MCP, modes Linux/kwin-eis/WASM, troubleshooting
-- [docs/architecture.md](docs/architecture.md) — architecture hexagonale, 9 ports, robustesse CDP, sécurité
+- [docs/usage.md](docs/usage.md) — outils MCP détaillés, configuration client MCP, modes Linux/kwin-eis/x11/WASM, troubleshooting
+- [docs/architecture.md](docs/architecture.md) — architecture hexagonale, 12 ports, robustesse CDP, sécurité
 - [docs/wire-protocol.md](docs/wire-protocol.md) — contrat HTTP du SDK (5 endpoints, formes JSON, garde Host, checklist implémentation tierce)

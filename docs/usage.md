@@ -45,7 +45,7 @@ Alternative en dev itératif (recompile à la volée, plus lent au démarrage) :
 
 **Notes** :
 
-- `--target auto` (défaut) tente CDP puis bascule **appel par appel** sur le pont natif si le CDP est injoignable ; `--target cdp` / `--target sdk` forcent l'un ou l'autre. Sur Linux desktop WebKitGTK, mettre `sdk` (ou `auto`). Pour une cible sans WebView ni SDK (Uno/Skia), utiliser `--target kwin-eis` (injection KWin EIS — Wayland natif KDE).
+- `--target auto` (défaut) tente CDP puis bascule **appel par appel** sur le pont natif si le CDP est injoignable ; `--target cdp` / `--target sdk` forcent l'un ou l'autre. Sur Linux desktop WebKitGTK, mettre `sdk` (ou `auto`). Pour une cible sans WebView ni SDK (Uno/Skia), utiliser `--target kwin-eis` (injection KWin EIS — Wayland natif KDE). Pour une app X11 native (egui, GTK, Qt…) dans un serveur X privé, utiliser `--target x11 --display :N` (voir la section dédiée).
 - **Chemin absolu obligatoire sous Windows**, double backslashes inclus. Claude Code n'expanse **pas** `${CLAUDE_PROJECT_DIR}` ni `${workspaceFolder}` dans le champ `command` d'un `.mcp.json` — la première est une variable réservée aux *hooks*, la seconde est une variable VSCode. Si tu y mets `${CLAUDE_PROJECT_DIR}`, `claude mcp list` répond `Missing environment variables: CLAUDE_PROJECT_DIR` et `deveye` n'apparaît pas dans `/mcp`.
 - Pour pointer sur `cargo run` (pas besoin de rebuild manuel après chaque modif DevEye) :
   ```json
@@ -134,7 +134,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 - Pour les UI qui dépendent d'un hover (sidebar rétractable, menus contextuels), envoyer `hover(x, y)` d'abord, puis `click_text` / `click_selector` pour cibler l'élément révélé.
 - Préférer `click_text` / `click_selector` aux coordonnées brutes : elles ne cassent pas quand le layout bouge (responsive, animations, refactor CSS) et déclenchent un vrai clic CDP (`mousedown`/`mouseup`/`pointer`), au même titre que `click(x, y)`.
 - `eval_js` est le couteau-suisse pour tout cas non couvert : lire un `getBoundingClientRect`, sonder un état frontend, déclencher du JS interne au framework, ou injecter des événements clavier (`new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })`).
-- **Touche clavier** : `press_key({ key })` pour une touche unique (`Enter`, `Tab`, `Escape`, `ArrowDown`…), `key_combo({ modifiers, key })` pour une combinaison (`Ctrl+S`, `Ctrl+Shift+P`). Les deux marchent en kwin-eis (events OS-level), là où `eval_js` est indisponible. Nuance de nommage : noms W3C en CDP (`Enter`, `ArrowDown`), noms XKB en kwin-eis (`Return`, `Down`) ; les noms communs (`Tab`, `Escape`, `F5`) passent partout.
+- **Touche clavier** : `press_key({ key })` pour une touche unique (`Enter`, `Tab`, `Escape`, `ArrowDown`…), `key_combo({ modifiers, key })` pour une combinaison (`Ctrl+S`, `Ctrl+Shift+P`). Les deux marchent en kwin-eis et en x11 (events OS-level), là où `eval_js` est indisponible. Nuance de nommage : noms W3C en CDP (`Enter`, `ArrowDown`), noms XKB en kwin-eis (`Return`, `Down`), les deux acceptés en x11 ; les noms communs (`Tab`, `Escape`, `F5`) passent partout.
 - **Navigation** : `navigate({ route })` (routeur du SDK opt-in, interface découvrable) ; ou `invoke_command` si l'app expose une route logique métier (ex. `set-page`). Indisponible en kwin-eis (pas de routeur applicatif OS-level).
 - **Découverte de cible** : appeler `target_info` en début de session dit quelles capacités répondront (ex. `eval_js`/`dom` = false en kwin-eis) — évite de tester un outil pour découvrir qu'il renvoie `Unsupported`.
 - **Disparition d'un élément** : `wait_for_selector({ selector, negate: true })` attend qu'un spinner/toast/modale disparaisse (pas de sleep arbitraire).
@@ -199,6 +199,111 @@ cargo run -p deveye-server -- --serve-mcp --target kwin-eis
   }
 }
 ```
+
+---
+
+## Linux — piloter une app X11 native dans un serveur isolé (x11)
+
+Pour une app **graphique native sans WebView** (egui, GTK, Qt, plugin audio avec GUI…) que l'on peut lancer sur un serveur X dédié : `--target x11` parle à un **serveur X explicite** (typiquement `Xvfb`) avec ses propres yeux (`GetImage`), ses mains (extension **XTEST**, de vrais événements souris/clavier) et sa liste de fenêtres (`QueryTree`). Aucun gestionnaire de fenêtres, aucun `xcap`, aucune session Wayland requis, et **la session graphique de l'utilisateur n'est jamais touchée**.
+
+```bash
+# 1. Un serveur X PRIVE (numéro >= 100 — pas le :99 habituel des CI —, jamais d'écoute TCP)
+Xvfb :250 -nolisten tcp -screen 0 1400x1000x24 &
+
+# 2. L'app cible tourne SUR ce serveur (rendu logiciel si pas de GPU virtuel)
+DISPLAY=:250 LIBGL_ALWAYS_SOFTWARE=1 ./mon-app &
+
+# 3. Le serveur MCP, avec un environnement épuré (rien de la session vivante)
+env -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE -u DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
+  ./target/release/deveye-server --serve-mcp --target x11 \
+  --display :250 --window "Mon App" --sdk-url http://127.0.0.1:31400
+```
+
+### Options
+
+| Option | Rôle |
+|---|---|
+| `--display :N` | **Obligatoire**, sans défaut ni repli sur `$DISPLAY`. Seul un display local `:N` / `:N.S` est accepté, avec `N >= 100` (voir la garde). Refusé avec une autre cible |
+| `--window <sous-chaîne>` (alias de `--screencap-window`) | Fenêtre pilotée : sous-chaîne, insensible à la casse, de `_NET_WM_NAME`, puis `WM_NAME`, puis `WM_CLASS`. Sans elle : tout l'écran du serveur, origine `(0, 0)` |
+| `--x11-class <sous-chaîne>` | (refusé avec une autre cible que `x11`) Contrainte supplémentaire sur `WM_CLASS` (départage deux fenêtres de même titre) |
+| `--sdk-url` | SDK de l'app (state, logs, commandes, et DOM — voir plus bas). Défaut `http://127.0.0.1:31337` |
+
+`--screencap-backend`, `--cdp-*` n'ont aucun effet sur cette cible.
+
+### Garde d'isolation (non contournable)
+
+XTEST injecte de **vrais** événements : pointé sur la session de l'utilisateur, il déplacerait sa souris et taperait dans ses fenêtres. Le serveur refuse donc de démarrer (ou, pour les deux derniers points, à la première connexion) si :
+
+1. le display n'est pas local (`host:N`, chemin, vide) ;
+2. son numéro est **< 100** (les sessions réelles sont sur `:0`/`:1` ; `Xvfb :99` est donc refusé, prendre `:100` et plus) ;
+3. c'est le display de la session courante (`$DISPLAY`) ;
+4. le socket `/tmp/.X11-unix/X<n>` appartient à un autre uid ;
+5. le serveur annonce l'extension `XWAYLAND` (XWayland d'un compositeur Wayland = session vivante).
+
+Il n'y a **pas** d'option pour lever ces refus. Le presse-papiers (`clipboard_get`/`clipboard_set`) est volontairement indisponible sur cette cible.
+
+### Ce que chaque outil fait
+
+- **Yeux** — `screenshot` capture la **racine** rognée au rectangle de la fenêtre (pas le drawable de la fenêtre, qui peut rendre du noir avec un enfant GL), au format PNG ; profondeur 24 ou 32 bits uniquement. L'image a toujours la **taille de la fenêtre** : si celle-ci déborde de l'écran, la partie invisible est noire, si bien que le pixel `(x, y)` de l'image est le point `(x, y)` des gestes. Une fenêtre entièrement hors écran est une erreur.
+- **Mains** — `click`, `double_click`, `right_click`, `hover`, `drag_drop`, `scroll`, `type_text`, `press_key`, `key_combo`. Les positions sont **relatives à la fenêtre** ; l'origine de la fenêtre est relue à chaque appel (si elle bouge entre deux gestes, le clic suit).
+  - Timing adapté aux toolkits immédiats (egui) : pointeur placé ~30 ms avant l'appui ; `drag_drop` interpole 16 déplacements espacés de ~16 ms (un saut unique n'enclencherait aucun glisser) ; `scroll` envoie un cran de molette (boutons 4/5/6/7) par tranche de 120 px de `dx`/`dy`, plafonné à 100 crans ; `dy > 0` = vers le bas.
+  - Clavier = celui **du serveur X** (`GetKeyboardMapping`), pas une table `us` : on tape ce que son layout produirait (Shift et AltGr gérés). Un caractère absent du layout est injecté par **remappage temporaire d'un keycode libre**, restauré ensuite. Noms de touches W3C (`Enter`, `Escape`, `ArrowUp`, `KeyA`…) et XKB (`Return`, `Up`…) acceptés ; modificateurs `ctrl`, `shift`, `alt`, `meta`/`super`. `type_text` est limité à 4 096 caractères.
+  - Tout est résolu **avant** d'émettre : une touche ou un modificateur inconnu n'émet rien ; sur erreur en cours de geste, tout ce qui était enfoncé (touches, boutons) est relâché en ordre inverse.
+  - `navigate`, `handle_dialog`, `upload_file` : `Unsupported` (pas de routeur applicatif ni de dialogue natif).
+- **Fenêtres** — `list_windows` (fenêtres visibles titrées ou classées, `id` = identifiant X en hexadécimal, `kind` = `x11-window`), `window_geometry` (rect écran absolu), `focus_window` (`SetInputFocus` + premier plan : sans gestionnaire de fenêtres le focus suit le pointeur, donc l'appeler avant de taper — `type_text`/`press_key` le font déjà pour la fenêtre configurée). Le titre peut arriver tard (baseview…) : la résolution réessaie jusqu'à 2 s.
+- **DOM** — pas de HTML : `dom` renvoie ce que l'app répond à la route de commande **`ui.widgets`** du SDK (voir ci-dessous). Sans cette route : erreur d'inspection explicite.
+- **State / logs / commandes** — comme pour toute cible, via `--sdk-url`.
+- **JS** — indisponible : `eval_js`, `find_element`, `click_selector`, `click_text`, `wait_for_selector`, `wait_for_text` renvoient `Unsupported`. Pour attendre : `wait_condition` avec `state-key`, `screenshot-stable` ou `log-message`. Le prédicat `state-key` compare une clé de **premier niveau** de l'état à une valeur **exacte** : publier les grandeurs à attendre au premier niveau (ou attendre une image stable).
+- **Presse-papiers** — `clipboard_get` / `clipboard_set` répondent `Unsupported` sur cette cible (le seul presse-papiers disponible serait celui de la session vivante) : pour saisir du texte, utiliser `type_text`.
+
+### Exposer l'arbre de widgets : la route `ui.widgets`
+
+DevEye ne sait pas lire l'arbre d'interface d'une app native (egui peint à la main) : c'est l'app qui le publie. Avec `deveye-sdk` :
+
+```rust
+deveye_sdk::expose_route("ui.widgets", "Arbre des widgets (rects en coordonnées fenêtre)", |_payload| {
+    serde_json::json!({
+        "window": { "width": 1240, "height": 900 },
+        "widgets": [
+            { "id": "vcf/cutoff", "kind": "knob", "label": "Cutoff", "rect": [10, 20, 56, 68] }
+        ]
+    })
+});
+```
+
+Contrat de `RouteDomInspector` (crate `adapter-composite`) : à chaque appel de l'outil `dom`, il fait `POST /devtools/command` avec `{ "route": "ui.widgets", "payload": {} }` et renvoie la valeur JSON du handler **telle quelle** — le schéma des nœuds appartient à l'app. Conseils : rects en **coordonnées fenêtre** (le même repère que les positions de `click`, qui ajoute l'origine de la fenêtre), arbre compact (l'outil `dom` refuse au-delà de ~100 Ko). L'agent lit les rects dans `dom`, puis `click` au centre. Route absente → `PortError::Inspect` (« route `ui.widgets` indisponible… »), SDK injoignable → erreur réseau.
+
+### `.mcp.json`
+
+```json
+{
+  "mcpServers": {
+    "deveye-x11": {
+      "type": "stdio",
+      "command": "/chemin/vers/DevEye/target/release/deveye-server",
+      "args": [
+        "--target", "x11",
+        "--display", ":250",
+        "--window", "Mon App",
+        "--sdk-url", "http://127.0.0.1:31400",
+        "--serve-mcp"
+      ]
+    }
+  }
+}
+```
+
+La connexion au serveur X est **paresseuse** : le MCP peut démarrer avant Xvfb et avant l'app, et se reconnecte seul si Xvfb est relancé (une coupure de socket est la seule erreur « réseau » ; une fenêtre introuvable n'en est jamais une, donc aucune bascule silencieuse vers une autre cible).
+
+### Tests de l'adapter
+
+Les tests purs (garde, fenêtres, clavier, gestes, conversion de pixels) tournent avec `cargo test`. Les tests d'intégration lancent leur **propre Xvfb privé** (`:251`..`:259`) et sont `#[ignore]` :
+
+```bash
+cargo test -p adapter-x11 -- --ignored --test-threads=1
+```
+
+> **Piège** : `setxkbmap` n'a aucun effet sur certains Xvfb (ex. Fedora : le serveur ne peut pas écrire sa sortie XKM). Pour tester un clavier non `us`, écrire le keymap par le protocole core (`ChangeKeyboardMapping`), comme le fait le test d'intégration.
 
 ---
 
@@ -336,4 +441,4 @@ Côté app cible, le seul fichier qui référence DevEye est son `Cargo.toml` (f
 
 ## Docs liées
 
-- [`architecture.md`](./architecture.md) — architecture hexagonale, 9 ports, robustesse CDP
+- [`architecture.md`](./architecture.md) — architecture hexagonale, 12 ports, robustesse CDP

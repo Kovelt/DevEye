@@ -66,3 +66,13 @@ audit-deps:
   script:
     - command -v cargo-deny >/dev/null || cargo install cargo-deny --locked
     - cargo deny check advisories bans sources
+
+# Tests d'integration de la cible X11 (#[ignore] : ils demarrent leur propre
+# Xvfb prive, display libre entre :251 et :259). Optionnel : n'echoue pas le
+# pipeline tant que l'image du runner n'a pas Xvfb de facon fiable.
+x11-integration:
+  stage: check
+  allow_failure: true
+  script:
+    - apt-get install -y --no-install-recommends xvfb
+    - cargo test -p adapter-x11 -- --ignored --test-threads=1
