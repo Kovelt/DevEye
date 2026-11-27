@@ -57,4 +57,6 @@ Option 4.
 
 ## Notes
 
+Écart de processus (revue 1.1) : cet ADR a été rédigé après les commits d'implémentation qu'il justifie, et la portée d'ADR-0016 avait d'abord été réécrite dans le corps de cet ADR accepté. Contraire à `docs/adr/README.md` (écrire avant ou avec le changement, ne pas modifier un ADR accepté) : sans effet sur le comportement, corrigé en ramenant ADR-0016 à un simple renvoi. Désormais : ADR avant ou avec le commit, et nouvel ADR plutôt que réécriture.
+
 Application : `deveye-sdk/src/ui.rs` et `tests/ui_helper.rs`, `deveye-adapters/adapter-composite/src/ui_mask.rs` et `lib.rs` (`RouteDomInspector`), `deveye-server/src/doctor.rs` et `doctor_probe.rs`, `deveye-conformance/src/checks.rs`, `docs/wire-protocol.md` §3.7.

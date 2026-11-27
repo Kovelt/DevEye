@@ -56,4 +56,4 @@ Application : `deveye-sdk/src/redact.rs`, `deveye-sdk/src/lib.rs` (`Config`, `st
 
 Limites complémentaires (revue 1.0) : les champs de log formatés par `Debug` (`?valeur`) arrivent en chaîne et ne sont pas analysés, seul leur nom l'est ; la liste par défaut couvre les pluriels (`tokens`, `cookies`), `*_key` usuels (`access_key`, `signing_key`), `database_url` et quelques termes français (`mdp`, `jeton`). Voir `docs/wire-protocol.md` §2.4.
 
-**Mise à jour (1.1, ADR-0064 et ADR-0065)** : la réponse de la route `ui.widgets` n'est plus hors périmètre : la valeur d'un widget secret n'est jamais publiée par le SDK et le serveur la masque, y compris dans la sortie de l'outil `dom` et dans celle de `invoke_command` quand la route est `ui.widgets` (une réponse qui n'a pas la forme d'un arbre de widgets n'est pas modifiée). Les sorties d'`eval` et des autres commandes restent non filtrées.
+**Complément (1.1)** : la portée de ce masquage est étendue à la route `ui.widgets` par [ADR-0064](0064-masquage-des-secrets-transversal-et-vecteurs-partages.md) et [ADR-0065](0065-helper-sdk-ui-lecture-serveur-et-controles.md) ; la décision d'origine ci-dessus n'est pas modifiée.
