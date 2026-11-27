@@ -26,7 +26,7 @@ La documentation annonçait un outil `resize` « à venir » sans qu'il existe. 
 
 Option 2 : `InteractionCommand::Resize { width: u32, height: u32 }`, exposée par l'outil MCP `resize`.
 
-- **Sémantique** : émulation du viewport en pixels CSS. La fenêtre de l'OS n'est pas redimensionnée ; le facteur d'échelle de l'écran est conservé (`deviceScaleFactor: 0`). L'émulation persiste jusqu'à un nouveau `Resize`.
+- **Sémantique** : émulation du viewport en pixels CSS. La fenêtre de l'OS n'est pas redimensionnée ; le facteur d'échelle de l'écran est conservé (`deviceScaleFactor: 0`). L'émulation persiste jusqu'à un nouveau `Resize`, dans la même session CDP : une ré-attache ne la rejoue pas (ADR-0054).
 - **Retrait de l'émulation** : `width` et `height` à `0` ensemble appellent `Emulation.clearDeviceMetricsOverride`. Sans cela, un agent resterait coincé en émulation. Un seul côté à `0` est invalide.
 - **Validation** : l'outil MCP refuse (`invalid_params`) toute dimension hors `1..=16384` (hors `0`x`0`), avant tout dispatch et quelle que soit la cible ; l'adapter CDP refuse défensivement un seul côté nul (`PortError::Interaction`).
 - **Cibles** : CDP seul l'implémente. Le pont SDK, KWin EIS et X11 répondent `PortError::Unsupported`, que l'outil rend en `isError` structuré `{ reason: "unsupported" }` (convention E1). Une façade `auto` qui retombe de CDP sur le pont SDK donne donc `unsupported`, pas un faux succès.

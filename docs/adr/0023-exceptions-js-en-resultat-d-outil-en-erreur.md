@@ -27,7 +27,7 @@ Une exception levée par l'expression d'`eval_js` (`ReferenceError`, `throw`…)
 Option 2.
 
 - `PortError::Script { message: String, stack: Option<String> }` (affiché « exception JS : … »). `message` est la première ligne de la description de l'exception, ou la valeur levée, ou à défaut le texte générique ; `stack` est la description complète quand elle a plusieurs lignes, sinon absent.
-- L'adapter CDP lit `exceptionDetails.exception.description` ; l'évaluateur du pont SDK produit `Script` pour les erreurs JS (statut 200 avec `error`), `Network` et `Timeout` restant réservés aux pannes de liaison.
+- L'adapter CDP lit `exceptionDetails.exception.description` ; l'évaluateur du pont SDK produit `Script` pour les erreurs JS (statut 200 avec `error` uniquement ; tout autre statut inattendu, dont le 403 de la garde Host, est un `Protocol`, ADR-0054), `Network` et `Timeout` restant réservés aux pannes de liaison.
 - Le serveur MCP rend `Script` en résultat `isError` structuré `{ ok: false, reason: "js_exception", message, stack? }`. Le traitement est dans la fonction commune des outils qui passent par un évaluateur (`unsupported_aware`) : il vaut pour `eval_js`, mais aussi `click_selector`, `find_element`, `assert_selector`, etc., dont le JS peut lever. Une panne de liaison reste une erreur protocolaire.
 - Le repli de la façade `auto` ne bascule que sur `PortError::Network` : une exception JS ne le déclenche pas.
 

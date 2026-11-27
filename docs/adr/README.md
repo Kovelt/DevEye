@@ -121,3 +121,4 @@ Les ADR « Proposé » ci-dessous sont déjà appliqués dans le code et la docu
 | [0051](0051-semantique-de-la-suite-de-conformite-skip-n-a-et-host-absent.md) | Sémantique de la suite de conformité : `SKIP`, `N/A`, `Host` absent | Proposé |
 | [0052](0052-erreurs-de-liaison-et-de-protocole-visibles-et-cles-secretes-cumulatives.md) | Erreurs de liaison et de protocole visibles, clés secrètes cumulatives | Proposé |
 | [0053](0053-porte-de-qualite-de-la-release-et-controles-de-packaging.md) | Porte de qualité de la release et contrôles de packaging | Proposé |
+| [0054](0054-limites-documentees-issues-des-revues-de-la-1-0.md) | Limites documentées issues des revues de la 1.0 | Proposé |
