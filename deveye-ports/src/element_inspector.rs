@@ -26,6 +26,11 @@ pub enum ElementError {
     /// La référence n'a jamais été émise ou n'a pas une forme connue.
     #[error("référence inconnue : {0}")]
     UnknownRef(String),
+    /// Plusieurs éléments portent cette référence (identifiant dupliqué côté app) :
+    /// agir sur le premier serait un pari, l'agent doit corriger l'app ou passer
+    /// par des coordonnées.
+    #[error("référence ambiguë : {reference} désigne {count} éléments")]
+    Ambiguous { reference: String, count: usize },
     /// Un autre élément recouvre le centre ; `by` est sa référence si elle est connue.
     #[error("élément couvert")]
     Obscured { by: Option<String> },
@@ -97,6 +102,18 @@ mod tests {
         let err = ready(inspector.locate("w:gone")).unwrap_err();
         assert!(
             matches!(err, ElementError::Stale { ref candidates, .. } if candidates == &["w:ok"])
+        );
+    }
+
+    #[test]
+    fn ambiguous_reports_the_count() {
+        let err = ElementError::Ambiguous {
+            reference: "w:save".to_string(),
+            count: 2,
+        };
+        assert_eq!(
+            err.to_string(),
+            "référence ambiguë : w:save désigne 2 éléments"
         );
     }
 

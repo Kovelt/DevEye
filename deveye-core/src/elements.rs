@@ -300,6 +300,9 @@ pub struct ElementLocation {
     /// `[x, y, largeur, hauteur]` frais, dans le repère des clics de la cible.
     pub rect: [i32; 4],
     pub offscreen: bool,
+    /// L'élément refuse les interactions au moment de la mesure.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disabled: bool,
 }
 
 impl ElementLocation {
@@ -308,11 +311,17 @@ impl ElementLocation {
             reference: reference.into(),
             rect,
             offscreen: false,
+            disabled: false,
         }
     }
 
     pub fn with_offscreen(mut self, offscreen: bool) -> Self {
         self.offscreen = offscreen;
+        self
+    }
+
+    pub fn with_disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
         self
     }
 
@@ -578,6 +587,8 @@ mod tests {
 
     #[test]
     fn location_center_stays_inside_rect() {
+        let loc = ElementLocation::new("w:ok", [10, 20, 5, 3]);
+        assert!(!loc.disabled && loc.with_disabled(true).disabled);
         let loc = ElementLocation::new("w:ok", [10, 20, 5, 3]);
         assert_eq!(loc.center(), (12, 21));
     }
