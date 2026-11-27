@@ -93,7 +93,7 @@ Règles précises :
 - l'IPv6 loopback n'est reconnu que **entre crochets** (`[::1]`) ; le suffixe après `]` est vide ou `:<chiffres>` ;
 - `localhost` est insensible à la casse ; `127.0.0.1` est comparé tel quel ; aucune autre adresse, aucun sous-domaine, aucun `0.0.0.0` ;
 - le port annoncé dans `Host` n'a pas à être celui du serveur (seule sa forme numérique compte) ;
-- un `Host` **absent** (requête HTTP/1.0 ou HTTP/1.1 sans l'en-tête) est rejeté comme un `Host` étranger ;
+- un `Host` **absent** (requête HTTP/1.0 ou HTTP/1.1 sans l'en-tête) est rejeté comme un `Host` étranger (`403`). Exception admise : une pile HTTP qui le refuse elle-même avant tout middleware, ce que la RFC 9112 §3.2 impose à un serveur HTTP/1.1 (par exemple Kestrel), répond `400` ; l'application n'est alors jamais atteinte, ce qui satisfait l'objectif de la garde ;
 - la garde s'applique à **toutes** les requêtes, toutes méthodes et tous chemins confondus (y compris un chemin inconnu et `OPTIONS`), et **avant** le routage et le décodage du corps : un corps invalide avec un `Host` étranger donne `403`, jamais `400`.
 
 **Réponse de rejet** : `403 Forbidden`, `Content-Type: application/json`, header de version, corps :
@@ -178,7 +178,7 @@ Le SDK expose six routes. Toutes les réponses `200` retournent `Content-Type: a
 
 | Situation | Statut | Corps |
 |---|---|---|
-| `Host` absent, étranger ou mal formé (§2.2) | `403` | `{ "error": "<message>" }` |
+| `Host` absent (`400` admis s'il est refusé par la pile HTTP), étranger ou mal formé (§2.2) | `403` | `{ "error": "<message>" }` |
 | Chemin inconnu (`/`, `/devtools/inconnue`, `/devtools/state/extra`) | `404` | libre (ne pas le décoder) |
 | Chemin connu, méthode non prévue (`POST /devtools/state`, `GET /devtools/eval`) | `405` | libre ; un header `Allow` est recommandé |
 | Corps `POST` qui n'est pas du JSON valide, `Content-Type` incorrect, champ obligatoire absent ou de mauvais type | `4xx` autre que `403`, `404`, `405` | libre |
@@ -590,7 +590,7 @@ Cette liste est le guide opérationnel pour tout SDK dans un langage tiers (par 
 
 - [ ] Implémenter un middleware (ou filtre de requête) qui vérifie le header `Host` avant toute route.
 - [ ] Accepter : `localhost` (insensible à la casse), `localhost:<port>`, `127.0.0.1`, `127.0.0.1:<port>`, `[::1]`, `[::1]:<port>`.
-- [ ] Rejeter tout autre `Host` (y compris absent, `::1` sans crochets, `[::1]toto`, port non numérique) avec `403 Forbidden` et un corps `{ "error": "..." }`, sans traiter la route ni décoder le corps.
+- [ ] Rejeter tout autre `Host` (y compris absent, `::1` sans crochets, `[::1]toto`, port non numérique) avec `403 Forbidden` (un `Host` absent peut aussi recevoir le `400` de la pile HTTP, §2.2) et un corps `{ "error": "..." }`, sans traiter la route ni décoder le corps.
 - [ ] Ne jamais émettre `Access-Control-Allow-Origin` ni `Access-Control-Allow-Credentials` (§2.6).
 - [ ] Répondre `404` aux chemins inconnus, `405` aux méthodes non prévues, un `4xx` aux corps JSON invalides ou incomplets (§3.0), chaque fois avec le header de version.
 - [ ] Émettre les horodatages en RFC 3339 UTC suffixé `Z` (§3.0).
@@ -658,7 +658,7 @@ Cette liste est le guide opérationnel pour tout SDK dans un langage tiers (par 
 
 ## 7. Valider une implémentation : la suite de conformité
 
-`deveye-conformance` (crate du dépôt, binaire du même nom) est une suite **boîte noire** : elle ne connaît de l'implémentation que son URL et compare ses réponses à ce document. Elle valide indifféremment le SDK Rust, un shim dans un autre langage ou toute implémentation tierce ; le SDK Rust la passe à 100 % à chaque `cargo test --workspace` (test `deveye-conformance/tests/sdk_conformance.rs`, qui démarre le SDK en processus sur un port éphémère).
+`deveye-conformance` (crate du dépôt, binaire du même nom) est une suite **boîte noire** : elle ne connaît de l'implémentation que son URL et compare ses réponses à ce document. Elle valide indifféremment le SDK Rust, un shim dans un autre langage ou toute implémentation tierce ; le test `deveye-conformance/tests/sdk_conformance.rs` démarre le SDK Rust en processus sur un port éphémère et la lui fait passer à chaque `cargo test --workspace` **en build debug** (le SDK est un no-op en release : le test n'y valide rien).
 
 ### Mode d'emploi
 
@@ -673,7 +673,7 @@ just conformance http://127.0.0.1:31337
 
 Exemple pour un shim .NET (processus indépendant, démarré avant) : la suite ne touche à aucun fichier du shim, elle lui parle en HTTP.
 
-3. Lire le rapport : une ligne par vérification (`OK`, `FAIL`, `SKIP`), l'écart expliqué sous chaque `FAIL`, puis le bilan. **Code de sortie** : `0` conforme (aucun `FAIL`), `1` au moins un écart, `2` suite inexécutable (URL invalide, implémentation injoignable).
+3. Lire le rapport : une ligne par vérification (`OK`, `FAIL`, `SKIP`, `N/A`), l'écart expliqué sous chaque `FAIL`, puis le bilan et le verdict : `CONFORME`, `NON CONFORME`, ou `AUCUN ÉCART OBSERVÉ, MAIS INCOMPLET` quand des vérifications sont restées non observables. **Code de sortie** : `0` aucun `FAIL`, `1` au moins un écart (ou, avec `--strict`, au moins un `SKIP`), `2` suite inexécutable (URL invalide, implémentation injoignable). Le rapport ne cite jamais le contenu des réponses, seulement leur taille.
 
 ### Options
 
@@ -683,24 +683,24 @@ Exemple pour un shim .NET (processus indépendant, démarré avant) : la suite n
 | `--invoke-route <nom>` | Invoque cette commande (sans effet de bord) et exige `200` + JSON |
 | `--slow-expression <js>` | Expression que la pompe d'évaluation laisse sans réponse : exige `504` (dure 10 s) |
 | `--abandon-expression <js>` | Expression que la pompe abandonne : exige `500` |
-| `--strict` | Un `SKIP` fait aussi échouer (toute la spec a dû être observée) |
+| `--strict` | Un `SKIP` (non observable) fait aussi échouer ; un `N/A` (capacité non annoncée) non |
 
 ### Ce que la suite vérifie
 
-Une vérification est `SKIP`, jamais `OK` par défaut, quand l'état de l'implémentation ne permet pas de l'observer (aucun log émis, moins de deux commandes, pas de clé sensible, option absente). Pour tout observer : poser `set_state("password", ...)`, enregistrer au moins deux commandes, émettre au moins deux logs avant de lancer la suite, et fournir les options ci-dessus.
+Une vérification est `SKIP`, jamais `OK` par défaut, quand l'état de l'implémentation ne permet pas de l'observer (aucun log émis, moins de deux commandes, pas de clé sensible, option absente, connexion coupée avant le `413`). Elle est `N/A` quand l'exigence ne s'applique pas à l'implémentation (capacité `eval` ou `redaction` non annoncée) : rien n'est à observer et `--strict` ne l'exige pas. Pour tout observer : poser `set_state("password", ...)`, enregistrer au moins deux commandes, émettre au moins deux logs avant de lancer la suite, et fournir les options ci-dessus.
 
 | Identifiant | Section | Exigence |
 |---|---|---|
 | `ROUTE-01` à `ROUTE-04` | §3.1, §3.6, §3.5, §3.2 | formes de `state`, `info`, `commands`, `logs/poll`, Content-Type JSON |
 | `VERS-01` | §2.3 | header de version `MAJEURE.MINEURE` (majeure `1`) sur chaque route |
-| `HOST-01` à `HOST-04` | §2.2 | 7 hôtes acceptés, 13 rejetés, `Host` absent, garde avant routage, corps `{error}` |
+| `HOST-01` à `HOST-04` | §2.2 | 7 hôtes acceptés, 13 rejetés, `Host` absent (`403`, ou `400` de la pile HTTP), garde avant routage, corps `{error}` |
 | `ERR-01` à `ERR-04` | §3.0 | `404`, `405`, JSON invalide, champ obligatoire absent, avec header de version |
-| `SIZE-01` | §2.5 | `413` au-delà de 1 Mio |
+| `SIZE-01` | §2.5 | `413` au-delà de 1 Mio (`SKIP` si le serveur coupe la connexion avant, ce que §2.5 permet) |
 | `CORS-01`, `CORS-02` | §2.6 | aucune autorisation cross-origin (préflight et requête simple) |
 | `CMD-01` à `CMD-03` | §3.4, §3.5 | commande inconnue `404 {error}`, payload absent ou `null`, tri, invocation `200` |
 | `LOGS-01` à `LOGS-03` | §3.0, §3.2 | horodatages RFC 3339 UTC, ordre d'émission, poll destructif |
 | `EVAL-01` à `EVAL-03` | §3.3 | `503`/`200` selon la capacité `eval`, `504`, `500` |
-| `SEC-01` | §2.4 | masquage des clés sensibles, si la capacité `redaction` est annoncée |
+| `SEC-01` | §2.4 | masquage des clés sensibles, si la capacité `redaction` est annoncée (sinon `N/A`) |
 
 Les en-têtes de version sur `200`, `403`, `404`, `405`, `413`, `500` et les erreurs de décodage sont contrôlés dans chacune de ces vérifications. Ce qui n'est **pas** vérifié : le comportement interne des handlers de commande, le contenu des résultats d'évaluation, la sécurité compile-time du §2.1 (`#if DEBUG`), le comportement en cas de bind raté et le masquage par clés ajoutées par l'app (`Config::secret_keys`).
 

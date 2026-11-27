@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use crate::client::{excerpt, Resp, Target};
+use crate::client::{body_size, Resp, Target};
 use crate::report::Outcome;
 use crate::Options;
 
@@ -61,7 +61,7 @@ fn status_is(resp: &Resp, expected: u16) -> Check {
         Err(format!(
             "statut {} au lieu de {expected} (corps : {})",
             resp.status,
-            excerpt(&resp.body)
+            body_size(&resp.body)
         ))
     }
 }
@@ -115,7 +115,7 @@ fn error_message_body(resp: &Resp) -> Check {
         Some(Value::String(_)) => Ok(()),
         _ => Err(format!(
             "corps {} : objet avec un champ \"error\" (chaîne) attendu",
-            excerpt(&resp.body)
+            body_size(&resp.body)
         )),
     }
 }
@@ -342,16 +342,25 @@ pub(crate) fn logs_order(reads: &Reads) -> Outcome {
     }
 }
 
-pub(crate) fn logs_drain(reads: &Reads) -> Check {
-    let first = events_of(&reads.logs_first)?;
-    let second = events_of(&reads.logs_second)?;
+pub(crate) fn logs_drain(reads: &Reads) -> Outcome {
+    let (first, second) = match (events_of(&reads.logs_first), events_of(&reads.logs_second)) {
+        (Ok(first), Ok(second)) => (first, second),
+        (Err(why), _) | (_, Err(why)) => return Outcome::Fail(why),
+    };
+    // Un premier poll vide ne prouve rien : un second vide non plus.
+    if first.is_empty() {
+        return Outcome::Skip(
+            "aucun événement de log rendu au premier poll : le drainage n'est pas observable"
+                .into(),
+        );
+    }
     if let Some(repeated) = second.iter().find(|e| first.contains(e)) {
-        return Err(format!(
-            "un événement déjà rendu est rendu à nouveau (le poll doit drainer) : {}",
-            excerpt(&repeated.to_string())
+        return Outcome::Fail(format!(
+            "un événement déjà rendu est rendu à nouveau (le poll doit drainer) : événement de {}",
+            body_size(&repeated.to_string())
         ));
     }
-    Ok(())
+    Outcome::Pass
 }
 
 // --- Garde Host ---------------------------------------------------------
@@ -379,15 +388,17 @@ pub(crate) async fn host_rejected(t: &Target) -> Check {
 
 pub(crate) async fn host_absent(t: &Target) -> Check {
     let (status, raw) = t.raw_without_host("/devtools/state").await?;
-    if status != 403 {
-        return Err(format!(
-            "requête sans Host : statut {status} au lieu de 403"
-        ));
+    match status {
+        403 if raw.contains("x-deveye-protocol-version:") => Ok(()),
+        403 => Err("le 403 sans Host ne porte pas l'en-tête de version".into()),
+        // RFC 9112 §3.2 impose 400 à un serveur HTTP/1.1 devant une requête
+        // sans Host : certaines piles (Kestrel) le font avant tout middleware,
+        // et l'application n'est alors jamais atteinte (§2.2).
+        400 => Ok(()),
+        other => Err(format!(
+            "requête sans Host : statut {other} au lieu de 403 (ou 400 refusé par la pile HTTP)"
+        )),
     }
-    if !raw.contains("x-deveye-protocol-version:") {
-        return Err("le 403 sans Host ne porte pas l'en-tête de version".into());
-    }
-    Ok(())
 }
 
 pub(crate) async fn host_guard_precedes_routing(t: &Target) -> Check {
@@ -461,12 +472,21 @@ pub(crate) async fn missing_required_field(t: &Target) -> Check {
     Ok(())
 }
 
-pub(crate) async fn body_too_large(t: &Target) -> Check {
-    let resp = t
+pub(crate) async fn body_too_large(t: &Target) -> Outcome {
+    let resp = match t
         .post_raw("/devtools/command", &vec![b'x'; BODY_LIMIT + 1])
-        .await?;
-    status_is(&resp, 413)?;
-    with_version(&resp)
+        .await
+    {
+        Ok(resp) => resp,
+        // §2.5 : le serveur peut couper la connexion avant d'avoir lu tout le
+        // corps ; le 413 n'est alors pas observable, ce n'est pas un écart.
+        Err(why) => {
+            return Outcome::Skip(format!(
+                "connexion coupée avant la réponse (permis par §2.5), 413 non observable : {why}"
+            ))
+        }
+    };
+    verdict(status_is(&resp, 413).and_then(|()| with_version(&resp)))
 }
 
 // --- CORS ---------------------------------------------------------------
@@ -587,7 +607,7 @@ pub(crate) async fn eval_special(
         return Outcome::Skip(format!("non observable sans {option}"));
     };
     if !caps.iter().any(|c| c == "eval") {
-        return Outcome::Skip("capacité eval non annoncée".into());
+        return Outcome::NotApplicable("capacité eval non annoncée".into());
     }
     let result = async {
         let resp = t
@@ -654,7 +674,9 @@ fn scan_secrets(value: &Value, path: &str, seen: &mut usize, leaks: &mut Vec<Str
 
 pub(crate) fn redaction(reads: &Reads, caps: &[String]) -> Outcome {
     if !caps.iter().any(|c| c == "redaction") {
-        return Outcome::Skip("capacité redaction non annoncée par l'implémentation".into());
+        return Outcome::NotApplicable(
+            "capacité redaction non annoncée par l'implémentation".into(),
+        );
     }
     let (mut seen, mut leaks) = (0, Vec::new());
     if let Ok(body) = get_ok(&reads.state).and_then(Resp::json) {
@@ -736,7 +758,7 @@ pub(crate) async fn run_all(t: &Target, opts: &Options) -> crate::Report {
     report.record(
         "HOST-03",
         "§2.2",
-        "Garde Host : requête sans en-tête Host rejetée (403)",
+        "Garde Host : requête sans en-tête Host rejetée (403, ou 400 de la pile HTTP)",
         verdict(host_absent(t).await),
     );
     report.record(
@@ -773,7 +795,7 @@ pub(crate) async fn run_all(t: &Target, opts: &Options) -> crate::Report {
         "SIZE-01",
         "§2.5",
         "Corps de plus de 1 Mio : 413 avec en-tête de version",
-        verdict(body_too_large(t).await),
+        body_too_large(t).await,
     );
     report.record(
         "CORS-01",
@@ -821,7 +843,7 @@ pub(crate) async fn run_all(t: &Target, opts: &Options) -> crate::Report {
         "LOGS-03",
         "§3.2",
         "Poll destructif : un événement n'est rendu qu'une fois",
-        verdict(logs_drain(&reads)),
+        logs_drain(&reads),
     );
     report.record(
         "EVAL-01",
@@ -862,4 +884,68 @@ pub(crate) async fn run_all(t: &Target, opts: &Options) -> crate::Report {
         redaction(&reads, &caps),
     );
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Serveur TCP minimal : lit un peu de la requête puis exécute `reply`.
+    async fn stub(reply: Option<&'static str>) -> Target {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                if let Some(text) = reply {
+                    let _ = stream.write_all(text.as_bytes()).await;
+                }
+                // Sans réponse : la connexion est simplement coupée.
+            }
+        });
+        Target::new(&format!("http://127.0.0.1:{port}")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn host_absent_accepts_a_400_from_the_http_stack() {
+        let t = stub(Some(
+            "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n",
+        ))
+        .await;
+        assert!(host_absent(&t).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn host_absent_rejects_a_200() {
+        let t = stub(Some("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")).await;
+        assert!(host_absent(&t).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn body_too_large_is_skipped_when_the_connection_is_cut() {
+        let t = stub(None).await;
+        assert!(matches!(body_too_large(&t).await, Outcome::Skip(_)));
+    }
+
+    #[test]
+    fn logs_drain_is_skipped_on_an_empty_buffer() {
+        let empty = || Ok(Resp::for_test(200, r#"{"events":[]}"#));
+        let reads = Reads {
+            state: empty(),
+            info: empty(),
+            commands: empty(),
+            logs_first: empty(),
+            logs_second: empty(),
+        };
+        assert!(matches!(logs_drain(&reads), Outcome::Skip(_)));
+    }
+
+    #[test]
+    fn reports_never_quote_response_bodies() {
+        let resp = Resp::for_test(500, "mot-de-passe-secret");
+        let message = status_is(&resp, 200).unwrap_err();
+        assert!(!message.contains("secret"), "{message}");
+    }
 }

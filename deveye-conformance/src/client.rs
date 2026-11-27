@@ -21,24 +21,30 @@ pub(crate) struct Resp {
 }
 
 impl Resp {
+    #[cfg(test)]
+    pub(crate) fn for_test(status: u16, body: &str) -> Self {
+        Self {
+            status,
+            headers: HeaderMap::new(),
+            body: body.to_string(),
+        }
+    }
+
     pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.headers.get(name).and_then(|v| v.to_str().ok())
     }
 
     pub(crate) fn json(&self) -> Result<Value, String> {
         serde_json::from_str(&self.body)
-            .map_err(|e| format!("corps non JSON ({e}) : {}", excerpt(&self.body)))
+            .map_err(|e| format!("corps non JSON ({e}) : {}", body_size(&self.body)))
     }
 }
 
-/// Début d'un corps pour un message d'erreur (jamais le corps entier).
-pub(crate) fn excerpt(text: &str) -> String {
-    let short: String = text.chars().take(80).collect();
-    if short.len() < text.len() {
-        format!("{short}...")
-    } else {
-        short
-    }
+/// Taille d'un corps pour un message d'erreur. Jamais son contenu : un corps
+/// de réponse peut porter des données de l'app testée (état, logs), et les
+/// rapports finissent dans des journaux de CI.
+pub(crate) fn body_size(text: &str) -> String {
+    format!("{} octets", text.len())
 }
 
 /// Cible de la suite : une URL de base et le client qui la joint.
@@ -168,7 +174,7 @@ impl Target {
             .split_whitespace()
             .nth(1)
             .and_then(|code| code.parse::<u16>().ok())
-            .ok_or_else(|| format!("ligne de statut illisible : {}", excerpt(&text)))?;
+            .ok_or_else(|| format!("ligne de statut illisible ({})", body_size(&text)))?;
         Ok((status, text))
     }
 }

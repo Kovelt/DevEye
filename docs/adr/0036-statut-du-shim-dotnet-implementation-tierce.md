@@ -43,4 +43,4 @@ Option 3. Le shim .NET est une **implémentation tierce** du wire protocol 1.0, 
 
 ## Notes
 
-Procédure : `docs/wire-protocol.md` §7. Les écarts déjà connus du shim (en-tête de version sur les erreurs, garde Host, tri) correspondent aux vérifications `VERS-01`, `HOST-01` à `HOST-04` et `CMD-02`.
+Procédure : `docs/wire-protocol.md` §7. Les vérifications `VERS-01`, `HOST-01` à `HOST-04` et `CMD-02` couvrent les points où une implémentation tierce s'écarte le plus souvent du contrat (en-tête de version sur les erreurs, garde Host, tri des commandes) ; aucun écart du shim n'a été constaté, puisqu'il n'a pas été passé à la suite. Pour un rapport sans `SKIP` à garantir, la suite se lance avec `--strict` ([ADR-0051](0051-semantique-de-la-suite-de-conformite-skip-n-a-et-host-absent.md)).
