@@ -28,7 +28,7 @@ Option 3, dans `adapter-mcp-server` (la garde est un contrat de l'outil MCP, pas
 
 - Une coordonnée **négative** est refusée avant toute I/O, sur toutes les cibles.
 - Si `viewport_size()` répond une taille non nulle, un point `x >= largeur` ou `y >= hauteur` est refusé. Si le renderer échoue ou rend une taille nulle, le geste passe.
-- L'erreur est `invalid_params`, avec le point fautif et la taille du viewport dans le message. Le geste n'est jamais dispatché.
+- L'erreur est `invalid_params`, avec le point fautif dans le message, et la taille du viewport quand c'est la borne haute qui est dépassée. Le geste n'est jamais dispatché.
 - Couvre `click`, `right_click`, `double_click`, `hover`, `drag_drop` (les deux points) et l'ancrage de `scroll` quand `x` et `y` sont fournis ; pas `click_selector` ni `click_text`, dont le point vient du DOM.
 
 **Justification** : l'option 3 est la seule qui attrape le clic hors fenêtre en `kwin-eis` et `x11`, motif principal du portage. Laisser passer quand la taille est inconnue évite qu'une garde défaillante devienne une panne.

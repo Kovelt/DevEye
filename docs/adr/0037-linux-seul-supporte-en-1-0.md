@@ -45,3 +45,5 @@ Option 3, conformément à la décision du propriétaire : Linux est officiel (X
 ## Notes
 
 Les mentions de Windows et de macOS dans `docs/architecture.md` et `docs/usage.md` décrivent l'app cible ou l'historique ; la passe de documentation de la 1.0 les relit.
+
+Nuance (revue de la 1.0) : le `compile_error!` n'est atteint que si les dépendances compilent d'abord hors Linux ; un adapter Linux (`nix`, `xcb`, D-Bus) peut échouer avant avec un message moins clair. Il reste le signal explicite pour le cas courant ; une garde en `build.rs` n'y changerait rien, cargo compilant les dépendances en parallèle du script de construction.

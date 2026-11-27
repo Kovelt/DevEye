@@ -31,7 +31,7 @@ Option 2, avec ces précisions.
 - **Valeur inconnue** : les adapters répondent `PortError::Unsupported` (ou l'erreur d'adapter équivalente) ; le message ne reprend pas le `Debug` de la commande, qui embarquerait le texte tapé. Pour `MouseButton`, les fonctions de traduction (`button_code` et leurs équivalents) renvoient `Option`.
 - **Types tokio exposés** dans `deveye-sdk` (`Receiver<EvalRequest>`, `oneshot::Sender`) : conservés tels quels. Les encapsuler casserait les intégrations existantes sans gain ; la version majeure de `tokio` fait donc partie de la surface du SDK.
 - **Destructuration** : `EvalRequest` étant `#[non_exhaustive]`, un consommateur qui la destructure écrit `EvalRequest { expression, respond, .. }`.
-- **Contrôle automatique** (`cargo-semver-checks` en CI) : renvoyé au chantier de la CI GitHub Actions, aucun workflow n'existant encore.
+- **Contrôle automatique** (`cargo-semver-checks` en CI) : mis en place dans le job `semver` de `.github/workflows/ci.yml` (actif une fois une version 1.x publiée, le tag `v1.*` servant de référence).
 
 **Justification** : l'option 2 ouvre l'extension la plus fréquente (nouvelles commandes et prédicats) au moindre coût, et garde la construction littérale pour les crates internes ; l'option 1 coûterait un constructeur par variante pour un gain limité.
 

@@ -50,3 +50,5 @@ Option 3.
 ## Notes
 
 Application : lot « neutralité » de la release 1.0 (commits `refactor`, `docs` et `docs(adr)` du même lot).
+
+Archives déplacées : [`docs/historique/`](../historique/README.md) (statut), [audit du 25/06](../historique/audit-2026-06-25.md), [audit du 04/07](../historique/audit-2026-07-04.md), [backlog d'outils](../historique/tools-backlog-2026-06-26.md), [spike AT-SPI2](../historique/spike-atspi2-2026-07-04.md), [feuille de route](../historique/roadmap/).

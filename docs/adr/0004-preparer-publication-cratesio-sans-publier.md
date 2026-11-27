@@ -37,5 +37,5 @@ Option 3. Les quatre crates MIT deviennent publiables (pas de `publish = false`,
 
 **Coûts et risques**
 
-- `cargo publish --dry-run` des dépendants (`deveye-ports`, `deveye-sdk`) échoue tant que `deveye-core` n'est pas publié : attendu ; l'ordre de publication est core, puis ports et sdk, sdk-client étant indépendant ;
+- `cargo publish --dry-run` des dépendants (`deveye-ports`, `deveye-sdk`) échoue tant que `deveye-core` n'est pas publié : attendu ; l'ordre de publication est core, puis ports et sdk, puis sdk-client (qui dépend de `deveye-ports`) ;
 - les adapters ne sont pas utilisables comme dépendances crates.io : ils sont internes, sans promesse sur leur API Rust.

@@ -53,3 +53,5 @@ Le coût en dépendances : `deveye-server` dépend désormais de `deveye-sdk-cli
 ## Notes
 
 Application : `deveye-server/src/{doctor,doctor_probe,main,cli}.rs`, `deveye-server/tests/cli.rs`, `docs/usage.md` (« Diagnostiquer avant de lancer »).
+
+Limite assumée : le `selftest` envisagé au plan (autodiagnostic qui lance un serveur) n'est pas livré en 1.0 : `doctor` reste en lecture seule et ne lance rien. Voir [ADR-0057](0057-doctor-display-optionnel-et-sondes-limitees-a-la-cible.md) pour les précisions de la revue (`--display`, sondes).

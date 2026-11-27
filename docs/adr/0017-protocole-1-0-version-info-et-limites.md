@@ -29,7 +29,7 @@ Option 3.
 
 - **Version** : le protocole est en `1.0`, valeur de l'en-tête `X-DevEye-Protocol-Version` de chaque réponse. Majeure : changement cassant ; mineure : ajout rétrocompatible (route, champ de réponse, paramètre optionnel).
 - **Client** (`deveye-sdk-client`, appelé par les adapters après chaque `send()`) : majeure différente -> `PortError::Protocol` explicite, sans panic ; en-tête absent, illisible (dont l'ancien `1` sans mineure) ou mineure différente -> avertissement `tracing`, émis une seule fois par processus, et la requête continue.
-- **`GET /devtools/info`** (additive) : `sdk_version`, `protocol_version`, `capabilities` (`state`, `commands`, `info` toujours ; `logs` quand la couche tracing est installée ; `eval` quand une pompe est enregistrée). Soumise à la garde Host et à l'en-tête de version. `deveye-sdk-client::fetch_info` la lit ; le doctor et `target_info` s'en serviront.
+- **`GET /devtools/info`** (additive) : `sdk_version`, `protocol_version`, `capabilities` (`state`, `commands`, `info`, `redaction` toujours ; `logs` quand la couche tracing est installée ; `eval` quand une pompe est enregistrée). Soumise à la garde Host et à l'en-tête de version. `deveye-sdk-client::fetch_info` la lit ; le doctor et `target_info` s'en serviront.
 - **Limite de corps** : `MAX_REQUEST_BODY_BYTES` = 1 Mio (constante publique), appliquée par `DefaultBodyLimit` ; au-delà, `413`, avec l'en-tête de version.
 - **Dépendances** : `deveye-sdk-client` dépend désormais de `deveye-ports` (pour `PortError`, MIT -> MIT), de `serde` et de `tracing` (déjà dans le graphe) ; `wiremock` et `serde_json` en dev-dependencies, déjà utilisés par les adapters.
 

@@ -49,3 +49,5 @@ Option 3.
 ## Notes
 
 Application : `deveye-server/build.rs`, `deveye-server/src/version.rs`, `deveye-adapters/adapter-mcp-server/src/lib.rs` (`ServerVersion`, `get_info`).
+
+Précisions (revue de la 1.0) : le commit est lu uniquement si le dépôt git trouvé est celui de DevEye (`deveye-server/Cargo.toml` à sa racine), pour qu'un crate vendorisé dans un autre dépôt n'affiche pas le commit de son hôte ; `build.rs` relit `HEAD` dans le répertoire git du worktree (`--absolute-git-dir`) et la ref ou `packed-refs` dans le répertoire commun. Un suffixe `-dirty` n'est volontairement pas ajouté : un script de build ne peut pas suivre les modifications de l'arbre de travail et l'indicateur serait périmé.

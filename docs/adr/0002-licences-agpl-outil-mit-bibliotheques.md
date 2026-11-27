@@ -33,8 +33,8 @@ Jusqu'à la 0.2, DevEye était propriétaire (`LicenseRef-Proprietary`, sans fic
 Option 5.
 
 - **`MIT`** (SPDX `MIT`) : `deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`.
-- **`AGPL-3.0-or-later`** : `deveye-server`, tous les adapters, `deveye-conformance` (à venir), les scripts ; c'est la licence par défaut du dépôt (`[workspace.package]`).
-- **Invariant** : un crate MIT ne dépend jamais d'un crate AGPL (aujourd'hui `sdk → core`, `ports → core`, `sdk-client → aucun`). Un nouveau crate déclare explicitement sa licence ; AGPL par défaut, MIT seulement s'il est destiné à être embarqué ou réutilisé, avec un ADR.
+- **`AGPL-3.0-or-later`** : `deveye-server`, tous les adapters, `deveye-conformance`, les scripts ; c'est la licence par défaut du dépôt (`[workspace.package]`).
+- **Invariant** : un crate MIT ne dépend jamais d'un crate AGPL (aujourd'hui `sdk → core`, `ports → core`, `sdk-client → ports`). Un nouveau crate déclare explicitement sa licence ; AGPL par défaut, MIT seulement s'il est destiné à être embarqué ou réutilisé, avec un ADR.
 - **Fichiers** : `LICENSE` (texte intégral de la GNU AGPL v3) et `LICENSE-MIT` (« Copyright (c) 2026 NuvoraCode / Morgan Voltz ») à la racine ; une copie de `LICENSE-MIT` dans chacun des quatre crates MIT pour que `cargo package` l'embarque ; section « Licence » du README.
 - **cargo-deny** : section `[licenses]` avec une liste blanche des licences tierces réellement présentes dans le graphe, plus une exception `AGPL-3.0-or-later` limitée à nos propres crates (clarification par crate) : aucune dépendance tierce AGPL n'est acceptée implicitement.
 - **« or-later »** et non « only » : confirmé par le propriétaire le 27/11/2026.
