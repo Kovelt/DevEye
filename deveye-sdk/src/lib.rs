@@ -120,9 +120,13 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
+        // Entier décimal de 1 à 65535, sans espace : tout le reste (vide, texte,
+        // hors plage, 0 qui demanderait un port éphémère imprévisible) retombe
+        // sur le port par défaut (cf. `docs/wire-protocol.md` §1).
         let port = std::env::var("DEVEYE_PORT")
             .ok()
-            .and_then(|s| s.parse().ok())
+            .and_then(|s| s.parse::<u16>().ok())
+            .filter(|port| *port != 0)
             .unwrap_or(DEFAULT_PORT);
         Self::with_port(port)
     }
@@ -550,7 +554,9 @@ struct InfoPayload {
 }
 
 async fn info_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
-    let mut capabilities = vec!["state", "commands", "info"];
+    // `redaction` : le masquage des clés sensibles est toujours actif ici ; une
+    // implémentation tierce ne l'annonce que si elle masque réellement.
+    let mut capabilities = vec!["state", "commands", "info", "redaction"];
     if registry.log_tx.get().is_some() {
         capabilities.push("logs");
     }
@@ -660,6 +666,27 @@ mod tests {
     fn default_config_uses_31337_without_env() {
         let config = Config::with_port(DEFAULT_PORT);
         assert_eq!(config.port, 31337);
+    }
+
+    #[test]
+    fn default_config_reads_deveye_port_within_valid_range() {
+        // Un seul test touche à la variable : pas de course entre tests.
+        for (value, expected) in [
+            ("4242", 4242),
+            ("1", 1),
+            ("65535", 65535),
+            ("0", DEFAULT_PORT),
+            ("65536", DEFAULT_PORT),
+            ("-1", DEFAULT_PORT),
+            ("abc", DEFAULT_PORT),
+            ("", DEFAULT_PORT),
+            (" 4242", DEFAULT_PORT),
+        ] {
+            std::env::set_var("DEVEYE_PORT", value);
+            assert_eq!(Config::default().port, expected, "DEVEYE_PORT={value:?}");
+        }
+        std::env::remove_var("DEVEYE_PORT");
+        assert_eq!(Config::default().port, DEFAULT_PORT);
     }
 
     #[test]
