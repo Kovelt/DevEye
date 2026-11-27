@@ -33,7 +33,7 @@ Versions suivies : la dernière version 1.x publiée reçoit les correctifs de s
 | Garantie | Comment elle est vérifiée |
 |---|---|
 | **Le SDK n'ouvre aucun port en release.** `deveye_sdk::init` est un no-op hors `debug_assertions`, même sans garde côté appelant. | `deveye-sdk/tests/release_noop.rs` (test release) et `scripts/verify-sdk-release-noop.sh` : un binaire release de l'exemple `release_probe` ne contient aucune trace du serveur HTTP (routes `/devtools/`, en-tête de version), avec un binaire debug comme témoin positif. Job CI « SDK no-op en release » ([ADR-0039](docs/adr/0039-tests-de-bout-en-bout-et-preuves-dev-only-en-ci.md)). |
-| **Boucle locale seulement.** Le serveur lie `127.0.0.1`, jamais `0.0.0.0`. | Tests du wire protocol du SDK ; suite de conformité (`deveye-conformance`). |
+| **Boucle locale seulement.** Le serveur lie `127.0.0.1`, jamais `0.0.0.0`. | Adresse codée en dur dans `deveye_sdk::init`, relue en revue de code. **Aucun test n'asserte l'adresse d'écoute elle-même** : les tests du SDK et la suite de conformité s'y connectent par la boucle locale. |
 | **Garde `Host`.** `403` si `Host` n'est pas `localhost`, `127.0.0.1` ou `[::1]` (port numérique optionnel), avant toute route. | `deveye-sdk/tests/security.rs` (`host_guard_rejects_foreign_and_missing_port_hosts`, `host_guard_accepts_loopback_spellings`) ; tests unitaires de `host_is_local`. |
 | **CORS refusé.** Aucune origine n'est autorisée. | `deveye-sdk/tests/security.rs` (`cors_is_deny_all`). |
 | **Bornes.** Corps ≤ 1 Mio (`413`), file d'évaluation de 32 requêtes (`503` si pleine), tampon de logs de 1 024 événements (les plus anciens abandonnés). | `deveye-sdk/tests/security.rs` (`eval_queue_saturation_answers_503`), tests du wire protocol. |

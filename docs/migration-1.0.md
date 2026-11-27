@@ -104,7 +104,6 @@ En 1.0 ([ADR-0014](adr/0014-filtre-de-cible-cdp-permissif-par-defaut.md)) :
 - `state` et `dom` ajoutent un second bloc texte (`captured_at`, `signals`) et distinguent « SDK joignable sans état » de `sdk_unavailable` ;
 - les outils de capture acceptent `max_width`, `format`, `quality` ; `assert_visual` accepte `ignore_regions` et `update_baseline` et rend une image de différence en cas d'échec ;
 - les coordonnées de `click`, `hover`, `drag_drop`, `scroll` sont validées (négatives ou hors viewport : `invalid_params`) ;
-- `logs_tail` borne `events` aux plus récents (`limit`, défaut 200) et renvoie `truncated` et `total` ;
 - chaque outil déclare ses annotations MCP ([ADR-0027](adr/0027-annotations-des-outils-mcp-et-classification-des-risques.md)) ; la version du protocole MCP est épinglée à `2025-11-25`, transport stdio seul ([ADR-0028](adr/0028-version-du-protocole-mcp-epinglee-stdio.md)).
 
 **Options.** Une option sans effet sur la cible choisie est maintenant **refusée** ([ADR-0031](adr/0031-validation-des-flags-selon-la-cible.md)) : `--display` et `--x11-class` seulement avec `--target x11` ; `--cdp-url`, `--cdp-target-filter-*`, `--cdp-accept-blank` seulement avec `auto` et `cdp` ; `--screencap-backend` jamais avec `x11`. Sans `--serve-mcp` ni sous-commande, le binaire s'arrête en erreur d'usage au lieu de sortir en silence. À faire : relire vos `.mcp.json` et retirer les options devenues refusées.
