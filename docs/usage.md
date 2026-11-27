@@ -85,14 +85,14 @@ dx serve --platform desktop --features deveye
 claude
 ```
 
-Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **43 outils sont disponibles** :
+Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **44 outils sont disponibles** :
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|
-| `screenshot` | aucun | image PNG (contenu image natif MCP, affichée par le client) | « prends un screenshot » (**en CDP, le PNG est à l'échelle CSS** : 1 pixel d'image = 1 pixel CSS, les coordonnées lues sur l'image se passent telles quelles à `click`/`hover`, y compris sur un écran HiDPI — aucun facteur à appliquer ; un second bloc texte `{captured_at, viewport}` date la capture) |
-| `screenshot_region` | `{x, y, width, height}` | image PNG recadrée | « capture la zone (0, 0, 320, 200) » (vérif ciblée, moins de tokens ; seule vérif visuelle de composant en kwin-eis) |
-| `screenshot_element` | `{selector}` | image PNG recadrée (ou `isError {found:false}`) | « capture `#facture` » (résout le rect par JS, gère le DPI ; cdp/sdk) |
-| `assert_visual` | `{baseline_path, threshold?, x?, y?, width?, height?}` | JSON `{ok, diff_ratio, threshold, same_dims, ...}` | « compare au golden `ref.png` » (crée la baseline si absente ; `isError` si > seuil ; **seule assertion déterministe en kwin-eis**) |
+| `screenshot` | `{max_width?, format?, quality?}` | image PNG par défaut (contenu image natif MCP, affichée par le client) | « prends un screenshot » (**en CDP, le PNG est à l'échelle CSS** : 1 pixel d'image = 1 pixel CSS, les coordonnées lues sur l'image se passent telles quelles à `click`/`hover`, y compris sur un écran HiDPI — aucun facteur à appliquer ; un second bloc texte `{captured_at, viewport, image}` date la capture et donne la taille finale et le facteur d'échelle, cf. « Coût des captures ») |
+| `screenshot_region` | `{x, y, width, height, max_width?, format?, quality?}` | image recadrée (+ bloc `{image: {..., scale, origin}}`) | « capture la zone (0, 0, 320, 200) » (vérif ciblée, moins de tokens ; seule vérif visuelle de composant en kwin-eis) |
+| `screenshot_element` | `{selector, max_width?, format?, quality?}` | image recadrée (+ bloc `{image: {..., scale, origin}}`), ou `isError {found:false}` | « capture `#facture` » (résout le rect par JS, gère le DPI ; cdp/sdk) |
+| `assert_visual` | `{baseline_path, threshold?, x?, y?, width?, height?, ignore_regions?, update_baseline?}` | JSON `{ok, diff_ratio, threshold, same_dims, diff_pixels, compared_pixels, diff_bbox, ...}` ; en échec à dimensions égales, une **image de différence** suit le JSON | « compare au golden `ref.png` » (crée la baseline si absente ; `isError` si > seuil ; `ignore_regions` exclut horloge/curseur ; `update_baseline: true` remplace la référence ; **seule assertion déterministe en kwin-eis**) |
 | `click` | `{x, y}` | `"ok"` | « clique sur 50, 200 » (envoie `mouseMoved` + sleep 60 ms + press/release) |
 | `double_click` | `{x, y}` | `"ok"` | « double-clic sur 50, 200 » (édition inline, sélection de mot ; émet `dblclick`) |
 | `right_click` | `{x, y}` | `"ok"` | « clic droit à 50, 200 » (ouvre les menus contextuels — émet `contextmenu`) |
@@ -128,10 +128,29 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `list_commands` | aucun | JSON `[{name, description}]` | « quelles commandes l'app expose-t-elle ? » |
 | `collect_console_errors` | aucun | JSON `[{level, text, url?, line?, timestamp}]` | « y a-t-il eu des erreurs JS depuis la dernière vérification ? » |
 | `list_windows` | aucun | JSON `[{id, title, url, kind}]` | « liste les onglets/fenêtres de la cible CDP » |
+| `observe` | `{include?, exclude?, max_dom_nodes?, max_dom_depth?, max_events?, max_width?, format?, quality?}` | image (si capturée) puis JSON `{sections: {screenshot, dom, state, console, logs}, skipped}` ; chaque section `{available: true, ...}` ou `{available: false, reason, detail}` | « où en est l'app ? » en **un** appel (remplace `screenshot` + `dom` + `state` + `collect_console_errors` + `logs_tail`) ; capture limitée à 1024 px de large par défaut ; **draine** les buffers de logs et de console |
 | `resize` | `{width, height}` | JSON `{ok}` | « passe en 375×812 » (CDP : émule le viewport responsive, pas la fenêtre OS ; `0`×`0` retire l'émulation ; le viewport rapporté exclut la barre de défilement, d'où 360 px pour `375` si la page défile ; sdk/kwin-eis/x11 : `isError` `unsupported`) |
+
+**Coût des captures** : `screenshot`, `screenshot_region`, `screenshot_element` et `observe` acceptent `max_width` (réduction proportionnelle, jamais d'agrandissement), `format` (`png` par défaut, ou `jpeg`) et `quality` (JPEG, 1 à 100, défaut 80). Sans option, le PNG d'origine est renvoyé tel quel. Le bloc texte JSON qui suit l'image porte `image: { format, width, height, source_width, source_height, scale, bytes }` et, pour une région ou un élément, `origin: {x, y}` : **coordonnée de capture = `origin` + coordonnée lue sur l'image / `scale`** (en CDP, la coordonnée de capture est directement celle de `click`). Le PNG reste préférable pour lire du texte fin ; le JPEG convient aux vues d'ensemble.
+
+**Annotations d'outils (ADR-0027)** : chaque outil déclare les quatre indices MCP, que les clients utilisent pour leur politique d'approbation. Ce sont des indices, pas des garanties. Règle de classement :
+
+| Classe | `readOnlyHint` | `destructiveHint` | `idempotentHint` | Outils |
+|---|---|---|---|---|
+| Observation pure | oui | non | oui | `screenshot`, `screenshot_region`, `dom`, `state`, `assert_state`, `find_element`, `assert_selector`, `list_commands`, `target_info`, `list_windows`, `window_geometry`, `clipboard_get`, `wait_for_selector`, `wait_for_text`, `wait_screenshot_region`, `wait_target_alive`, `wait_ready` |
+| Observation qui draine un buffer | oui | non | non | `logs_tail`, `logs_wait`, `collect_console_errors`, `wait_for_log`, `wait_condition`, `observe` |
+| Modifie l'app, sans détruire | non | non | oui | `screenshot_element` (fait défiler), `hover`, `resize`, `focus_window` |
+| Modifie l'app, sans détruire | non | non | non | `click`, `right_click`, `double_click`, `click_selector`, `click_text`, `type_text`, `press_key`, `drag_drop`, `handle_dialog`, `scroll` |
+| Potentiellement destructif | non | oui | selon l'outil | `assert_visual` (écrit/remplace un fichier), `key_combo` (raccourcis : quitter, fermer, supprimer), `navigate`, `upload_file`, `clipboard_set`, `eval_js` et `invoke_command` (code arbitraire de l'app, aussi `openWorldHint`) |
+
+`openWorldHint` n'est vrai que pour `eval_js` et `invoke_command` (leurs effets ne sont pas bornés par DevEye). Un test échoue si un outil n'est pas annoté et classé.
+
+**Protocole MCP (ADR-0028)** : DevEye annonce la révision `2025-11-25` (constante `MCP_PROTOCOL_VERSION`), transport **stdio uniquement** ; un client qui demande une révision plus récente est ramené à celle-ci, un client plus ancien (jusqu'à `2024-11-05`) négocie à la baisse.
 
 **Conseils d'usage** :
 
+- **Point de départ économe** : `observe` donne l'essentiel (capture réduite, arbre résumé, état, erreurs console, logs récents) en un appel ; détailler ensuite avec l'outil dédié. Les sections indisponibles sur la cible (`dom`/`state` en kwin-eis par exemple) répondent `available: false` sans faire échouer l'appel ; `include`/`exclude` choisissent les sections. L'état et les champs de logs passent par le masquage des secrets du SDK (ADR-0016).
+- **Régression visuelle** : `assert_visual` avec `ignore_regions` pour les zones mouvantes (leurs coordonnées sont celles de l'image comparée, relatives à la région si elle est fournie ; les pixels masqués sortent aussi du dénominateur de `diff_ratio`) ; en cas d'échec, `diff_bbox` et l'image de différence (rouge = pixels différents, bleu = zones ignorées) montrent où ça diverge ; `update_baseline: true` après validation du changement.
 - **Saisie sans focus** : `type_text` suppose un champ éditable au focus. Sur les cibles WebView (cdp, sdk), l'absence de champ focalisé est détectée et refusée en `isError` `interaction_failed` (avant, CDP répondait un faux succès) : cliquer d'abord (`click_selector`). En kwin-eis et x11, les touches partent à la fenêtre qui a le focus OS (`focus_window`) sans pouvoir être vérifiées : confirmer par `screenshot_region`.
 - **Sorties d'observation** : `screenshot`, `dom` et `state` renvoient leur contenu habituel dans le **premier** bloc (inchangé) et un **second bloc texte JSON** de métadonnées : `captured_at` (RFC 3339, UTC) pour savoir l'âge de ce qu'on lit, `viewport` pour `screenshot`, `signals` pour `state`. Un `state` vide se lit alors sans ambiguïté : `signals: 0` + `note` = le SDK répond mais l'app n'a publié aucun signal ; `isError` `sdk_unavailable` = le SDK est injoignable (app non lancée, mauvais `--sdk-url`).
 - **Coordonnées validées** : `click`, `right_click`, `double_click`, `hover`, `drag_drop` et l'ancrage de `scroll` refusent (erreur `invalid_params`, rien n'est envoyé) une coordonnée négative, ou hors du viewport quand sa taille est connue. Un clic hors fenêtre en kwin-eis/x11 échoue donc au lieu de réussir à vide ; un menu système qui déborde de la fenêtre n'est pas atteignable par coordonnées.
