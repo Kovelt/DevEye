@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// webview) : `WindowRect` porte la fenêtre entière côté OS, utile pour un
 /// pilotage natif (kwin-eis) qui n'a pas de notion de viewport CDP.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct WindowRect {
     pub x: i32,
     pub y: i32,

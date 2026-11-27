@@ -80,6 +80,7 @@ pub enum WaitPredicate {
 
 /// Résultat d'une attente conditionnelle.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct WaitOutcome {
     /// Vrai si le prédicat a été satisfait avant le timeout.
