@@ -607,4 +607,46 @@ mod tests {
         let head = &value_fn[..value_fn.find("var tag").unwrap()];
         assert!(head.contains("isSecretField(el)"));
     }
+
+    /// Extrait un tableau de chaînes `var NOM = ['a', 'b'];` du script.
+    fn js_list(name: &str) -> Vec<String> {
+        let start = SCRIPT.find(&format!("var {name} = [")).expect(name);
+        let body = &SCRIPT[start..];
+        let body = &body[body.find('[').unwrap() + 1..body.find(']').unwrap()];
+        body.split(',')
+            .map(|item| item.trim().trim_matches('\'').to_string())
+            .filter(|item| !item.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn script_secret_lists_cover_the_shared_vectors() {
+        // Garde hors navigateur (le test Chromium est ignoré par défaut) : le
+        // filet heuristique du script reconnaît chaque clé secrète des vecteurs
+        // partagés (ADR-0064), sans quoi un champ nommé ainsi fuirait sa valeur.
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/schemas/shared-vectors-1.json"
+        );
+        let vectors: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let contains = js_list("SECRET_CONTAINS");
+        let suffixes = js_list("SECRET_SUFFIXES");
+        let exact = js_list("SECRET_EXACT");
+        assert!(!contains.is_empty() && !suffixes.is_empty() && !exact.is_empty());
+        for list in ["required_secret_keys", "extended_secret_keys"] {
+            for key in vectors["redaction"][list].as_array().unwrap() {
+                let key = key.as_str().unwrap();
+                let k: String = key
+                    .to_lowercase()
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                let hit = contains.iter().any(|w| k.contains(w.as_str()))
+                    || suffixes.iter().any(|w| k.ends_with(w.as_str()))
+                    || exact.contains(&k);
+                assert!(hit, "clé secrète non reconnue par le script : {key}");
+            }
+        }
+    }
 }

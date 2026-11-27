@@ -104,7 +104,10 @@ pub struct ElementNode {
     /// Nom accessible, quand il existe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Valeur courante, jamais présente pour un champ secret.
+    /// Valeur courante, jamais présente pour un champ secret. Le domaine ne
+    /// peut pas l'imposer : le masquage est fait par chaque adapter (ADR-0064)
+    /// et fixé par leurs tests (`snapshot_never_carries_a_secret_value`, lecture
+    /// des vecteurs partagés par le pont JS).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     #[serde(default)]
@@ -325,10 +328,15 @@ impl ElementLocation {
         self
     }
 
-    /// Centre du rect, point où l'on clique. Division entière : reste dans le rect.
+    /// Centre du rect, point où l'on clique. Division entière ; l'addition
+    /// sature aux bornes de `i32`. Pour une largeur ou une hauteur négative
+    /// (rect invalide), le résultat est le coin le plus proche, sans paniquer.
     pub fn center(&self) -> (i32, i32) {
         let [x, y, w, h] = self.rect;
-        (x + w / 2, y + h / 2)
+        (
+            x.saturating_add(w.max(0) / 2),
+            y.saturating_add(h.max(0) / 2),
+        )
     }
 }
 
@@ -354,7 +362,8 @@ pub fn parse_ref(reference: &str) -> Option<RefKind<'_>> {
     {
         return None;
     }
-    digits.parse().ok().map(RefKind::Dom)
+    // La table numérote à partir de 1 : `e0` n'est jamais émise.
+    digits.parse().ok().filter(|n| *n >= 1).map(RefKind::Dom)
 }
 
 /// Pourquoi une référence ne se résout pas.
@@ -550,6 +559,8 @@ mod tests {
             Some(RefKind::Widget("vcf/cutoff"))
         );
         assert_eq!(parse_ref("w:"), None);
+        assert_eq!(parse_ref("e0"), None);
+        assert_eq!(parse_ref("e00"), None);
         assert_eq!(parse_ref("e99999999999999999999999"), None);
         assert_eq!(parse_ref("button"), None);
     }
@@ -591,5 +602,18 @@ mod tests {
         assert!(!loc.disabled && loc.with_disabled(true).disabled);
         let loc = ElementLocation::new("w:ok", [10, 20, 5, 3]);
         assert_eq!(loc.center(), (12, 21));
+    }
+
+    #[test]
+    fn location_center_saturates_and_ignores_negative_sizes() {
+        let loc = ElementLocation::new("w:ok", [i32::MAX - 1, i32::MAX - 1, 100, 100]);
+        assert_eq!(loc.center(), (i32::MAX, i32::MAX));
+        let loc = ElementLocation::new("w:ok", [10, 20, -8, -6]);
+        assert_eq!(loc.center(), (10, 20));
+        let loc = ElementLocation::new("w:ok", [i32::MIN, i32::MIN, i32::MAX, i32::MAX]);
+        assert_eq!(
+            loc.center(),
+            (i32::MIN + i32::MAX / 2, i32::MIN + i32::MAX / 2)
+        );
     }
 }
