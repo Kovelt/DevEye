@@ -74,3 +74,4 @@ Option retenue, en une phrase.
 | [0008](0008-montees-de-version-avis-rustsec.md) | Montées de version des dépendances touchées par les avis RUSTSEC | Accepté |
 | [0009](0009-lints-de-workspace-et-exception-kwin-eis.md) | Lints de workspace et exception unsafe de l'adapter KWin EIS | Accepté |
 | [0010](0010-toolchain-stable-et-msrv-1-88.md) | Toolchain stable épinglée par fichier et MSRV 1.88 | Accepté |
+| [0011](0011-politique-de-stabilite-et-de-versionnage-1-0.md) | Politique de stabilité et de versionnage de la 1.0 | Accepté |
