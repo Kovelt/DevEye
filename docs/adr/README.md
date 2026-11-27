@@ -90,3 +90,7 @@ Option retenue, en une phrase.
 | [0024](0024-serialisation-sans-panic-et-arguments-stringifies.md) | Sérialisation sans panic et arguments `invoke_command` stringifiés | Proposé |
 | [0025](0025-captured-at-et-etat-sdk-vide-ou-indisponible.md) | Contrat de sortie : `captured_at` et distinction état SDK vide ou indisponible | Proposé |
 | [0026](0026-type-text-sans-champ-editable-au-focus.md) | `type_text` sans champ éditable au focus | Proposé |
+| [0027](0027-annotations-des-outils-mcp-et-classification-des-risques.md) | Annotations des outils MCP et classification des risques | Proposé |
+| [0028](0028-version-du-protocole-mcp-epinglee-stdio.md) | Version du protocole MCP épinglée à 2025-11-25, transport stdio seul | Proposé |
+| [0029](0029-outil-observe-et-maitrise-du-cout-des-captures.md) | Outil `observe` et maîtrise du coût des captures | Proposé |
+| [0030](0030-assert-visual-masques-image-de-difference-et-mise-a-jour.md) | `assert_visual` : masques, image de différence et mise à jour de la référence | Proposé |
