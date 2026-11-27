@@ -20,6 +20,16 @@ pub enum PortError {
     #[error("logs : {0}")]
     Log(String),
 
+    /// Une exception levée par le script évalué dans la cible (`ReferenceError`,
+    /// `throw`…). Distincte d'une panne de liaison (`Network`, `Protocol`) : la
+    /// liaison fonctionne, c'est le code évalué qui a échoué. `stack` porte la
+    /// trace quand le moteur la fournit.
+    #[error("exception JS : {message}")]
+    Script {
+        message: String,
+        stack: Option<String>,
+    },
+
     #[error("commande {route} : {message}")]
     Route { route: String, message: String },
 

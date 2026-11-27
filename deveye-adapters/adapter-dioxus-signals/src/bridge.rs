@@ -82,7 +82,12 @@ impl JsEvaluator for SdkEvaluator {
                     "SDK eval (pompe abandonnee) : {error}"
                 )));
             }
-            return Err(PortError::Render(format!("eval JS : {error}")));
+            // Le reste (statut 200 + `error`) : le JS évalué a levé une
+            // exception — la liaison, elle, fonctionne.
+            return Err(PortError::Script {
+                message: error,
+                stack: None,
+            });
         }
         Ok(body.value.unwrap_or(serde_json::Value::Null))
     }

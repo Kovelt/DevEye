@@ -843,9 +843,26 @@ fn unsupported_error(detail: impl Into<String>) -> CallToolResult {
     }))
 }
 
+/// Payload `isError` d'une exception levee par le JS evalue dans la cible
+/// (`PortError::Script`) : un resultat que l'agent doit lire et corriger (son
+/// expression est fausse), pas une panne du serveur ni de la liaison. Porte le
+/// message et, quand le moteur la fournit, la trace (ADR-0023).
+fn script_error(message: String, stack: Option<String>) -> CallToolResult {
+    let mut payload = serde_json::json!({
+        "ok": false,
+        "reason": "js_exception",
+        "message": message,
+    });
+    if let Some(stack) = stack {
+        payload["stack"] = serde_json::Value::String(stack);
+    }
+    json_error(&payload)
+}
+
 /// E1 : deroule un `PortResult<T>` en distinguant « capacite absente sur la
-/// cible active » (`PortError::Unsupported`, cf. [`unsupported_error`]) de
-/// toute autre panne de port (mappee par [`port_to_mcp`]). Sur `Ok`, renvoie
+/// cible active » (`PortError::Unsupported`, cf. [`unsupported_error`]) et
+/// « exception JS de l'expression evaluee » (`PortError::Script`, cf.
+/// [`script_error`]) de toute autre panne de port (mappee par [`port_to_mcp`]). Sur `Ok`, renvoie
 /// la valeur telle quelle ; sur erreur, renvoie l'issue MCP a faire remonter
 /// directement (soit un resultat isError structure, soit une erreur
 /// JSON-RPC classique) — a consommer par
@@ -857,6 +874,7 @@ fn unsupported_aware<T>(result: PortResult<T>) -> Result<T, Result<CallToolResul
     match result {
         Ok(v) => Ok(v),
         Err(PortError::Unsupported(detail)) => Err(Ok(unsupported_error(detail))),
+        Err(PortError::Script { message, stack }) => Err(Ok(script_error(message, stack))),
         Err(e) => Err(Err(port_to_mcp(e))),
     }
 }
@@ -1581,6 +1599,30 @@ mod dispatch_tests {
         }
     }
 
+    /// Évaluateur dont le JS lève toujours une exception.
+    struct ThrowingEval {
+        message: String,
+        stack: Option<String>,
+    }
+    #[async_trait]
+    impl JsEvaluator for ThrowingEval {
+        async fn evaluate(&self, _expression: &str) -> PortResult<serde_json::Value> {
+            Err(PortError::Script {
+                message: self.message.clone(),
+                stack: self.stack.clone(),
+            })
+        }
+    }
+
+    /// Évaluateur dont la liaison est coupée (panne, pas exception).
+    struct BrokenLinkEval;
+    #[async_trait]
+    impl JsEvaluator for BrokenLinkEval {
+        async fn evaluate(&self, _expression: &str) -> PortResult<serde_json::Value> {
+            Err(PortError::Network("connexion refusée".to_string()))
+        }
+    }
+
     /// Espion `InteractionSink` : enregistre chaque commande dispatchee, pour
     /// verifier (a) qu'elle n'a JAMAIS ete appelee, ou (b) qu'elle l'a ete
     /// avec les bons parametres.
@@ -1868,6 +1910,65 @@ mod dispatch_tests {
         async fn state_snapshot(&self) -> PortResult<StateDump> {
             Err(PortError::Unsupported(self.0.clone()))
         }
+    }
+
+    #[tokio::test]
+    async fn eval_js_exception_becomes_is_error_with_message_and_stack() {
+        let server = server_with(|ports| {
+            ports.evaluator = Arc::new(ThrowingEval {
+                message: "ReferenceError: inconnu is not defined".to_string(),
+                stack: Some(
+                    "ReferenceError: inconnu is not defined\n    at <anonymous>:1:1".to_string(),
+                ),
+            });
+        });
+        let result = server
+            .eval_js(Parameters(EvalParams {
+                expression: "inconnu".to_string(),
+            }))
+            .await
+            .expect("G37 : une exception JS n'est pas une erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        let body = body_json(&result);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["reason"], "js_exception");
+        assert_eq!(body["message"], "ReferenceError: inconnu is not defined");
+        assert!(body["stack"].as_str().unwrap().contains("at <anonymous>"));
+    }
+
+    #[tokio::test]
+    async fn eval_js_exception_without_stack_omits_the_field() {
+        let server = server_with(|ports| {
+            ports.evaluator = Arc::new(ThrowingEval {
+                message: "boom".to_string(),
+                stack: None,
+            });
+        });
+        let result = server
+            .eval_js(Parameters(EvalParams {
+                expression: "throw 'boom'".to_string(),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        let body = body_json(&result);
+        assert_eq!(body["message"], "boom");
+        assert!(body.get("stack").is_none());
+    }
+
+    #[tokio::test]
+    async fn eval_js_link_failure_stays_a_protocol_error() {
+        // Une vraie panne de liaison n'est pas une exception JS : elle reste
+        // une erreur du serveur (-32603), distincte du résultat d'outil.
+        let server = server_with(|ports| {
+            ports.evaluator = Arc::new(BrokenLinkEval);
+        });
+        let err = server
+            .eval_js(Parameters(EvalParams {
+                expression: "1".to_string(),
+            }))
+            .await
+            .expect_err("panne de liaison");
+        assert_eq!(err.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
     }
 
     #[tokio::test]

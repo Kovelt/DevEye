@@ -12,7 +12,7 @@ use super::*;
 #[tool_router(router = inspect_router, vis = "pub(crate)")]
 impl DeveyeMcpServer {
     #[tool(
-        description = "Évalue une expression JavaScript dans la page cible et renvoie la valeur JSON. Promises supportées (awaitPromise=true). Indisponible en kwin-eis (pas de WebView) : renvoie un résultat isError structuré `{ reason: \"unsupported\" }` plutôt qu'une erreur protocolaire (E1)."
+        description = "Évalue une expression JavaScript dans la page cible et renvoie la valeur JSON. Promises supportées (awaitPromise=true). Une exception levée par l'expression revient comme résultat d'outil en erreur `{ ok: false, reason: \"js_exception\", message, stack? }` (la trace n'est présente que si le moteur la fournit) : lisible et corrigeable par l'agent, distincte d'une panne de liaison (erreur protocolaire). Indisponible en kwin-eis (pas de WebView) : renvoie un résultat isError structuré `{ reason: \"unsupported\" }` plutôt qu'une erreur protocolaire (E1)."
     )]
     pub(crate) async fn eval_js(
         &self,

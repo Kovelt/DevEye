@@ -109,7 +109,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `focus_window` | `{title_pattern?}` | JSON `{ok, title}` | « donne le focus à la fenêtre `mon_app` » (KWin ; crucial avant une séquence kwin-eis) |
 | `clipboard_get` | aucun | JSON `{text}` | « lis le presse-papiers » (Wayland `wl-paste` ; fiable en contexte automatisé) |
 | `clipboard_set` | `{text}` | `"ok"` | « mets ce texte dans le presse-papiers » (Wayland `wl-copy` ; combiner à `key_combo` Ctrl+V) |
-| `eval_js` | `{expression}` | JSON sérialisé | « renvoie `document.querySelectorAll('button').length` » (Promise awaitée) |
+| `eval_js` | `{expression}` | JSON sérialisé ; si l'expression lève une exception : `isError` `{ok: false, reason: "js_exception", message, stack?}` | « renvoie `document.querySelectorAll('button').length` » (Promise awaitée ; une exception est un résultat à corriger, pas une panne : la trace `stack` n'est présente que si le moteur la fournit) |
 | `dom` | aucun | JSON du DOM courant (erreur `isError` si l'arbre dépasse ~100 Ko : cibler avec `find_element`/`eval_js`) | « renvoie le DOM courant » |
 | `state` | `{keys?}` | JSON `{ ... }` (filtré aux clés demandées si `keys` fourni) | « quel est l'état applicatif courant ? » ; `keys: ["count"]` pour un seul signal |
 | `assert_state` | `{expected}` | JSON `{ok, mismatches}` | « vérifie `{count: 3, page: "Agenda"}` dans le state » (`isError` si divergence) |
