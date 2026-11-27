@@ -15,10 +15,6 @@ use tracing::{debug, info, warn};
 
 use crate::error::CdpError;
 
-/// URL HTTP par défaut où le webview wry/WebView2 expose CDP quand on lance
-/// l'app avec `--remote-debugging-port=9222`.
-pub const DEFAULT_HTTP_URL: &str = "http://localhost:9222";
-
 /// Délai max d'attente d'une réponse à une commande CDP déjà envoyée : le
 /// navigateur peut ne jamais répondre (page plantée, target détachée sans
 /// event `detachedFromTarget`...) — sans borne, `rx.await` dans
@@ -37,17 +33,6 @@ const CDP_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 /// Délai max pour l'upgrade WebSocket vers l'endpoint browser-level ;
 /// `tokio_tungstenite::connect_async` n'a pas de timeout interne (audit A2).
 const CDP_WS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Représente une « target » CDP — typiquement la page principale de l'app.
-#[derive(Clone, Debug, Deserialize)]
-pub struct CdpTarget {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub title: String,
-    pub url: String,
-    #[serde(rename = "webSocketDebuggerUrl")]
-    pub ws_url: String,
-}
 
 /// Client CDP robuste au hot-reload de la page cible.
 ///

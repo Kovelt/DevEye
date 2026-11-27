@@ -23,10 +23,6 @@ impl SdkTracingLogSource {
             http: deveye_sdk_client::client(),
         }
     }
-
-    pub fn with_default_url() -> Self {
-        Self::new(deveye_sdk_client::DEFAULT_SDK_URL)
-    }
 }
 
 #[derive(Deserialize)]
