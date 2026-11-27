@@ -14,8 +14,9 @@ publish = false  # interne, non publié
 workspace = true
 
 [dependencies]
-deveye-core = { path = "../../deveye-core", version = "1.1.0" }
-deveye-ports = { path = "../../deveye-ports", version = "1.1.0" }
+# `unstable-elements` : surface expérimentale des éléments par référence (ADR-0069, ADR-0072).
+deveye-core = { path = "../../deveye-core", version = "1.1.0", features = ["unstable-elements"] }
+deveye-ports = { path = "../../deveye-ports", version = "1.1.0", features = ["unstable-elements"] }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "time", "macros"] }
