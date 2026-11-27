@@ -47,4 +47,14 @@ Option 3. `CODE_OF_CONDUCT.md` est une adaptation française fidèle du Contribu
 
 ## Notes
 
+**Liste de contrôle avant publication du dépôt** (réglages GitHub dont dépendent les canaux de signalement, `SECURITY.md` et `CODE_OF_CONDUCT.md`) :
+
+- Settings, Moderation options, **Reported content** : activé (sinon « Report to repository admins » n'apparaît pas) ;
+- Settings, Code security, **Private vulnerability reporting** : activé ;
+- les issues sont activées (canal de repli « Demande de contact » sans détail, décrit dans les deux fichiers) ;
+- tester à blanc chacun des deux canaux avec un second compte.
+
+**Cas d'un mainteneur unique concerné** : le CoC prévoit la récusation et le signalement à GitHub ; faute de second mainteneur, GitHub est le seul recours possible. Désigner un second mainteneur, même de confiance seulement pour la modération, fermerait ce cas : ce serait un nouvel ADR.
+
+
 Le projet reste modeste : un seul mainteneur. Si l'équipe s'élargit, le texte du CoC pourra désigner plusieurs personnes ; ce serait un nouvel ADR.

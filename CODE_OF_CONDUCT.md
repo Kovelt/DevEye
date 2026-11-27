@@ -46,6 +46,16 @@ Les comportements abusifs, harcelants ou autrement inacceptables peuvent être s
 2. Choisissez **Report content** (« Signaler le contenu »).
 3. Choisissez la raison qui correspond le mieux, puis **Report to repository admins** (« Signaler aux administrateurs du dépôt »), et précisez le contexte si le menu le permet.
 
+### Si le signalement de contenu n'est pas disponible
+
+Le menu « Report to repository admins » dépend d'un réglage du dépôt (Settings, Moderation options, Reported content). S'il n'apparaît pas, ou si le comportement a eu lieu **hors de GitHub** (message privé, autre plateforme, événement), procédez ainsi :
+
+1. ouvrez une issue intitulée « **Demande de contact (code de conduite)** » **sans aucun détail** : ni noms, ni extraits, ni liens vers le comportement. Elle sert seulement à joindre un mainteneur ;
+2. un mainteneur répond en proposant un canal privé adapté (par exemple un avis privé GitHub ou un échange direct par GitHub) et supprime l'issue une fois le contact établi ;
+3. transmettez ensuite les détails par ce canal, avec les captures d'écran ou les liens utiles.
+
+Si la situation est urgente ou grave, signalez-la d'abord à GitHub (« Report to GitHub », ou le formulaire de contact de GitHub pour les messages hors contenu du dépôt) sans attendre la réponse d'un mainteneur.
+
 Le signalement arrive chez les mainteneurs seuls : il n'est pas visible des autres participants. Quand le comportement est grave (menaces, mise en danger, contenu illégal), ou quand il concerne un mainteneur, signalez-le aussi **à GitHub lui-même** par le même menu (« Report to GitHub »), qui dispose de ses propres équipes de modération et de ses propres règles.
 
 ### Ce que les mainteneurs s'engagent à faire
