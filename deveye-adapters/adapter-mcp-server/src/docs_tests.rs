@@ -330,3 +330,33 @@ fn every_adr_is_indexed_with_its_title_and_status() {
         "la numérotation des ADR doit être continue, sans trou"
     );
 }
+
+/// Le nombre d'outils du palier A (ADR-0067) annoncé dans la doc suit le code.
+#[test]
+fn tier_a_count_matches_documentation() {
+    let count = DeveyeMcpServer::tool_router()
+        .list_all()
+        .iter()
+        .filter(|t| t.output_schema.is_some())
+        .count();
+    for (file, needle) in [
+        (
+            "docs/stability.md",
+            format!("({count} outils à petite sortie"),
+        ),
+        (
+            "docs/architecture.md",
+            format!("pour {count} outils à petite sortie"),
+        ),
+    ] {
+        assert!(
+            read(file).contains(&needle),
+            "{file} doit annoncer {count} outils à petite sortie"
+        );
+    }
+    let usage_word = match count {
+        29 => "vingt-neuf",
+        n => panic!("mettre à jour le mot de docs/usage.md pour {n} outils"),
+    };
+    assert!(read("docs/usage.md").contains(&format!("{usage_word} outils à petite sortie")));
+}

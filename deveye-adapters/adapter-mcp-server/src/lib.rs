@@ -82,7 +82,7 @@
 //! - `act` **[expérimental]** : agit sur un élément par sa référence (position
 //!   remesurée au moment de l'action, jamais de relocalisation silencieuse)
 //!
-//! **Sorties structurées (ADR-0067)** : 28 outils à petite sortie déclarent un
+//! **Sorties structurées (ADR-0067)** : 29 outils à petite sortie déclarent un
 //! `outputSchema` et renvoient `structuredContent` en plus d'un texte inchangé
 //! (voir `responses`) ; les autres restent en texte seul. `state` porte sa
 //! fraîcheur et sa provenance dans `_meta`.
