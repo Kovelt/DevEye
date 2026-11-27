@@ -19,8 +19,8 @@ unsafe_code = "deny"
 rust_2018_idioms = { level = "deny", priority = -1 }
 
 [dependencies]
-deveye-core = { path = "../../deveye-core" }
-deveye-ports = { path = "../../deveye-ports" }
+deveye-core = { path = "../../deveye-core", version = "1.0.0" }
+deveye-ports = { path = "../../deveye-ports", version = "1.0.0" }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
@@ -37,6 +37,6 @@ rustix = { version = "1", features = ["time"] }
 tracing = "0.1"
 
 [dev-dependencies]
-deveye-core = { path = "../../deveye-core" }
-deveye-ports = { path = "../../deveye-ports" }
+deveye-core = { path = "../../deveye-core", version = "1.0.0" }
+deveye-ports = { path = "../../deveye-ports", version = "1.0.0" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -14,7 +14,7 @@ publish = false  # interne, non publié
 workspace = true
 
 [dependencies]
-deveye-ports = { path = "../../deveye-ports" }
+deveye-ports = { path = "../../deveye-ports", version = "1.0.0" }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["process", "io-util", "rt", "macros", "time"] }
 tracing = "0.1"

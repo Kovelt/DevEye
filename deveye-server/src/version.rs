@@ -25,7 +25,7 @@ pub(crate) fn server_version() -> ServerVersion {
     )
 }
 
-/// `0.2.0 (commit abc1234)` ou `0.2.0 (commit inconnu)`.
+/// `1.0.0 (commit abc1234)` ou `1.0.0 (commit inconnu)`.
 fn short_text(version: &str, commit: Option<&str>) -> String {
     format!("{version} (commit {})", commit.unwrap_or("inconnu"))
 }

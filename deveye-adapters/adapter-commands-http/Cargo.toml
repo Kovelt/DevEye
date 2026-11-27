@@ -14,9 +14,9 @@ publish = false  # interne, non publié
 workspace = true
 
 [dependencies]
-deveye-core = { path = "../../deveye-core" }
-deveye-ports = { path = "../../deveye-ports" }
-deveye-sdk-client = { path = "../../deveye-sdk-client" }
+deveye-core = { path = "../../deveye-core", version = "1.0.0" }
+deveye-ports = { path = "../../deveye-ports", version = "1.0.0" }
+deveye-sdk-client = { path = "../../deveye-sdk-client", version = "1.0.0" }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

@@ -31,5 +31,5 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-
 
 [dev-dependencies]
 # SDK Rust démarré en processus pour exiger 100 % de conformité (AGPL -> MIT : sens permis).
-deveye-sdk = { path = "../deveye-sdk" }
+deveye-sdk = { path = "../deveye-sdk", version = "1.0.0" }
 tracing = "0.1"

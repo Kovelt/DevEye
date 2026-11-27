@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Version courte (`0.2.0 (commit abc1234)`) pour l'en-tête de `doctor`.
+/// Version courte (`1.0.0 (commit abc1234)`) pour l'en-tête de `doctor`.
 fn cli_version() -> &'static str {
     version::clap_short()
 }
