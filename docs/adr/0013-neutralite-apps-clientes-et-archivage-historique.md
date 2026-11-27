@@ -44,7 +44,7 @@ Option 3.
 
 **Coûts et risques**
 
-- les archives contiennent toujours des noms d'apps et des chemins privés : elles sont publiques avec le dépôt (à relire par le mainteneur avant l'ouverture si cela le gêne) ;
+- les archives contiennent toujours des noms d'apps et des chemins privés : elles sont publiques avec le dépôt. **Point de checklist avant de passer le dépôt en public** : le mainteneur relit `docs/historique/` et décide de les conserver telles quelles, de les expurger ou de les exclure du dépôt public ; tant que cette relecture n'est pas faite, l'ouverture ne s'appuie pas sur l'hypothèse qu'elles sont anodines ;
 - les liens internes des archives vers d'anciens chemins ne sont pas corrigés (contenu inchangé).
 
 ## Notes

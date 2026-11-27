@@ -18,7 +18,7 @@ DevEye 1.0 ne promet que ce qu'il teste ou ce qu'il peut vérifier à la main, e
 | Test | Sens |
 |---|---|
 | **CI** | exécuté par un job bloquant du workflow `.github/workflows/ci.yml` |
-| **Manuel** | vérifié à la main par le mainteneur ; les tests existants sont marqués `#[ignore]` car ils exigent une session graphique réelle |
+| **Manuel** | vérifié à la main par le mainteneur avant chaque release, critère fixé par [ADR-0058](adr/0058-critere-de-support-verification-par-la-ci-ou-manuelle.md) ; les tests existants sont marqués `#[ignore]` car ils exigent une session graphique réelle |
 
 ## Matrice
 

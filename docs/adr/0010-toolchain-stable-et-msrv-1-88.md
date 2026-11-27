@@ -1,6 +1,6 @@
 # ADR-0010 — Toolchain stable épinglée par fichier et MSRV 1.88
 
-- **Statut** : Accepté
+- **Statut** : Proposé
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0009 (lints), ADR-0004 (bibliothèques publiables)
@@ -39,3 +39,7 @@ Option 3. `rust-toolchain.toml` fixe `channel = "stable"` et les composants `rus
 
 - une nouvelle stable peut introduire de nouveaux avertissements clippy et rougir la CI ; c'est voulu, la correction suit ;
 - relever la MSRV est un changement de politique : il exige un nouvel ADR et une note de version.
+
+## Notes
+
+Statut rétabli en « Proposé » : ce choix a été fait par l'agent de la release 1.0 et aucune trace de validation par le mainteneur n'existe dans le dépôt (décisions du propriétaire du 27/11/2026 : aucune ne le couvre explicitement). Il passera à « Accepté » à la validation du mainteneur.

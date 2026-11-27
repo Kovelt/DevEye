@@ -1,6 +1,6 @@
 # ADR-0006 — Exception d'audit pour chrono (RUSTSEC-2026-0543)
 
-- **Statut** : Accepté
+- **Statut** : Proposé
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0008, ADR-0007 (autre exception d'audit)
@@ -38,3 +38,7 @@ Option 3 (commit `a2951ed`) : `RUSTSEC-2026-0543` est ignoré dans `deny.toml`, 
 - une dépendance non maintenue dans le chemin des types publics : si une faille apparaît, la correction sera plus coûteuse ;
 - l'exception doit être rouverte avant la 2.0 (et à chaque revue d'audit) ;
 - le sujet reste ouvert : choisir le successeur (type de date) sera l'objet d'un ADR dédié.
+
+## Notes
+
+Statut rétabli en « Proposé » : ce choix a été fait par l'agent de la release 1.0 et aucune trace de validation par le mainteneur n'existe dans le dépôt (décisions du propriétaire du 27/11/2026 : aucune ne le couvre explicitement). Il passera à « Accepté » à la validation du mainteneur.

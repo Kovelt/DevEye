@@ -72,12 +72,12 @@ Les ADR « Proposé » ci-dessous sont déjà appliqués dans le code et la docu
 | [0002](0002-licences-agpl-outil-mit-bibliotheques.md) | Licences : AGPL-3.0-or-later pour l'outil, MIT pour les bibliothèques embarquées | Accepté |
 | [0003](0003-hebergement-github-ci-github-actions.md) | Hébergement sur GitHub, intégration continue GitHub Actions, GitLab archivé | Accepté |
 | [0004](0004-preparer-publication-cratesio-sans-publier.md) | Préparer la publication crates.io des bibliothèques sans publier | Accepté |
-| [0005](0005-migration-rmcp-3.md) | Migrer rmcp 1.8 vers 3.12 (RUSTSEC-2026-0462) | Accepté |
-| [0006](0006-exception-rustsec-chrono.md) | Exception d'audit pour chrono (RUSTSEC-2026-0543) | Accepté |
-| [0007](0007-exception-rustsec-quick-xml.md) | Exception d'audit pour quick-xml en build-dependency (RUSTSEC-2026-0194 et 0195) | Accepté |
-| [0008](0008-montees-de-version-avis-rustsec.md) | Montées de version des dépendances touchées par les avis RUSTSEC | Accepté |
-| [0009](0009-lints-de-workspace-et-exception-kwin-eis.md) | Lints de workspace et exception unsafe de l'adapter KWin EIS | Accepté |
-| [0010](0010-toolchain-stable-et-msrv-1-88.md) | Toolchain stable épinglée par fichier et MSRV 1.88 | Accepté |
+| [0005](0005-migration-rmcp-3.md) | Migrer rmcp 1.8 vers 3.12 (RUSTSEC-2026-0462) | Proposé |
+| [0006](0006-exception-rustsec-chrono.md) | Exception d'audit pour chrono (RUSTSEC-2026-0543) | Proposé |
+| [0007](0007-exception-rustsec-quick-xml.md) | Exception d'audit pour quick-xml en build-dependency (RUSTSEC-2026-0194 et 0195) | Proposé |
+| [0008](0008-montees-de-version-avis-rustsec.md) | Montées de version des dépendances touchées par les avis RUSTSEC | Proposé |
+| [0009](0009-lints-de-workspace-et-exception-kwin-eis.md) | Lints de workspace et exception unsafe de l'adapter KWin EIS | Proposé |
+| [0010](0010-toolchain-stable-et-msrv-1-88.md) | Toolchain stable épinglée par fichier et MSRV 1.88 | Proposé |
 | [0011](0011-politique-de-stabilite-et-de-versionnage-1-0.md) | Politique de stabilité et de versionnage de la 1.0 | Accepté |
 | [0012](0012-application-de-non-exhaustive-et-choix-limites.md) | Application de `#[non_exhaustive]` et choix limites avant le gel | Proposé |
 | [0013](0013-neutralite-apps-clientes-et-archivage-historique.md) | Neutralité vis-à-vis des apps clientes et archivage des documents historiques | Accepté |
@@ -102,7 +102,7 @@ Les ADR « Proposé » ci-dessous sont déjà appliqués dans le code et la docu
 | [0032](0032-sous-commande-doctor-en-lecture-seule.md) | Sous-commande `doctor` en lecture seule | Proposé |
 | [0033](0033-version-affichee-et-provenance-du-commit-sans-dependance.md) | Version affichée et provenance du commit (sans dépendance) | Proposé |
 | [0034](0034-capacites-completes-de-target-info-et-repli-observable.md) | Capacités complètes de `target_info`, repli observable et choix unique du backend OS | Proposé |
-| [0035](0035-suite-de-conformite-boite-noire-du-protocole.md) | Suite de conformité boîte noire du protocole | Accepté |
+| [0035](0035-suite-de-conformite-boite-noire-du-protocole.md) | Suite de conformité boîte noire du protocole | Proposé |
 | [0036](0036-statut-du-shim-dotnet-implementation-tierce.md) | Statut du shim .NET : implémentation tierce validée par la suite de conformité | Accepté |
 | [0037](0037-linux-seul-supporte-en-1-0.md) | Linux seul supporté en 1.0 | Accepté |
 | [0038](0038-distribution-archives-github-et-cargo-install.md) | Distribution du binaire : archives de release GitHub et cargo install | Accepté |
@@ -125,3 +125,6 @@ Les ADR « Proposé » ci-dessous sont déjà appliqués dans le code et la docu
 | [0055](0055-refus-des-requetes-inter-origine-sur-le-drain-des-logs.md) | Refus des requêtes inter-origine sur le drain des logs | Proposé |
 | [0056](0056-alignement-des-versions-des-crates-sur-1-0-0.md) | Alignement des versions des crates sur 1.0.0 | Proposé |
 | [0057](0057-doctor-display-optionnel-et-sondes-limitees-a-la-cible.md) | `doctor` : `--display` vérifié après le parsing, sondes limitées à la cible et parallèles | Proposé |
+| [0058](0058-critere-de-support-verification-par-la-ci-ou-manuelle.md) | Critère de support : vérification par la CI ou par le mainteneur | Proposé |
+| [0059](0059-politique-de-securite-et-conventions-de-contribution.md) | Politique de sécurité et conventions de contribution | Proposé |
+| [0060](0060-dependances-d-adapters-cache-de-ci-et-verrous-empoisonnes.md) | Dépendances d'adapters, cache de CI et verrous empoisonnés du SDK | Proposé |

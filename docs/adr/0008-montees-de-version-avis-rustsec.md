@@ -1,6 +1,6 @@
 # ADR-0008 — Montées de version des dépendances touchées par les avis RUSTSEC
 
-- **Statut** : Accepté
+- **Statut** : Proposé
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0005 (rmcp), ADR-0006 (chrono)
@@ -39,3 +39,7 @@ Option 2.
 
 - les doublons de versions restent des avertissements de `cargo deny` (`multiple-versions = "warn"`) ;
 - `axum` 0.8 et `tower-http` 0.7 sont des dépendances du SDK, embarqué dans les apps cibles : leur plage de versions fait partie de ce qu'un intégrateur voit.
+
+## Notes
+
+Statut rétabli en « Proposé » : ce choix a été fait par l'agent de la release 1.0 et aucune trace de validation par le mainteneur n'existe dans le dépôt (décisions du propriétaire du 27/11/2026 : aucune ne le couvre explicitement). Il passera à « Accepté » à la validation du mainteneur.

@@ -1,6 +1,6 @@
 # ADR-0005 — Migrer rmcp 1.8 vers 3.12 (RUSTSEC-2026-0462)
 
-- **Statut** : Accepté
+- **Statut** : Proposé
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0008 (autres montées de version du même lot)
@@ -38,3 +38,7 @@ Option 3 (commit `001da2a`). Adaptations : `Content` devient `ContentBlock`, `Se
 
 - l'arbre de dépendances grossit (le lockfile gagne environ 250 lignes) ;
 - à chaque montée majeure de rmcp, vérifier que les schémas d'outils publiés ne changent pas.
+
+## Notes
+
+Statut rétabli en « Proposé » : ce choix a été fait par l'agent de la release 1.0 et aucune trace de validation par le mainteneur n'existe dans le dépôt (décisions du propriétaire du 27/11/2026 : aucune ne le couvre explicitement). Il passera à « Accepté » à la validation du mainteneur.

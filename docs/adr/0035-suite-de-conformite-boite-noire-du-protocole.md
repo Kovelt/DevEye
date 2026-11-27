@@ -1,6 +1,6 @@
 # ADR-0035 — Suite de conformité boîte noire du protocole
 
-- **Statut** : Accepté
+- **Statut** : Proposé
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (le wire protocol fait partie de la surface stable), ADR-0017 (version, `/devtools/info`, limites), ADR-0016 (masquage des secrets), ADR-0002 (licences), ADR-0036 (statut du shim .NET)
@@ -54,3 +54,5 @@ Option 3 : un crate `deveye-conformance` (membre du workspace, `publish = false`
 ## Notes
 
 Application : `deveye-conformance/` (`src/checks.rs` pour les vérifications), `docs/wire-protocol.md` §7, recette `just conformance`. Le crate est en version `0.2.0` comme les autres en attendant l'alignement des versions de la 1.0.
+
+Statut rétabli en « Proposé » : ce choix a été fait par l'agent de la release 1.0 et aucune trace de validation par le mainteneur n'existe dans le dépôt (décisions du propriétaire du 27/11/2026 : aucune ne le couvre explicitement). Il passera à « Accepté » à la validation du mainteneur. L'existence de la suite et sa capacité à viser n'importe quelle URL relèvent bien d'une décision du propriétaire ; les choix de détail (masquage des secrets, refus de `DEVEYE_PORT=0`) restent à valider.
