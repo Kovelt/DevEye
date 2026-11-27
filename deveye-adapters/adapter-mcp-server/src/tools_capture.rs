@@ -158,7 +158,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Assertion visuelle (golden) : capture le viewport (ou la région x/y/width/height) et le compare au PNG `baseline_path`. `baseline_path` est confiné : relatif à `DEVEYE_BASELINE_DIR` (défaut : répertoire courant du serveur), extension `.png`, sans `..` ni lien symbolique sortant ; un chemin hors de cette racine est refusé (`invalid_params`). Si le fichier n'existe pas, il est créé (`{ created: true }`). Sinon renvoie `{ ok, diff_ratio, threshold, same_dims, diff_pixels, compared_pixels, diff_bbox, ... }` ; `isError` si le ratio de pixels différents dépasse `threshold` (défaut 0.01) ou si les dimensions diffèrent. En cas d'échec à dimensions égales, une IMAGE DE DIFFÉRENCE suit le JSON (fond éclairci, pixels différents en rouge, zones ignorées teintées de bleu ; largeur bornée à 1280 px, `diff_image.scale` donne l'échelle) et `diff_bbox` {x, y, width, height} délimite précisément la zone qui diverge. `ignore_regions` [{x, y, width, height}] exclut des zones mouvantes (horloge, curseur) de la comparaison et du dénominateur de `diff_ratio` ; leurs coordonnées sont celles de l'image comparée (relatives à la région si elle est fournie). `update_baseline: true` remplace la baseline par la capture courante sans comparer (`{ updated: true }`) : à n'utiliser qu'après validation du changement (refusé si le fichier existant n'est pas un PNG lisible). Premier outil d'assertion déterministe disponible en kwin-eis (sans DOM/JS).",
+        description = "Assertion visuelle (golden) : capture le viewport (ou la région x/y/width/height) et le compare au PNG `baseline_path`. `baseline_path` est confiné : relatif à `DEVEYE_BASELINE_DIR` (défaut : répertoire courant du serveur), extension `.png`, sans `..` ni lien symbolique sortant ; un chemin hors de cette racine est refusé (`invalid_params`). Si le fichier n'existe pas, il est créé (`{ created: true }`). Sinon renvoie `{ ok, diff_ratio, threshold, same_dims, diff_pixels, compared_pixels, diff_bbox, ... }` ; `isError` si le ratio de pixels différents dépasse `threshold` (défaut 0.01) ou si les dimensions diffèrent, ou si `ignore_regions` couvre toute l'image (`reason: \"fully_masked\"`, aucun pixel comparé). En cas d'échec à dimensions égales, une IMAGE DE DIFFÉRENCE suit le JSON (fond éclairci, pixels différents en rouge, zones ignorées teintées de bleu ; largeur bornée à 1280 px, `diff_image.scale` donne l'échelle) et `diff_bbox` {x, y, width, height} délimite précisément la zone qui diverge. `ignore_regions` [{x, y, width, height}] exclut des zones mouvantes (horloge, curseur) de la comparaison et du dénominateur de `diff_ratio` ; leurs coordonnées sont celles de l'image comparée (relatives à la région si elle est fournie). `update_baseline: true` remplace la baseline par la capture courante sans comparer (`{ updated: true }`) : à n'utiliser qu'après validation du changement (refusé si le fichier existant n'est pas un PNG lisible). Premier outil d'assertion déterministe disponible en kwin-eis (sans DOM/JS).",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -227,7 +227,11 @@ impl DeveyeMcpServer {
         let baseline = tokio::fs::read(path).await.map_err(internal)?;
         let threshold = p.threshold.unwrap_or(0.01);
         let outcome = visual_diff(&baseline, &current, &masks).map_err(internal)?;
-        let ok = outcome.same_dims && outcome.diff_ratio <= threshold;
+        // Un masque qui couvre toute l'image ne compare rien : le ratio vaut
+        // 0 par construction, ce qui ne prouve rien — refus explicite plutôt
+        // qu'un succès vide.
+        let fully_masked = outcome.same_dims && outcome.compared_pixels == 0;
+        let ok = outcome.same_dims && !fully_masked && outcome.diff_ratio <= threshold;
         let mut payload = serde_json::json!({
             "ok": ok,
             "created": false,
@@ -238,6 +242,10 @@ impl DeveyeMcpServer {
             "current_dims": { "width": outcome.current_dims.0, "height": outcome.current_dims.1 },
             "baseline_path": p.baseline_path,
         });
+        if fully_masked {
+            payload["reason"] = "fully_masked".into();
+            payload["message"] = "ignore_regions couvre toute l'image : aucun pixel comparé, assertion non concluante".into();
+        }
         if outcome.same_dims {
             payload["diff_pixels"] = outcome.diff_pixels.into();
             payload["compared_pixels"] = outcome.compared_pixels.into();
@@ -263,9 +271,7 @@ impl DeveyeMcpServer {
         if let Some(enc) = &diff_image {
             payload["diff_image"] = enc.meta(None);
         }
-        blocks.push(ContentBlock::text(
-            serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string()),
-        ));
+        blocks.push(ContentBlock::text(to_json_text(&payload)));
         if let Some(enc) = &diff_image {
             blocks.push(enc.content());
         }

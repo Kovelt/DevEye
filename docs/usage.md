@@ -242,7 +242,7 @@ Capture un élément par sélecteur : le défile au centre (le défilement de la
 
 #### `assert_visual`
 
-Assertion visuelle (golden). Paramètres : `baseline_path` (obligatoire, **confiné** : relatif à `DEVEYE_BASELINE_DIR`, sinon au répertoire courant du serveur ; extension `.png`, sans `..` ni lien symbolique sortant ; un chemin absolu n'est accepté que dans cette racine, sinon `invalid_params` ; [ADR-0049](adr/0049-confinement-des-baselines-d-assert-visual.md)) ; `threshold` (ratio de pixels différents toléré, défaut `0.01`) ; `x`, `y`, `width`, `height` (région comparée, **les quatre ensemble**, sinon ignorés) ; `ignore_regions` (liste de `{ x, y, width, height }` exclus de la comparaison et du dénominateur) ; `update_baseline` (`true` : remplace la baseline sans comparer ; refusé si le fichier existant n'est pas un PNG lisible).
+Assertion visuelle (golden). Paramètres : `baseline_path` (obligatoire, **confiné** : relatif à `DEVEYE_BASELINE_DIR`, sinon au répertoire courant du serveur ; extension `.png`, sans `..` ni lien symbolique sortant ; un chemin absolu n'est accepté que dans cette racine, sinon `invalid_params` ; [ADR-0049](adr/0049-confinement-des-baselines-d-assert-visual.md)) ; `threshold` (ratio de pixels différents toléré, défaut `0.01`) ; `x`, `y`, `width`, `height` (région comparée, **les quatre ensemble**, sinon ignorés) ; `ignore_regions` (liste de `{ x, y, width, height }` exclus de la comparaison et du dénominateur ; un masque qui couvre toute l'image ne compare aucun pixel : le résultat est `ok: false` avec `reason: "fully_masked"`) ; `update_baseline` (`true` : remplace la baseline sans comparer ; refusé si le fichier existant n'est pas un PNG lisible).
 
 - baseline absente : elle est créée, `{ ok: true, created: true, baseline_path }` ;
 - `update_baseline: true` : `{ ok: true, created, updated: true, baseline_path }` ;
@@ -298,7 +298,7 @@ Défile de `dx`, `dy` pixels (`dy > 0` vers le bas, `dx > 0` vers la droite, dé
 
 #### `resize`
 
-Émule un viewport de `width` × `height` pixels CSS (1 à 16384). Émulation du moteur : la fenêtre de l'OS garde sa taille, le facteur d'échelle de l'écran est conservé, l'émulation persiste jusqu'au prochain `resize` ; `width` et `height` à 0 **ensemble** la retirent. CDP seulement.
+Émule un viewport de `width` × `height` pixels CSS (1 à 16384). Émulation du moteur : la fenêtre de l'OS garde sa taille, le facteur d'échelle de l'écran est conservé, l'émulation persiste jusqu'au prochain `resize` (dans la même session CDP : après une ré-attache de page, refaire `resize`, ADR-0054) ; `width` et `height` à 0 **ensemble** la retirent. CDP seulement.
 
 #### `navigate`
 
@@ -374,7 +374,7 @@ Draine les événements `tracing` accumulés depuis le dernier appel : `{ events
 
 #### `logs_wait`
 
-Long-poll : attend qu'un log arrive (de niveau ≥ `level_min` si fourni, parmi `trace`, `debug`, `info`, `warn`, `error`), jusqu'à `timeout_ms` (défaut 5000, plafond 30000). Retour `{ events, timed_out, truncated, total }` : `events` contient **tous** les logs drainés pendant l'attente. `limit` comme `logs_tail`. `level_min` inconnu : `invalid_params`.
+Long-poll : attend qu'un log arrive (de niveau ≥ `level_min` si fourni, parmi `trace`, `debug`, `info`, `warn`, `error`), jusqu'à `timeout_ms` (défaut 5000, plafond 30000). Retour `{ events, timed_out, truncated, total }` : `events` contient **tous** les logs drainés pendant l'attente. Si un sondage échoue après que des logs ont été drainés, ils sont renvoyés avec un champ `poll_error` (message) au lieu d'être perdus ; sans log collecté, l'erreur est renvoyée telle quelle. `limit` comme `logs_tail`. `level_min` inconnu : `invalid_params`.
 
 ### Attentes
 

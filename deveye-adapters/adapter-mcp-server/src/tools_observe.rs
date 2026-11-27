@@ -251,7 +251,7 @@ fn summarize_tree(tree: &serde_json::Value, max_nodes: usize, max_depth: usize) 
             || o.contains_key("children")
     });
     let Some(root) = tree.as_object().filter(|_| is_node_tree) else {
-        let raw = serde_json::to_string(tree).unwrap_or_else(|_| "null".to_string());
+        let raw = to_json_text(tree);
         return TreeSummary {
             kind: "json",
             text: clip(&raw, JSON_FALLBACK_CHARS),
@@ -386,8 +386,7 @@ impl DeveyeMcpServer {
                             .iter()
                             .take(STATE_MAX_KEYS)
                             .map(|(k, v)| {
-                                let raw =
-                                    serde_json::to_string(v).unwrap_or_else(|_| "null".to_string());
+                                let raw = to_json_text(v);
                                 (
                                     k.clone(),
                                     serde_json::Value::String(clip(&raw, PREVIEW_CHARS)),

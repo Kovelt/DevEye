@@ -47,7 +47,7 @@ impl DeveyeMcpServer {
             Ok(v) => v,
             Err(issue) => return issue,
         };
-        let serialized = serde_json::to_string(&tree.tree).unwrap_or_else(|_| "null".to_string());
+        let serialized = to_json_text(&tree.tree);
         if let Some(payload) = dom_size_guard(serialized.len()) {
             return Ok(json_error(&payload));
         }
@@ -94,9 +94,7 @@ impl DeveyeMcpServer {
             );
         }
         Ok(CallToolResult::success(vec![
-            ContentBlock::text(
-                serde_json::to_string(&filtered).unwrap_or_else(|_| "null".to_string()),
-            ),
+            ContentBlock::text(to_json_text(&filtered)),
             meta_block(&meta),
         ]))
     }
@@ -256,7 +254,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Long-poll des logs `tracing` : attend qu'un log arrive (ou, avec `level_min`, qu'un log de niveau >= `level_min` arrive), jusqu'à `timeout_ms` (défaut 5000, plafond 30000). Renvoie `{ events, timed_out, truncated, total }` : `events` contient TOUS les logs drainés pendant l'attente (aucun n'est perdu, y compris ceux sous `level_min`), `timed_out` vaut true si rien n'a satisfait le filtre. Contrairement à `wait_for_log` (qui consomme les logs qu'il ignore et ne les renvoie pas), `logs_wait` les rend à l'agent. `level_min` invalide : erreur `invalid_params`. Idéal juste après une action : « clique X, puis attends une erreur ».",
+        description = "Long-poll des logs `tracing` : attend qu'un log arrive (ou, avec `level_min`, qu'un log de niveau >= `level_min` arrive), jusqu'à `timeout_ms` (défaut 5000, plafond 30000). Renvoie `{ events, timed_out, truncated, total }` : `events` contient TOUS les logs drainés pendant l'attente (aucun n'est perdu, y compris ceux sous `level_min`), `timed_out` vaut true si rien n'a satisfait le filtre. Si un sondage échoue après que des logs ont été drainés, ceux-ci sont renvoyés avec `poll_error` (message) au lieu d'être perdus. Contrairement à `wait_for_log` (qui consomme les logs qu'il ignore et ne les renvoie pas), `logs_wait` les rend à l'agent. `level_min` invalide : erreur `invalid_params`. Idéal juste après une action : « clique X, puis attends une erreur ».",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -277,12 +275,24 @@ impl DeveyeMcpServer {
         let deadline = Instant::now() + budget;
 
         let mut collected = Vec::new();
+        let mut poll_error: Option<String> = None;
         let timed_out = loop {
             // Gate tenu le temps d'un seul sondage, relâché pendant la pause :
             // un long-poll ne doit pas bloquer les autres outils (cf. M1).
-            let batch = {
+            let polled = {
                 let _serial = self.gate.lock().await;
-                self.log_source.poll().await.map_err(port_to_mcp)?
+                self.log_source.poll().await
+            };
+            let batch = match polled {
+                Ok(batch) => batch,
+                // Le sondage draine : les lots déjà collectés ne sont plus
+                // dans le buffer source. On les rend avec l'erreur plutôt que
+                // de les perdre ; sans rien collecté, l'erreur est franche.
+                Err(e) if collected.is_empty() => return Err(port_to_mcp(e)),
+                Err(e) => {
+                    poll_error = Some(e.to_string());
+                    break false;
+                }
             };
             let matched = match level_min {
                 Some(level) => batch.iter().any(|e| e.level >= level),
@@ -301,12 +311,16 @@ impl DeveyeMcpServer {
 
         let limit = p.limit.unwrap_or(LOGS_TAIL_DEFAULT_LIMIT);
         let (events, truncated, total) = truncate_recent(collected, limit);
-        Ok(json_success(&serde_json::json!({
+        let mut payload = serde_json::json!({
             "events": events,
             "timed_out": timed_out,
             "truncated": truncated,
             "total": total,
-        })))
+        });
+        if let Some(error) = poll_error {
+            payload["poll_error"] = error.into();
+        }
+        Ok(json_success(&payload))
     }
 
     #[tool(

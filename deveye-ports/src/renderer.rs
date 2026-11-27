@@ -18,7 +18,10 @@ use crate::errors::PortResult;
 #[async_trait]
 pub trait Renderer: Send + Sync {
     /// Capture l'app dans l'état courant. Le PNG retourné représente le
-    /// viewport tel qu'un utilisateur le voit.
+    /// viewport tel qu'un utilisateur le voit. Les octets doivent être un PNG
+    /// **valide** : le serveur MCP en lit l'en-tête (dimensions) pour chaque
+    /// capture, et refuse en `internal_error` des octets qui n'en sont pas un
+    /// (ADR-0054).
     async fn screenshot(&self) -> PortResult<Screenshot>;
 
     /// Dimensions actuelles du viewport. Sert au routage des clics et à

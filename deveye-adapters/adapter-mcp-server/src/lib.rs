@@ -939,22 +939,32 @@ impl ServerHandler for DeveyeMcpServer {
     }
 }
 
+/// Sérialise `value` en texte JSON. Un échec (impossible pour les types
+/// utilisés ici) est rendu **visiblement** par un objet d'erreur, jamais par un
+/// `"null"` qui passerait pour un succès vide (ADR-0024).
+pub(crate) fn to_json_text<T: Serialize + ?Sized>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|e| {
+        serde_json::json!({
+            "ok": false,
+            "reason": "serialization_error",
+            "message": e.to_string(),
+        })
+        .to_string()
+    })
+}
+
 /// Serialise `value` en texte JSON et emballe dans un [`CallToolResult`] succes.
 /// La serialisation ne peut echouer sur les types utilises ici (tous implementent
-/// `Serialize` correctement) ; le fallback `"null"` est purement defensif. N14.
+/// `Serialize` correctement) ; un echec serait rendu visible (`to_json_text`). N14.
 fn json_success<T: Serialize>(value: &T) -> CallToolResult {
-    CallToolResult::success(vec![ContentBlock::text(
-        serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
-    )])
+    CallToolResult::success(vec![ContentBlock::text(to_json_text(value))])
 }
 
 /// Idem mais renvoie un [`CallToolResult`] erreur (`isError = true`).
 /// Utilise pour les echecs semantiques (element absent H1, timeout L13) qui ne
 /// doivent pas etre confondus avec un succes par le client MCP.
 fn json_error<T: Serialize>(value: &T) -> CallToolResult {
-    CallToolResult::error(vec![ContentBlock::text(
-        serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
-    )])
+    CallToolResult::error(vec![ContentBlock::text(to_json_text(value))])
 }
 
 /// E3 : sortie succes minimale des outils « fire-and-forget » (click,
@@ -2639,6 +2649,78 @@ mod dispatch_tests {
     }
 
     #[tokio::test]
+    async fn logs_wait_reports_truncated_when_events_exceed_the_limit() {
+        let server = server_with(|ports| {
+            ports.log_source = Arc::new(ScriptedLogs::new(vec![vec![
+                log(LogLevel::Info, "a"),
+                log(LogLevel::Info, "b"),
+                log(LogLevel::Info, "c"),
+            ]]));
+        });
+        let mut params = logs_wait_params(None, 2_000);
+        params.limit = Some(2);
+        let result = server
+            .logs_wait(Parameters(params))
+            .await
+            .expect("pas d'erreur protocolaire");
+        let body = body_json(&result);
+        assert_eq!(body["truncated"], true);
+        assert_eq!(body["total"], 3);
+        let messages: Vec<&str> = body["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["message"].as_str().unwrap())
+            .collect();
+        assert_eq!(messages, ["b", "c"], "les plus récents sont conservés");
+    }
+
+    /// Un lot puis une panne : le lot déjà drainé ne doit pas être perdu.
+    struct FailAfterFirst(Mutex<Option<Vec<LogEvent>>>);
+    #[async_trait]
+    impl LogSource for FailAfterFirst {
+        async fn poll(&self) -> PortResult<Vec<LogEvent>> {
+            match self.0.lock().unwrap().take() {
+                Some(batch) => Ok(batch),
+                None => Err(PortError::Log("source morte".to_string())),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn logs_wait_keeps_drained_events_when_a_later_poll_fails() {
+        let server = server_with(|ports| {
+            ports.log_source = Arc::new(FailAfterFirst(Mutex::new(Some(vec![log(
+                LogLevel::Info,
+                "deja drainé",
+            )]))));
+        });
+        let result = server
+            .logs_wait(Parameters(logs_wait_params(Some("error"), 5_000)))
+            .await
+            .expect("les logs drainés sont renvoyés, pas perdus");
+        let body = body_json(&result);
+        assert_eq!(body["events"][0]["message"], "deja drainé");
+        assert!(body["poll_error"]
+            .as_str()
+            .unwrap()
+            .contains("source morte"));
+        assert_eq!(body["timed_out"], false);
+    }
+
+    #[tokio::test]
+    async fn logs_wait_fails_plainly_when_the_first_poll_fails() {
+        let server = server_with(|ports| {
+            ports.log_source = Arc::new(FailAfterFirst(Mutex::new(None)));
+        });
+        let err = server
+            .logs_wait(Parameters(logs_wait_params(None, 100)))
+            .await
+            .expect_err("rien de collecté : erreur franche");
+        assert!(err.message.contains("source morte"));
+    }
+
+    #[tokio::test]
     async fn logs_wait_with_invalid_level_is_invalid_params() {
         let server = server_with(|_| {});
         let err = server
@@ -3269,6 +3351,36 @@ mod dispatch_tests {
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["compared_pixels"], 185);
         assert_eq!(payload["ignored_regions"], 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn assert_visual_fully_masked_comparison_is_inconclusive_not_ok() {
+        let path = scratch_path("fullmask.png");
+        let _ = std::fs::remove_file(&path);
+        let renderer = SwitchRenderer::new(png_with_pixels(20, 10, &[]));
+        let server = server_with(|p| p.renderer = Arc::new(renderer.clone()));
+        server
+            .assert_visual(Parameters(visual_params(&path)))
+            .await
+            .expect("création");
+        renderer.set(png_with_pixels(20, 10, &[(3, 4)]));
+        let mut params = visual_params(&path);
+        params.ignore_regions = Some(vec![Region {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 10,
+        }]);
+        let result = server
+            .assert_visual(Parameters(params))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        let payload = body_json(&result);
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["reason"], "fully_masked");
+        assert_eq!(payload["compared_pixels"], 0);
         let _ = std::fs::remove_file(&path);
     }
 
