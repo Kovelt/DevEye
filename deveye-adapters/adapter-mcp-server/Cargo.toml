@@ -26,5 +26,7 @@ rmcp = { version = "3.9", default-features = false, features = ["server", "macro
 schemars = "1"
 tracing = "0.1"
 # Decode/crop/encode PNG pour screenshot_region (recadrage) et assert_visual
-# (diff pixel). Version alignee sur le reste du workspace (screencap-*).
-image = { version = "0.25", default-features = false, features = ["png"] }
+# (diff pixel), redimensionnement des captures ; la feature `jpeg` ajoute
+# l'encodeur JPEG des captures et tire zune-core/zune-jpeg (ADR-0029).
+# Version alignee sur le reste du workspace (screencap-*).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
