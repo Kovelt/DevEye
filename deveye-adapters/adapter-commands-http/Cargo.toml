@@ -1,6 +1,6 @@
 [package]
 name = "adapter-commands-http"
-version = "1.0.0"
+version = "1.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,9 +14,9 @@ publish = false  # interne, non publié
 workspace = true
 
 [dependencies]
-deveye-core = { path = "../../deveye-core", version = "1.0.0" }
-deveye-ports = { path = "../../deveye-ports", version = "1.0.0" }
-deveye-sdk-client = { path = "../../deveye-sdk-client", version = "1.0.0" }
+deveye-core = { path = "../../deveye-core", version = "1.1.0" }
+deveye-ports = { path = "../../deveye-ports", version = "1.1.0" }
+deveye-sdk-client = { path = "../../deveye-sdk-client", version = "1.1.0" }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

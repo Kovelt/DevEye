@@ -129,3 +129,13 @@ Les ADR rédigés pendant la préparation de la 1.0 avec le statut « Proposé �
 | [0059](0059-politique-de-securite-et-conventions-de-contribution.md) | Politique de sécurité et conventions de contribution | Accepté |
 | [0060](0060-dependances-d-adapters-cache-de-ci-et-verrous-empoisonnes.md) | Dépendances d'adapters, cache de CI et verrous empoisonnés du SDK | Accepté |
 | [0061](0061-version-1-0-0-perimetre-de-la-sortie.md) | Version 1.0.0 : périmètre de la sortie | Accepté |
+| [0062](0062-schema-deveye-ui-1-de-la-route-ui-widgets.md) | Schéma `deveye.ui/1` de la route `ui.widgets` | Accepté |
+| [0063](0063-dependance-optionnelle-schemars-dans-deveye-core.md) | Dépendance optionnelle `schemars` dans `deveye-core` | Accepté |
+| [0064](0064-masquage-des-secrets-transversal-et-vecteurs-partages.md) | Masquage des secrets transversal et vecteurs partagés | Accepté |
+| [0065](0065-helper-sdk-ui-lecture-serveur-et-controles.md) | Helper SDK `ui`, lecture serveur de `ui.widgets` et contrôles | Accepté |
+| [0066](0066-push-de-logs-et-layer-du-sdk.md) | Push de logs et `layer()` du SDK | Accepté |
+| [0067](0067-sorties-structurees-mcp-palier-a.md) | Sorties structurées MCP : texte inchangé, `structuredContent` restreint, `ToolError` | Accepté |
+| [0068](0068-capacites-additives-et-version-du-protocole.md) | Capacités additives et version du protocole | Accepté |
+| [0069](0069-surface-experimentale-par-features-unstable.md) | Surface expérimentale par features `unstable-*` | Accepté |
+| [0070](0070-pas-de-feature-tracing-layer-en-1x.md) | Pas de feature `tracing-layer` en 1.x : compatibilité de `default-features = false` | Accepté |
+| [0071](0071-depot-heberge-dans-l-organisation-github-kovelt.md) | Dépôt hébergé dans l'organisation GitHub Kovelt | Accepté |

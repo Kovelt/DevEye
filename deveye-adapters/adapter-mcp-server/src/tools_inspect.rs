@@ -62,7 +62,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé). `keys` optionnel restreint la réponse à ce sous-ensemble de clés (les clés absentes du state sont silencieusement omises) — réduit le coût en tokens quand seules quelques clés intéressent l'agent ; absent ou vide, renvoie tout le state (comportement inchangé). Un second bloc texte JSON `{ captured_at, signals, note? }` date le snapshot et donne le nombre total de signaux publiés ; `signals: 0` (avec `note`) signifie « SDK joignable mais aucun signal publié », distinct d'un SDK injoignable : résultat isError structuré `{ reason: \"sdk_unavailable\", detail }`. Si la cible ne peut pas exposer de state, résultat isError structuré `{ reason: \"unsupported\" }` (E1).",
+        description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé). `keys` optionnel restreint la réponse à ce sous-ensemble de clés (les clés absentes du state sont silencieusement omises) — réduit le coût en tokens quand seules quelques clés intéressent l'agent ; absent ou vide, renvoie tout le state (comportement inchangé). Un second bloc texte JSON `{ captured_at, signals, note? }` date le snapshot et donne le nombre total de signaux publiés ; `signals: 0` (avec `note`) signifie « SDK joignable mais aucun signal publié », distinct d'un SDK injoignable : résultat isError structuré `{ reason: \"sdk_unavailable\", detail }`. Le résultat porte aussi `_meta` : `io.deveye/captured_at`, `io.deveye/entry_count` et `io.deveye/state_source` (`sdk` si un pont SDK est câblé, `aucun` en mode CDP seul, où le state est toujours vide). Si la cible ne peut pas exposer de state, résultat isError structuré `{ reason: \"unsupported\" }` (E1).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -93,14 +93,33 @@ impl DeveyeMcpServer {
                     .to_string(),
             );
         }
-        Ok(CallToolResult::success(vec![
+        let mut result = CallToolResult::success(vec![
             ContentBlock::text(to_json_text(&filtered)),
             meta_block(&meta),
-        ]))
+        ]);
+        // `_meta` (ADR-0067) : mêmes informations de fraîcheur et de provenance
+        // que le second bloc, lisibles sans parser du texte. `state_source` dit
+        // si un pont SDK est câblé : en mode CDP seul le dump est toujours vide,
+        // ce qui se distingue ainsi d'un SDK joignable qui n'a rien publié.
+        let source = if self.target_info.state {
+            "sdk"
+        } else {
+            "aucun"
+        };
+        result.meta = Some(responses::meta_of([
+            ("io.deveye/captured_at", serde_json::json!(dump.captured_at)),
+            ("io.deveye/state_source", serde_json::json!(source)),
+            (
+                "io.deveye/entry_count",
+                serde_json::json!(dump.entries.len()),
+            ),
+        ]));
+        Ok(result)
     }
 
     #[tool(
         description = "Assertion sur le state SDK : `expected` est un objet `{ clé: valeur }` ; chaque clé doit exister dans le state avec exactement cette valeur. Renvoie `{ ok, mismatches: [{ key, expected, actual }] }` ; `isError` si au moins une diverge. Symétrique de assert_selector, mais sur la logique métier. Si la cible ne peut pas exposer de state (pas de SDK), résultat isError structuré `{ reason: \"unsupported\" }` (E1) — distinct d'une divergence d'assertion ; SDK injoignable : `{ reason: \"sdk_unavailable\" }`.",
+        output_schema = output_schema::<StateAssertion>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -130,19 +149,19 @@ impl DeveyeMcpServer {
         for (key, want) in expected {
             let actual = dump.entries.get(key);
             if actual != Some(want) {
-                mismatches.push(serde_json::json!({
-                    "key": key,
-                    "expected": want,
-                    "actual": actual,
-                }));
+                mismatches.push(StateMismatch {
+                    actual: actual.cloned(),
+                    expected: want.clone(),
+                    key: key.clone(),
+                });
             }
         }
         let ok = mismatches.is_empty();
-        let payload = serde_json::json!({ "ok": ok, "mismatches": mismatches });
+        let payload = StateAssertion { mismatches, ok };
         if ok {
-            Ok(json_success(&payload))
+            Ok(structured_ok(&payload))
         } else {
-            Ok(json_error(&payload))
+            Ok(structured_failure(&payload))
         }
     }
 
@@ -183,6 +202,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Assertion sur un sélecteur CSS : présence, et optionnellement texte (`expected_text`) et/ou compte exact (`expected_count`). Renvoie `{ ok, selector, actual_count, actual_text? }`. `isError` si l'assertion échoue.",
+        output_schema = output_schema::<SelectorAssertion>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -216,16 +236,16 @@ impl DeveyeMcpServer {
             None => true,
         };
         let ok = selector_assertion_ok(actual_count, p.expected_count, text_ok);
-        let payload = serde_json::json!({
-            "ok": ok,
-            "selector": p.selector,
-            "actual_count": actual_count,
-            "actual_text": actual_text,
-        });
+        let payload = SelectorAssertion {
+            actual_count,
+            actual_text,
+            ok,
+            selector: p.selector,
+        };
         if ok {
-            Ok(json_success(&payload))
+            Ok(structured_ok(&payload))
         } else {
-            Ok(json_error(&payload))
+            Ok(structured_failure(&payload))
         }
     }
 
@@ -398,6 +418,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Décrit la cible active et ses capacités : `{ target, effective_backend, eyes, hands, eval_js, dom, state, console_errors, list_windows, window_geometry, focus_window, window_manager, clipboard, js_dependent_tools, server, notes }`. Permet de savoir d'avance quels outils répondront (ex. eval_js/dom = false en kwin-eis) sans tenter un appel pour le découvrir ; `effective_backend` dit si le repli du mode auto est actif ; `server` donne version, commit et versions des protocoles.",
+        output_schema = output_schema::<TargetInfo>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -412,7 +433,7 @@ impl DeveyeMcpServer {
         if let Some(probe) = &self.effective_backend {
             info.effective_backend = Some(probe());
         }
-        Ok(json_success(&info))
+        Ok(structured_ok(&info))
     }
 
     #[tool(
@@ -436,6 +457,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Renvoie la géométrie écran `{ x, y, width, height }` de la fenêtre dont le titre contient `title` (ou la fenêtre `--screencap-window` / `--window` par défaut) via KWin Scripting (kwin-eis) ou TranslateCoordinates (x11). Complète `find_element`/`eval_js` (indisponibles en kwin-eis, rendu natif) : convertit un rect DOM en coordonnées écran absolues pour un clic OS-level (EIS) hors du viewport webview. Nécessite KDE/Wayland ou la cible x11 ; sinon résultat isError structuré `{ reason: \"unsupported\" }` (E1).",
+        output_schema = output_schema::<deveye_core::WindowRect>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -453,11 +475,12 @@ impl DeveyeMcpServer {
             Ok(v) => v,
             Err(issue) => return issue,
         };
-        Ok(json_success(&rect))
+        Ok(structured_ok(&rect))
     }
 
     #[tool(
         description = "Donne le focus OS à une fenêtre (par sous-chaîne de titre, ou la fenêtre --screencap-window par défaut). Crucial en kwin-eis : KWin EIS route les événements vers la fenêtre active ; une notification ou un dialog système peut détourner les clics sans erreur. À appeler avant une séquence d'interaction. Renvoie `{ ok, title }`. Nécessite KDE/Wayland (KWin Scripting) ou la cible x11 ; sinon résultat isError structuré `{ reason: \"unsupported\" }` (E1).",
+        output_schema = output_schema::<FocusAck>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -478,9 +501,7 @@ impl DeveyeMcpServer {
             Ok(v) => v,
             Err(issue) => return issue,
         };
-        Ok(json_success(
-            &serde_json::json!({ "ok": true, "title": title }),
-        ))
+        Ok(structured_ok(&FocusAck { ok: true, title }))
     }
 
     #[tool(
@@ -503,6 +524,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Place du texte dans le presse-papiers de la session (OS-level via wl-copy sous Wayland). Combiné à key_combo Ctrl+V, permet de saisir du texte long/Unicode sans frappe touche par touche. Hors Wayland, résultat isError structuré `{ reason: \"unsupported\" }` (E1).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = true,

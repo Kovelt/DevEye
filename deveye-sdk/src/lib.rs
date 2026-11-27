@@ -20,6 +20,9 @@
 //!     deveye_sdk::install_tracing_layer(); // optionnel : capture logs tracing
 //! }
 //!
+//! // Sans abonné tracing (ou avec le sien : `registry().with(deveye_sdk::layer())`) :
+//! deveye_sdk::log(deveye_sdk::LogLevel::Info, "mon_app", "démarrage");
+//!
 //! // Plus tard, dans un `use_effect` Dioxus :
 //! deveye_sdk::set_state("page", serde_json::json!("Agenda"));
 //! ```
@@ -43,15 +46,17 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
-
 use deveye_core::CommandDescriptor;
+pub use deveye_core::LogLevel;
+use serde::{Deserialize, Serialize};
 
 mod redact;
 mod tracing_layer;
+pub mod ui;
 
-pub use tracing_layer::install_tracing_layer;
+pub use tracing_layer::{
+    install_tracing_layer, layer, try_install_tracing_layer, DeveyeLayer, TracingInstallError,
+};
 
 /// Port par défaut du SDK. Choix arbitraire mais facile à retenir.
 pub const DEFAULT_PORT: u16 = 31337;
@@ -188,34 +193,38 @@ struct Route {
 /// lu depuis des handlers async (son API nécessite `.await`).
 pub(crate) struct Registry {
     pub(crate) state: std::sync::RwLock<BTreeMap<String, serde_json::Value>>,
-    pub(crate) logs: Mutex<VecDeque<deveye_core::LogEvent>>,
+    /// Verrou `std` volontaire : les sections critiques sont minuscules et un
+    /// push doit être possible de n'importe quel fil, y compris hors de tout
+    /// runtime, où `blocking_lock` d'un verrou tokio paniquerait. Ne jamais le
+    /// tenir à travers un `.await`.
+    pub(crate) logs: std::sync::Mutex<VecDeque<deveye_core::LogEvent>>,
     /// Émetteur vers la pompe d'évaluation de l'app (None tant que l'app
     /// n'a pas appelé [`take_eval_requests`]).
     pub(crate) eval_tx: tokio::sync::RwLock<Option<tokio::sync::mpsc::Sender<EvalRequest>>>,
-    /// Émetteur du canal de drain des logs (N6) : posé une seule fois par
-    /// [`install_tracing_layer`][crate::install_tracing_layer]. La couche
-    /// tracing envoie chaque [`deveye_core::LogEvent`] via ce canal
-    /// (synchrone, non bloquant) ; une unique tâche tokio consomme le
-    /// récepteur et pousse dans `logs`, préservant l'ordre d'émission.
-    pub(crate) log_tx:
-        std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<deveye_core::LogEvent>>,
+    /// Vrai dès qu'une source de logs est armée (premier [`log`], [`layer`]
+    /// construit ou abonné installé) : seule condition pour annoncer la
+    /// capacité `logs` dans `/devtools/info`.
+    pub(crate) logs_enabled: std::sync::atomic::AtomicBool,
     /// Commandes logiques exposées par l'app via [`expose_route`], servies
     /// par `POST /devtools/command` et `GET /devtools/commands`.
     pub(crate) routes: std::sync::RwLock<HashMap<String, Route>>,
     /// Clés sensibles propres à l'app (normalisées), posées par [`init`] ;
     /// s'ajoutent aux clés par défaut au moment de servir state et logs.
     pub(crate) secret_keys: std::sync::RwLock<HashSet<String>>,
+    /// Arbre de widgets publié par [`ui::publish`] (ADR-0065).
+    pub(crate) ui: ui::UiSlot,
 }
 
 impl Default for Registry {
     fn default() -> Self {
         Self {
             state: std::sync::RwLock::new(BTreeMap::new()),
-            logs: Mutex::new(VecDeque::with_capacity(LOG_BUFFER_CAPACITY)),
+            logs: std::sync::Mutex::new(VecDeque::with_capacity(LOG_BUFFER_CAPACITY)),
             eval_tx: tokio::sync::RwLock::new(None),
-            log_tx: std::sync::OnceLock::new(),
+            logs_enabled: std::sync::atomic::AtomicBool::new(false),
             routes: std::sync::RwLock::new(HashMap::new()),
             secret_keys: std::sync::RwLock::new(HashSet::new()),
+            ui: Default::default(),
         }
     }
 }
@@ -351,6 +360,88 @@ async fn bind_or_report(addr: std::net::SocketAddr) -> Option<tokio::net::TcpLis
     }
 }
 
+/// Niveau minimal capturé. INFO par défaut : sans filtre, le buffer se noie
+/// dans le TRACE interne de Dioxus (diff de nœuds, signaux — vécu le 11 juin
+/// 2026 : 500+ événements de bruit au boot, zéro log applicatif visible).
+/// Surchargeable par `DEVEYE_LOG_LEVEL` (`trace` à `error`).
+pub(crate) fn min_level() -> LogLevel {
+    static LVL: std::sync::LazyLock<LogLevel> = std::sync::LazyLock::new(|| {
+        std::env::var("DEVEYE_LOG_LEVEL")
+            .ok()
+            .and_then(|s| parse_level(&s))
+            .unwrap_or(LogLevel::Info)
+    });
+    *LVL
+}
+
+/// Même vocabulaire que `tracing::Level` (noms sans casse ou chiffres 1 à 5),
+/// pour ne pas changer le sens d'une variable d'environnement existante.
+fn parse_level(raw: &str) -> Option<LogLevel> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "trace" | "5" => Some(LogLevel::Trace),
+        "debug" | "4" => Some(LogLevel::Debug),
+        "info" | "3" => Some(LogLevel::Info),
+        "warn" | "2" => Some(LogLevel::Warn),
+        "error" | "1" => Some(LogLevel::Error),
+        _ => None,
+    }
+}
+
+/// Empile un événement dans le buffer (drop-oldest à [`LOG_BUFFER_CAPACITY`]).
+/// Synchrone, sans runtime : appelable de n'importe quel fil.
+pub(crate) fn push_log(event: deveye_core::LogEvent) {
+    let mut guard = REGISTRY
+        .logs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if guard.len() >= LOG_BUFFER_CAPACITY {
+        guard.pop_front();
+    }
+    guard.push_back(event);
+}
+
+/// Arme la capacité `logs` annoncée par `/devtools/info`.
+pub(crate) fn enable_logs() {
+    REGISTRY
+        .logs_enabled
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Pousse un événement de log directement dans le buffer servi par
+/// `GET /devtools/logs/poll`, **sans abonné `tracing`** : pour un hôte qui
+/// possède déjà son système de logs ou n'en a aucun.
+///
+/// Filtré par `DEVEYE_LOG_LEVEL` (défaut `info`), horodaté en UTC, abandon des
+/// plus anciens au-delà de [`LOG_BUFFER_CAPACITY`]. Le premier appel annonce la
+/// capacité `logs`. En build **release**, no-op, comme [`init`].
+///
+/// Le texte du message n'est jamais masqué : seuls les champs structurés le
+/// sont ([`log_with`]).
+pub fn log(level: LogLevel, target: &str, message: impl Into<String>) {
+    log_with(level, target, message, serde_json::Value::Null);
+}
+
+/// Comme [`log`], avec des champs structurés (objet JSON) soumis au masquage
+/// par clés sensibles.
+pub fn log_with(
+    level: LogLevel,
+    target: &str,
+    message: impl Into<String>,
+    fields: serde_json::Value,
+) {
+    #[cfg(not(debug_assertions))]
+    let _ = (level, target, message, fields);
+
+    #[cfg(debug_assertions)]
+    {
+        enable_logs();
+        if level < min_level() {
+            return;
+        }
+        push_log(deveye_core::LogEvent::new(level, target, message).with_fields(fields));
+    }
+}
+
 /// Pose une entrée nommée dans le registry. Écrase la valeur précédente
 /// si la clé existe déjà.
 ///
@@ -401,9 +492,12 @@ async fn logs_poll_handler(State(registry): State<Arc<Registry>>, headers: Heade
         )
             .into_response();
     }
-    let mut guard = registry.logs.lock().await;
-    let mut events: Vec<_> = guard.drain(..).collect();
-    drop(guard);
+    let mut events: Vec<_> = registry
+        .logs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .drain(..)
+        .collect();
     let extra = registry
         .secret_keys
         .read()
@@ -600,11 +694,18 @@ async fn info_handler(State(registry): State<Arc<Registry>>) -> impl IntoRespons
     // `redaction` : le masquage des clés sensibles est toujours actif ici ; une
     // implémentation tierce ne l'annonce que si elle masque réellement.
     let mut capabilities = vec!["state", "commands", "info", "redaction"];
-    if registry.log_tx.get().is_some() {
+    if registry
+        .logs_enabled
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
         capabilities.push("logs");
     }
     if registry.eval_tx.read().await.is_some() {
         capabilities.push("eval");
+    }
+    #[cfg(debug_assertions)]
+    if registry.ui.is_enabled() {
+        capabilities.push(ui::CAPABILITY);
     }
     (
         StatusCode::OK,
@@ -706,6 +807,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_level_accepts_names_digits_and_trims() {
+        for (raw, expected) in [
+            ("trace", LogLevel::Trace),
+            ("DEBUG", LogLevel::Debug),
+            (" Info ", LogLevel::Info),
+            ("warn", LogLevel::Warn),
+            ("ERROR", LogLevel::Error),
+            ("5", LogLevel::Trace),
+            ("4", LogLevel::Debug),
+            ("3", LogLevel::Info),
+            ("2", LogLevel::Warn),
+            ("1", LogLevel::Error),
+        ] {
+            assert_eq!(parse_level(raw), Some(expected), "{raw}");
+        }
+        for raw in ["", "verbose", "0", "6", "warning"] {
+            assert_eq!(parse_level(raw), None, "{raw}");
+        }
+    }
+
+    #[test]
     fn default_config_uses_31337_without_env() {
         let config = Config::with_port(DEFAULT_PORT);
         assert_eq!(config.port, 31337);
@@ -764,6 +886,27 @@ mod tests {
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"entries\""));
         assert!(json.contains("\"page\":\"Agenda\""));
+    }
+
+    #[test]
+    fn shared_host_vectors_agree_with_the_guard() {
+        // Vecteurs partagés (ADR-0064) ; absents d'une archive crates.io : ignoré.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/schemas/shared-vectors-1.json");
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let vectors: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let guard = &vectors["host_guard"];
+        let with_port = |host: &str| host.replace("{port}", "31337");
+        for host in guard["accepted"].as_array().unwrap() {
+            let host = with_port(host.as_str().unwrap());
+            assert!(host_is_local(&host), "devrait accepter {host:?}");
+        }
+        for host in guard["rejected"].as_array().unwrap() {
+            let host = with_port(host.as_str().unwrap());
+            assert!(!host_is_local(&host), "devrait rejeter {host:?}");
+        }
     }
 
     #[test]

@@ -49,7 +49,7 @@ Versions suivies : la dernière version 1.x publiée reçoit les correctifs de s
 
 - **Pas d'authentification.** Tout processus de la machine peut parler au SDK sur la boucle locale. Le modèle suppose un poste de développement de confiance, pas une machine partagée.
 - **`eval_js` évalue du code arbitraire** dans la page ou l'app. C'est sa fonction. Le résultat n'est **pas** filtré.
-- **Le masquage des secrets est un filet, pas une garantie.** Il agit par **noms de clés** dans l'état et les champs structurés des logs. Il ne couvre pas : le résultat d'`eval_js`, les valeurs de retour de `invoke_command` (dont la réponse de la route `ui.widgets`), le texte libre des messages de log, le contenu des champs de log formatés par `Debug` (`?valeur`), ni un secret rangé sous un nom de clé neutre non déclaré. Ne publiez pas de secret dans l'état ([ADR-0016](docs/adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md)).
+- **Le masquage des secrets est un filet, pas une garantie.** Il agit par **noms de clés** dans l'état et les champs structurés des logs. Il ne couvre pas : le résultat d'`eval_js`, les valeurs de retour de `invoke_command` (hors réponse de la route `ui.widgets`, masquée en seconde ligne par le serveur), le texte libre des messages de log, le contenu des champs de log formatés par `Debug` (`?valeur`), ni un secret rangé sous un nom de clé neutre non déclaré. Ne publiez pas de secret dans l'état ([ADR-0016](docs/adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md)).
 - **Captures et logs vont à l'agent.** Ce que l'écran affiche, ce que le DOM contient et ce que les logs disent peut contenir des données sensibles ; ils sont envoyés au client MCP, donc au modèle. Ne pilotez pas une app qui affiche des secrets réels.
 - **Les entrées sont réelles.** Les cibles `kwin-eis` (vrais événements dans la fenêtre active) et `x11` (sur un serveur privé) injectent de vrais événements : un focus détourné (notification, dialogue) peut envoyer des frappes à une autre fenêtre. Le réglage `KWIN_SCREENSHOT_NO_PERMISSION_CHECKS` de la cible `kwin-eis` désactive un contrôle de KWin pour la session : ne le posez que sur une machine de développement de confiance.
 - **`clipboard_get` lit le vrai presse-papiers** de l'utilisateur (mots de passe copiés, données d'autres applications), hors de tout masquage. L'outil est annoté « monde ouvert » pour que le client demande confirmation ; un client qui l'approuve automatiquement expose ce contenu au modèle ([ADR-0050](docs/adr/0050-clipboard-get-monde-ouvert-et-limites-de-la-classification.md)).
@@ -60,7 +60,7 @@ Versions suivies : la dernière version 1.x publiée reçoit les correctifs de s
 ## Bonnes pratiques pour l'intégrateur
 
 1. Déclarer le SDK en dépendance **optionnelle** derrière une feature de développement, et garder `#[cfg(debug_assertions)]` autour de `init` ([docs/integration.md](docs/integration.md)).
-2. Ne jamais publier de secret via `set_state`, une commande ou `ui.widgets` ; déclarer les clés propres à l'app avec `Config::with_secret_keys`.
+2. Ne jamais publier de secret via `set_state` ou une commande ; déclarer secret tout champ de saisie sensible publié par `deveye_sdk::ui` (sa valeur n'est alors jamais publiée, et `dom` la masque en seconde ligne) ; déclarer les clés propres à l'app avec `Config::with_secret_keys`.
 3. Un `DEVEYE_PORT` par app quand plusieurs tournent ; garder `--sdk-url` sur `127.0.0.1`.
 4. Lancer la cible `x11` sur un `Xvfb` dédié, jamais sur un serveur que vous utilisez.
 5. Garder `deveye-server` et les bibliothèques à jour.

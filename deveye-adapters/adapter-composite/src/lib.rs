@@ -16,13 +16,19 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use tracing::debug;
+use tracing::{debug, warn};
 
-use deveye_core::{ConsoleError, DomTree, LogLevel, StateDump, WaitOutcome, WaitPredicate};
+use deveye_core::{
+    ConsoleError, DomTree, LogLevel, StateDump, UiReadError, UiTree, WaitOutcome, WaitPredicate,
+};
 use deveye_ports::{
     AppInspector, CommandRouter, ConsoleErrorSource, JsEvaluator, LogSource, PortError, PortResult,
     Renderer, WaitCondition,
 };
+
+mod ui_mask;
+
+pub use ui_mask::mask_route_value;
 
 // ── ConsoleErrorSource ────────────────────────────────────────────────────────
 
@@ -540,9 +546,14 @@ impl AppInspector for CompositeInspector {
 
 // ── RouteDomInspector ─────────────────────────────────────────────────────────
 
-/// Route par defaut de [`RouteDomInspector`] : l'application cible la sert avec
-/// la description JSON de ses widgets (`deveye_sdk::expose_route("ui.widgets", ..)`).
+/// Route par défaut de [`RouteDomInspector`] : l'application cible la sert avec
+/// la description JSON de ses widgets (`deveye_sdk::ui::publish`, ou
+/// `deveye_sdk::expose_route("ui.widgets", ..)` pour un handler maison).
 pub const DEFAULT_DOM_ROUTE: &str = "ui.widgets";
+
+/// Âge (ms) au-delà duquel un arbre `deveye.ui/1` est signalé comme périmé : l'UI
+/// de l'app est gelée, ou aucune frame n'a été rendue depuis.
+const UI_STALE_AFTER_MS: u64 = 2_000;
 
 /// `AppInspector` dont le « DOM » est la reponse d'une route de commande de
 /// l'application cible.
@@ -553,10 +564,15 @@ pub const DEFAULT_DOM_ROUTE: &str = "ui.widgets";
 /// au port `AppInspector`, donc a l'outil MCP `dom`.
 ///
 /// Contrat :
-/// - requete : `router.invoke(route, {})` ;
-/// - reponse : la valeur JSON du handler, **sans interpretation ni
-///   transformation**, enveloppee telle quelle dans [`DomTree`] (le schema des
-///   noeuds appartient a l'application) ;
+/// - requête : `router.invoke(route, {})` ; le payload reste `{}` (un handler
+///   tiers qui valide son payload strictement casserait sur un champ inconnu,
+///   ADR-0065) ;
+/// - réponse : la valeur JSON du handler, **sans conversion** (un arbre au format
+///   legacy reste au format legacy), enveloppée dans [`DomTree`], **après
+///   masquage des secrets** : la valeur d'un widget secret est remplacée par
+///   `<secret>` et les valeurs structurées passent par le masquage par clés
+///   (ADR-0064) ; une réponse qui n'est pas un arbre de widgets est laissée
+///   intacte ; [`ui_tree`](Self::ui_tree) rend la même vue sous forme typée ;
 /// - cout : rien tant que `dom` n'est pas appele (aucune surveillance en
 ///   arriere-plan) ; l'outil `dom` refuse les arbres > ~100 Ko.
 ///
@@ -585,22 +601,110 @@ impl RouteDomInspector {
     pub fn route(&self) -> &str {
         &self.route
     }
+
+    /// Lit l'arbre au schéma `deveye.ui/1` (ou au format legacy, converti par
+    /// [`UiTree::from_value`]), secrets masqués.
+    ///
+    /// # Errors
+    /// Route indisponible (comme [`AppInspector::dom_snapshot`]) ou réponse qui
+    /// n'est pas un arbre de widgets lisible ([`PortError::Inspect`]).
+    pub async fn ui_tree(&self) -> PortResult<UiTree> {
+        let raw = self.fetch_masked().await?;
+        UiTree::from_value(&raw).map_err(|e| {
+            let why = match e {
+                UiReadError::UnsupportedSchema(schema) => {
+                    format!("schema `{schema}` non supporte par ce serveur")
+                }
+                other => other.to_string(),
+            };
+            PortError::Inspect(format!(
+                "la route `{}` ne sert pas un arbre de widgets lisible : {why}",
+                self.route
+            ))
+        })
+    }
+
+    /// Réponse brute de la route, secrets masqués.
+    async fn fetch_masked(&self) -> PortResult<serde_json::Value> {
+        let mut tree = match self.router.invoke(&self.route, serde_json::json!({})).await {
+            Ok(tree) => tree,
+            // Route inconnue / handler en echec : erreur d'inspection explicite
+            // (l'application ne sert pas l'arbre), pas une panne de liaison.
+            Err(PortError::Route { route, message }) => {
+                return Err(PortError::Inspect(format!(
+                    "route `{route}` indisponible : {message} — l'application cible \
+                     expose-t-elle l'arbre d'interface via deveye-sdk ?"
+                )))
+            }
+            // Network (SDK injoignable) et le reste : tels quels.
+            Err(other) => return Err(other),
+        };
+        mask_route_value(&mut tree);
+        warn_if_stale(&tree);
+        Ok(tree)
+    }
+}
+
+/// Décorateur de [`CommandRouter`] qui applique le masquage des secrets à la
+/// réponse de la route des widgets (`route`), pour que `invoke_command` ne
+/// contourne pas le masquage de `dom` (ADR-0064). Les autres routes passent
+/// telles quelles.
+pub struct MaskingCommandRouter {
+    inner: Arc<dyn CommandRouter>,
+    route: String,
+}
+
+impl MaskingCommandRouter {
+    /// Enveloppe `inner` ; `route` est la route dont la réponse est masquée.
+    pub fn new(inner: Arc<dyn CommandRouter>, route: impl Into<String>) -> Self {
+        Self {
+            inner,
+            route: route.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl CommandRouter for MaskingCommandRouter {
+    async fn invoke(&self, name: &str, args: serde_json::Value) -> PortResult<serde_json::Value> {
+        let mut value = self.inner.invoke(name, args).await?;
+        if name == self.route {
+            mask_route_value(&mut value);
+        }
+        Ok(value)
+    }
+
+    async fn list(&self) -> PortResult<Vec<deveye_core::CommandDescriptor>> {
+        self.inner.list().await
+    }
+}
+
+/// Âge d'un arbre `deveye.ui/1` s'il dépasse [`UI_STALE_AFTER_MS`].
+fn stale_age_ms(tree: &serde_json::Value, now_ms: u64) -> Option<u64> {
+    let published = tree
+        .get("published_at_ms")
+        .and_then(serde_json::Value::as_u64)?;
+    let age = now_ms.saturating_sub(published);
+    (age > UI_STALE_AFTER_MS).then_some(age)
+}
+
+/// Signale un arbre `deveye.ui/1` plus vieux que [`UI_STALE_AFTER_MS`].
+fn warn_if_stale(tree: &serde_json::Value) {
+    let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return;
+    };
+    if let Some(age) = stale_age_ms(tree, now.as_millis() as u64) {
+        warn!(
+            age_ms = age,
+            "arbre ui.widgets périmé : l'UI de l'app est peut-être gelée ou n'a pas rendu de frame"
+        );
+    }
 }
 
 #[async_trait]
 impl AppInspector for RouteDomInspector {
     async fn dom_snapshot(&self) -> PortResult<DomTree> {
-        match self.router.invoke(&self.route, serde_json::json!({})).await {
-            Ok(tree) => Ok(DomTree::new(tree)),
-            // Route inconnue / handler en echec : erreur d'inspection explicite
-            // (l'application ne sert pas l'arbre), pas une panne de liaison.
-            Err(PortError::Route { route, message }) => Err(PortError::Inspect(format!(
-                "route `{route}` indisponible : {message} — l'application cible \
-                 expose-t-elle l'arbre d'interface via deveye-sdk ?"
-            ))),
-            // Network (SDK injoignable) et le reste : tels quels.
-            Err(other) => Err(other),
-        }
+        self.fetch_masked().await.map(DomTree::new)
     }
 
     async fn state_snapshot(&self) -> PortResult<StateDump> {
@@ -620,6 +724,16 @@ mod tests {
     use async_trait::async_trait;
     use deveye_core::{ConsoleLevel, LogEvent, Screenshot, Size};
     use deveye_ports::PortError;
+
+    #[test]
+    fn stale_age_only_reported_past_threshold() {
+        let tree = |ms: u64| serde_json::json!({ "published_at_ms": ms });
+        let now = 100_000;
+        assert_eq!(stale_age_ms(&tree(now - 10_000), now), Some(10_000));
+        assert_eq!(stale_age_ms(&tree(now - UI_STALE_AFTER_MS), now), None);
+        assert_eq!(stale_age_ms(&tree(now + 5), now), None);
+        assert_eq!(stale_age_ms(&serde_json::json!({}), now), None);
+    }
 
     // Timestamp RFC3339 fixe utilise dans les donnees de test (evite le besoin
     // d'une dependance directe a `chrono` dans le binaire).
@@ -1778,6 +1892,27 @@ mod tests {
         );
     }
 
+    /// `invoke_command` passe par le même masquage que `dom` pour la route des
+    /// widgets ; les autres routes ne sont pas touchées.
+    #[tokio::test]
+    async fn masking_router_masks_only_the_widgets_route() {
+        let tree = serde_json::json!({ "widgets": [{ "role": "password", "value": "hunter2" }] });
+        let masked =
+            MaskingCommandRouter::new(FakeRouter::replying(Ok(tree.clone())), "ui.widgets");
+        let out = masked
+            .invoke("ui.widgets", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(out["widgets"][0]["value"], "<secret>");
+
+        let other = MaskingCommandRouter::new(FakeRouter::replying(Ok(tree.clone())), "ui.widgets");
+        let out = other
+            .invoke("app.other", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(out, tree);
+    }
+
     /// Route vide -> route par defaut ; route personnalisee respectee.
     #[tokio::test]
     async fn route_dom_default_and_custom_route() {
@@ -1854,5 +1989,80 @@ mod tests {
         };
         assert_eq!(both.dom_snapshot().await.unwrap().tree["n"], 1);
         assert_eq!(both.state_snapshot().await.unwrap().entries["k"], 1);
+    }
+
+    /// La valeur d'un champ secret n'atteint ni `dom` ni la lecture typee, quelle
+    /// que soit la forme de l'arbre ; le reste est inchange.
+    #[tokio::test]
+    async fn route_dom_masks_secret_values_in_raw_and_typed_views() {
+        let tree = serde_json::json!({
+            "schema": "deveye.ui/1",
+            "window": { "width": 400, "height": 300 },
+            "widgets": [
+                { "id": "login", "role": "textbox", "value": "alice", "rect": [0, 0, 100, 20] },
+                { "id": "pw", "role": "password", "value": "hunter2", "rect": [0, 30, 100, 20] },
+                { "id": "pin", "role": "textbox", "value": "1234", "rect": [0, 60, 100, 20],
+                  "state": { "secret": true } },
+            ],
+        });
+        let raw = RouteDomInspector::new(FakeRouter::replying(Ok(tree.clone())), "ui.widgets")
+            .dom_snapshot()
+            .await
+            .expect("dom ok")
+            .tree;
+        assert_eq!(raw["widgets"][0]["value"], "alice");
+        assert_eq!(raw["widgets"][1]["value"], "<secret>");
+        assert_eq!(raw["widgets"][2]["value"], "<secret>");
+        assert!(!raw.to_string().contains("hunter2"));
+        assert_eq!(raw["window"], tree["window"]);
+
+        let typed = RouteDomInspector::new(FakeRouter::replying(Ok(tree)), "ui.widgets")
+            .ui_tree()
+            .await
+            .expect("arbre lisible");
+        assert_eq!(typed.widgets.len(), 3);
+        assert_eq!(
+            typed.widget("pw").and_then(|w| w.value.clone()),
+            Some(serde_json::json!("<secret>"))
+        );
+    }
+
+    /// Le format legacy est servi tel quel par `dom` (secrets masqués) et lu par
+    /// `ui_tree` ; une réponse sans widgets est une erreur d'inspection claire.
+    #[tokio::test]
+    async fn route_dom_legacy_stays_legacy_and_unreadable_trees_are_reported() {
+        let legacy = serde_json::json!({
+            "window": { "width": 100, "height": 50 },
+            "widgets": [{ "kind": "password", "value": "x", "rect": [0, 0, 10, 10] }],
+        });
+        let dom = RouteDomInspector::new(FakeRouter::replying(Ok(legacy.clone())), "ui.widgets")
+            .dom_snapshot()
+            .await
+            .unwrap();
+        assert!(dom.tree.get("schema").is_none());
+        assert_eq!(dom.tree["widgets"][0]["value"], "<secret>");
+        let typed = RouteDomInspector::new(FakeRouter::replying(Ok(legacy)), "ui.widgets")
+            .ui_tree()
+            .await
+            .unwrap();
+        assert!(typed.widgets[0].id_ephemeral);
+
+        let err = RouteDomInspector::new(
+            FakeRouter::replying(Ok(serde_json::json!({ "error": "aucun arbre publie" }))),
+            "ui.widgets",
+        )
+        .ui_tree()
+        .await
+        .unwrap_err();
+        assert!(matches!(err, PortError::Inspect(_)), "{err:?}");
+
+        let err = RouteDomInspector::new(
+            FakeRouter::replying(Ok(serde_json::json!({ "schema": "deveye.ui/9" }))),
+            "ui.widgets",
+        )
+        .ui_tree()
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("deveye.ui/9"), "{err}");
     }
 }

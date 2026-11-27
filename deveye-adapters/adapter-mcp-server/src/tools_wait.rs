@@ -6,10 +6,23 @@
 
 use super::*;
 
+/// Issue de `wait_for_selector` / `wait_for_text` : `found` est vrai si le
+/// prédicat a été satisfait ; un délai écoulé est un échec sémantique (L13,
+/// `isError`) dont la charge garde le même type.
+fn found_result(found: bool, elapsed_ms: u64) -> CallToolResult {
+    let outcome = FoundOutcome { elapsed_ms, found };
+    if found {
+        structured_ok(&outcome)
+    } else {
+        structured_failure(&outcome)
+    }
+}
+
 #[tool_router(router = wait_router, vis = "pub(crate)")]
 impl DeveyeMcpServer {
     #[tool(
         description = "Attend qu'un sélecteur CSS soit présent (et optionnellement visible) dans le DOM. Renvoie `{ found, elapsed_ms }` (`isError` si non satisfait). Avec `negate=true`, attend au contraire que l'élément DISPARAISSE (wait_for_gone : spinner/toast/modale) — `found=true` signifie alors « disparu ». Évite tout sleep arbitraire. Défaut 5000 ms, plafond 30000.",
+        output_schema = output_schema::<FoundOutcome>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -41,23 +54,12 @@ impl DeveyeMcpServer {
             .wait_until(predicate, budget)
             .await
             .map_err(port_to_mcp)?;
-        if outcome.satisfied {
-            Ok(json_success(&serde_json::json!({
-                "found": true,
-                "elapsed_ms": outcome.elapsed_ms,
-            })))
-        } else {
-            // L13 : timeout = echec semantique => isError=true (coherent avec
-            // wait_condition).
-            Ok(json_error(&serde_json::json!({
-                "found": false,
-                "elapsed_ms": outcome.elapsed_ms,
-            })))
-        }
+        Ok(found_result(outcome.satisfied, outcome.elapsed_ms))
     }
 
     #[tool(
         description = "Attend qu'un texte apparaisse dans l'innerText/textContent d'un élément (`selector`, ou le document entier si absent). Renvoie `{ found, elapsed_ms }` (`isError` si non satisfait). Avec `visible=true`, l'élément doit en plus avoir un rect non vide. Indisponible en kwin-eis (pas de DOM) — le prédicat `text-content` sous-jacent ne s'y satisfait jamais. Défaut 5000 ms, plafond 30000.",
+        output_schema = output_schema::<FoundOutcome>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -84,21 +86,12 @@ impl DeveyeMcpServer {
             .wait_until(predicate, budget)
             .await
             .map_err(port_to_mcp)?;
-        if outcome.satisfied {
-            Ok(json_success(&serde_json::json!({
-                "found": true,
-                "elapsed_ms": outcome.elapsed_ms,
-            })))
-        } else {
-            Ok(json_error(&serde_json::json!({
-                "found": false,
-                "elapsed_ms": outcome.elapsed_ms,
-            })))
-        }
+        Ok(found_result(outcome.satisfied, outcome.elapsed_ms))
     }
 
     #[tool(
         description = "Attend qu'un prédicat soit satisfait, ou que le timeout expire. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si non satisfait. Prédicats : dom-selector (présence CSS), state-key (valeur dans le state SDK), screenshot-stable (stabilité visuelle pendant threshold_ms), target-alive (attend qu'une cible crashée redevienne joignable, cf. wait_target_alive), text-content (attend un texte dans le DOM, cf. wait_for_text). Évite tout sleep arbitraire.",
+        output_schema = output_schema::<deveye_core::WaitOutcome>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -127,15 +120,12 @@ impl DeveyeMcpServer {
             .wait_until(predicate, timeout)
             .await
             .map_err(port_to_mcp)?;
-        if outcome.satisfied {
-            Ok(json_success(&outcome))
-        } else {
-            Ok(json_error(&outcome))
-        }
+        Ok(outcome_result(&outcome))
     }
 
     #[tool(
         description = "Attend qu'un log applicatif (tracing du SDK) dont le message contient `contains` (et de niveau >= `level_min`) soit émis. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Observe les logs Rust bufferisés, hors de portée d'eval_js. NB : pendant l'attente le buffer de logs est drainé (les logs non concernés sont consommés, non renvoyés : utiliser `logs_wait` pour les récupérer). `level_min` invalide : erreur `invalid_params`. Défaut 5000 ms, plafond 60000.",
+        output_schema = output_schema::<deveye_core::WaitOutcome>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -163,15 +153,12 @@ impl DeveyeMcpServer {
             .wait_until(predicate, budget)
             .await
             .map_err(port_to_mcp)?;
-        if outcome.satisfied {
-            Ok(json_success(&outcome))
-        } else {
-            Ok(json_error(&outcome))
-        }
+        Ok(outcome_result(&outcome))
     }
 
     #[tool(
         description = "Comme la stabilité visuelle, mais sur une RÉGION (x, y, width, height) seulement : attend que cette zone se stabilise (deux captures identiques à `threshold_ms` d'intervalle). Ignore un curseur clignotant / une horloge ailleurs. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Défaut threshold 300 (plafond 2000), timeout 5000 (plafond 60000).",
+        output_schema = output_schema::<deveye_core::WaitOutcome>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -200,15 +187,12 @@ impl DeveyeMcpServer {
             .wait_until(predicate, budget)
             .await
             .map_err(port_to_mcp)?;
-        if outcome.satisfied {
-            Ok(json_success(&outcome))
-        } else {
-            Ok(json_error(&outcome))
-        }
+        Ok(outcome_result(&outcome))
     }
 
     #[tool(
         description = "Attend que le CANAL D'INTERACTION de la cible redevienne joignable après un crash/redémarrage (sonde eval_js ; sur kwin-eis, sans JS, retombe sur la capture d'écran). Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Raccourci du prédicat target-alive (wait_condition) — seul paramètre : le timeout. Défaut 5000 ms, plafond 60000.",
+        output_schema = output_schema::<deveye_core::WaitOutcome>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -230,15 +214,12 @@ impl DeveyeMcpServer {
             .wait_until(WaitPredicate::TargetAlive {}, budget)
             .await
             .map_err(port_to_mcp)?;
-        if outcome.satisfied {
-            Ok(json_success(&outcome))
-        } else {
-            Ok(json_error(&outcome))
-        }
+        Ok(outcome_result(&outcome))
     }
 
     #[tool(
         description = "Attend que l'app cible publie un state non vide (signe qu'elle est prête), au plus `timeout_ms` ms (poll toutes les 200 ms, plafond 60000). Évite les captures/clics prématurés juste après le lancement. `isError` si le délai expire.",
+        output_schema = output_schema::<ReadyOutcome>(),
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -279,16 +260,16 @@ impl DeveyeMcpServer {
                 }
             };
             if ready {
-                return Ok(json_success(&serde_json::json!({
-                    "ready": true,
-                    "waited_ms": start.elapsed().as_millis() as u64,
-                })));
+                return Ok(structured_ok(&ReadyOutcome {
+                    ready: true,
+                    waited_ms: start.elapsed().as_millis() as u64,
+                }));
             }
             if start.elapsed() >= budget {
-                return Ok(json_error(&serde_json::json!({
-                    "ready": false,
-                    "waited_ms": start.elapsed().as_millis() as u64,
-                })));
+                return Ok(structured_failure(&ReadyOutcome {
+                    ready: false,
+                    waited_ms: start.elapsed().as_millis() as u64,
+                }));
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }

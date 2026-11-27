@@ -36,7 +36,9 @@ La garde refuse, sans option pour la lever : un display non local, un numéro < 
 
 `--sdk-url` désigne le SDK que l'app embarque, s'il y en a un ([integration.md](../integration.md)) : il fournit `state`, `logs_*`, `list_commands`, `invoke_command`.
 
-Pas de JavaScript : `eval_js`, `find_element`, `click_selector`, `click_text` répondent `unsupported`. `wait_for_selector` et `wait_for_text` n'ont pas de réponse `unsupported` immédiate : sans DOM, ils attendent le `timeout_ms` complet puis répondent `found: false` (ne pas en conclure que l'élément est absent) ; utiliser `wait_condition` avec un prédicat sans DOM (`state-key`, `screenshot-stable`, `screenshot-region-stable`, `log-message`, `target-alive`). Le « DOM » est la **réponse de la route `ui.widgets`** de l'app, renvoyée sans interprétation par l'outil `dom` :
+Pas de JavaScript : `eval_js`, `find_element`, `click_selector`, `click_text` répondent `unsupported`. `wait_for_selector` et `wait_for_text` n'ont pas de réponse `unsupported` immédiate : sans DOM, ils attendent le `timeout_ms` complet puis répondent `found: false` (ne pas en conclure que l'élément est absent) ; utiliser `wait_condition` avec un prédicat sans DOM (`state-key`, `screenshot-stable`, `screenshot-region-stable`, `log-message`, `target-alive`). Le « DOM » est la **réponse de la route `ui.widgets`** de l'app, renvoyée par l'outil `dom` sans interprétation, hormis le masquage des valeurs secrètes (`<secret>`, [ADR-0064](../adr/0064-masquage-des-secrets-transversal-et-vecteurs-partages.md)) :
+
+Pour une app Rust, le helper `deveye_sdk::ui` publie l'arbre `deveye.ui/1` : à chaque frame, `if deveye_sdk::ui::is_observed() { deveye_sdk::ui::publish(tree) }`, où `tree` vient de `deveye_sdk::ui::builder(largeur, hauteur)` (rects en pixels de capture, c'est-à-dire points logiques × `pixels_per_point` sous egui). Pas de widget secret : sa valeur n'est jamais publiée. Une app non Rust, ou qui préfère un handler maison, expose la route à la main :
 
 ```rust
 #[cfg(all(debug_assertions, feature = "deveye"))]
@@ -48,7 +50,7 @@ deveye_sdk::expose_route("ui.widgets", "Arbre des widgets", |_payload| {
 });
 ```
 
-Le schéma des nœuds appartient à l'app ; il est conseillé d'y mettre des rects en coordonnées de fenêtre : l'agent clique alors au centre avec `click`. Sans cette route, `dom` répond une erreur d'inspection explicite. Au-delà de ~100 Ko, `dom` refuse l'arbre.
+Le contrat recommandé est le schéma `deveye.ui/1` ([usage.md](../usage.md), section « Route `ui.widgets` ») ; l'exemple ci-dessus est le format d'avant le schéma, toujours lu par le serveur. Il est conseillé d'y mettre des rects en coordonnées de fenêtre : l'agent clique alors au centre avec `click`. Sans cette route, `dom` répond une erreur d'inspection explicite. Au-delà de ~100 Ko, `dom` refuse l'arbre.
 
 ## 4. Limites de la capture
 

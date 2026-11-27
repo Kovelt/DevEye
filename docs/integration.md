@@ -23,7 +23,7 @@ deveye = ["dep:deveye-sdk"]
 
 ```toml
 [dependencies]
-deveye-sdk = { git = "https://github.com/Morgan-Voltz/DevEye", tag = "v1.0.0", optional = true }
+deveye-sdk = { git = "https://github.com/Kovelt/DevEye", tag = "v1.0.0", optional = true }
 ```
 
 Lancer l'app avec la feature : `cargo run --features deveye` (ou `dx serve --features deveye` pour une app Dioxus).
@@ -47,7 +47,12 @@ fn main() {
 - **Double garde.** `#[cfg(debug_assertions)]` est la voie normale ; en plus, `deveye_sdk::init` est un **no-op en build release** : même si l'intégrateur oublie la garde, aucun port ne s'ouvre ([ADR-0042](adr/0042-posture-dev-only-du-sdk.md)). Le dépôt le prouve sur binaire réel (`just release-noop`).
 - **Appelable avant le runtime de l'app.** Le SDK a son propre runtime tokio ; `init` s'appelle sans contexte asynchrone, y compris avant `dioxus::launch`.
 - **Port.** `Config::default()` lit `DEVEYE_PORT` (entier de 1 à 65535) sinon écoute `31337`, **toujours sur `127.0.0.1`**. Plusieurs apps en même temps : un `DEVEYE_PORT` par app et le `--sdk-url` correspondant. Un port déjà pris est signalé par un `warn` `tracing` et laisse l'app tourner.
-- **Logs.** `install_tracing_layer()` pose le subscriber `tracing` **global** (un seul est possible par process) : l'appeler avant que l'app n'installe le sien, ou ne pas l'appeler si l'app en a déjà un. Niveau minimal capturé : `info`, surchargeable par `DEVEYE_LOG_LEVEL` (`trace` à `error`) ; tampon de 1 024 événements, les plus anciens étant abandonnés.
+- **Logs.** Trois voies, au choix ([ADR-0066](adr/0066-push-de-logs-et-layer-du-sdk.md)) :
+  - `deveye_sdk::try_install_tracing_layer()` pose le subscriber `tracing` **global** (un seul par process) et renvoie une erreur si un autre existe déjà ; `install_tracing_layer()` est la variante qui ignore cet échec ;
+  - si l'app possède déjà son subscriber : `tracing_subscriber::registry().with(deveye_sdk::layer())` (couplage à `tracing-subscriber` 0.3, toujours disponible, sans feature : ADR-0070) ;
+  - sans `tracing` du tout : `deveye_sdk::log(LogLevel::Info, "cible", "message")` ou `log_with(…, champs_json)`, appelables de n'importe quel fil, avec ou sans runtime.
+
+  Niveau minimal capturé : `info`, surchargeable par `DEVEYE_LOG_LEVEL` (`trace` à `error`) ; tampon de 1 024 événements, les plus anciens étant abandonnés. Les champs structurés sont masqués par clés sensibles, pas le texte du message. Les trois voies sont des no-op en build release.
 
 ## 3. Publier l'état
 
@@ -109,7 +114,7 @@ Le SDK remplace par `<secret>` la valeur des clés JSON sensibles dans l'état e
 deveye_sdk::init(deveye_sdk::Config::default().with_secret_keys(["iban", "numero_carte"]));
 ```
 
-**Ce filet n'est pas une garantie.** Il n'agit pas sur : le résultat d'`eval_js`, les valeurs de retour de `invoke_command` (dont la route `ui.widgets`), le texte libre des messages de log, ni un secret rangé sous un nom de clé neutre non déclaré. Ne pas publier de secret dans l'état ; ne pas supposer qu'une valeur est masquée parce qu'elle « ressemble » à un secret. Détail : [wire-protocol.md](wire-protocol.md) §2.4, [ADR-0016](adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md), [SECURITY.md](../SECURITY.md).
+**Ce filet n'est pas une garantie.** Il n'agit pas sur : le résultat d'`eval_js`, les valeurs de retour de `invoke_command`, le texte libre des messages de log, ni un secret rangé sous un nom de clé neutre non déclaré. Ne pas publier de secret dans l'état ; ne pas supposer qu'une valeur est masquée parce qu'elle « ressemble » à un secret. La route `ui.widgets` est traitée à part : le helper `deveye_sdk::ui` ne publie jamais la valeur d'un widget secret et `dom` la masque en seconde ligne ([ADR-0064](adr/0064-masquage-des-secrets-transversal-et-vecteurs-partages.md)). Détail : [wire-protocol.md](wire-protocol.md) §2.4, [ADR-0016](adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md), [SECURITY.md](../SECURITY.md).
 
 Corps de requête limités à 1 Mio. Aucun jeton d'authentification : tout processus de la machine peut parler au SDK ; le SDK est conçu pour un poste de développement de confiance.
 

@@ -57,3 +57,5 @@ Application : `deveye-server/src/{doctor,doctor_probe,main,cli}.rs`, `deveye-ser
 Limite assumée : le `selftest` envisagé au plan (autodiagnostic qui lance un serveur) n'est pas livré en 1.0 : `doctor` reste en lecture seule et ne lance rien. Voir [ADR-0057](0057-doctor-display-optionnel-et-sondes-limitees-a-la-cible.md) pour les précisions de la revue (`--display`, sondes).
 
 > Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.
+
+**Complément (1.1)** : la sonde facultative `ui.widgets` invoque une route fournie par l'app ; `doctor` n'est plus strictement passif sur le SDK. Voir [ADR-0065](0065-helper-sdk-ui-lecture-serveur-et-controles.md).

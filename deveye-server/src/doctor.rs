@@ -158,6 +158,9 @@ pub(crate) struct Probes {
     pub(crate) x11: Option<X11Probe>,
     pub(crate) sdk: ServiceProbe<SdkView>,
     pub(crate) cdp: ServiceProbe<CdpView>,
+    /// Réponse de la route `ui.widgets`, lue seulement quand le SDK annonce la
+    /// capacité `ui.widgets/1` (`None` : non annoncée, rien n'est sondé).
+    pub(crate) ui: Option<Result<serde_json::Value, String>>,
     /// Version du wire protocol que ce binaire implémente.
     pub(crate) supported_protocol: String,
 }
@@ -202,9 +205,10 @@ enum Item {
     XDisplay,
     Sdk,
     Cdp,
+    Ui,
 }
 
-const ALL_ITEMS: [Item; 8] = [
+const ALL_ITEMS: [Item; 9] = [
     Item::Session,
     Item::Kwin,
     Item::KwinPermissions,
@@ -213,6 +217,7 @@ const ALL_ITEMS: [Item; 8] = [
     Item::XDisplay,
     Item::Sdk,
     Item::Cdp,
+    Item::Ui,
 ];
 
 /// Table des prérequis par cible. `kde_wayland` : sous une autre session, les
@@ -220,6 +225,14 @@ const ALL_ITEMS: [Item; 8] = [
 fn need(target: TargetMode, item: Item, kde_wayland: bool) -> Need {
     use Item::*;
     use TargetMode as T;
+    // Contrôle facultatif : il n'a de sens que pour une cible qui parle au SDK, et
+    // seul un SDK qui annonce `ui.widgets/1` y est soumis.
+    if item == Ui {
+        return match need(target, Sdk, kde_wayland) {
+            Need::NotApplicable => Need::NotApplicable,
+            _ => Need::Useful,
+        };
+    }
     match (target, item) {
         (T::KwinEis, Session | Kwin | KwinPermissions | Eis) => Need::Required,
         (T::KwinEis, Sdk) => Need::Useful,
@@ -356,6 +369,7 @@ fn item_name(item: Item) -> &'static str {
         Item::XDisplay => "Display X privé",
         Item::Sdk => "SDK de l'app cible",
         Item::Cdp => "CDP (navigateur)",
+        Item::Ui => "Arbre ui.widgets (facultatif)",
     }
 }
 
@@ -449,6 +463,7 @@ fn decide(item: Item, n: Need, p: &Probes) -> (Level, String, Option<String>) {
         },
         Item::Sdk => decide_sdk(n, p),
         Item::Cdp => decide_cdp(n, p),
+        Item::Ui => decide_ui(n, p),
     }
 }
 
@@ -520,6 +535,104 @@ fn decide_sdk(n: Need, p: &Probes) -> (Level, String, Option<String>) {
     }
 }
 
+/// Nombre maximal d'écarts détaillés dans le rapport.
+const UI_ISSUES_SHOWN: usize = 5;
+
+/// Contrôle facultatif de la route `ui.widgets` : sans objet tant que le SDK ne
+/// l'annonce pas. Un arbre publié qui viole le contrat est un **échec** (c'est
+/// l'app qui promet `ui.widgets/1`) ; une route illisible ou vide, un simple
+/// avertissement.
+fn decide_ui(n: Need, p: &Probes) -> (Level, String, Option<String>) {
+    use deveye_core::UiTree;
+    let _ = n;
+    let Some(read) = &p.ui else {
+        return (
+            Level::Skip,
+            "route ui.widgets non annoncée par le SDK (capacité ui.widgets/1 absente) : \
+             contrôle facultatif"
+                .to_string(),
+            None,
+        );
+    };
+    let value = match read {
+        Ok(value) => value,
+        Err(why) => {
+            return problem(
+                Need::Useful,
+                format!("route annoncée mais illisible ({why})"),
+                "vérifier que l'app répond à la route ui.widgets (POST /devtools/command)",
+            )
+        }
+    };
+    if value.get("schema").is_none() && value.get("error").is_some_and(|e| e.is_string()) {
+        return problem(
+            Need::Useful,
+            "route annoncée, mais aucun arbre n'est publié",
+            "l'app doit appeler deveye_sdk::ui::publish quand ui::is_observed() est vrai",
+        );
+    }
+    let tree = match UiTree::from_value(value) {
+        Ok(tree) => tree,
+        Err(e) => {
+            return problem(
+                Need::Required,
+                format!("réponse de ui.widgets illisible : {e}"),
+                "servir un arbre au schéma deveye.ui/1 (docs/schemas/ui-widgets-1.json)",
+            )
+        }
+    };
+    let issues = tree.validate();
+    let errors: Vec<String> = issues
+        .iter()
+        .filter(|i| i.is_error())
+        .map(ToString::to_string)
+        .collect();
+    if !errors.is_empty() {
+        let shown = errors
+            .iter()
+            .take(UI_ISSUES_SHOWN)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ; ");
+        let more = errors.len().saturating_sub(UI_ISSUES_SHOWN);
+        let tail = if more > 0 {
+            format!(" (+ {more} autre(s))")
+        } else {
+            String::new()
+        };
+        return problem(
+            Need::Required,
+            format!(
+                "arbre ui.widgets invalide, {} écart(s) : {shown}{tail}",
+                errors.len()
+            ),
+            "corriger l'arbre publié : ids uniques et non vides, parents connus, focus connu",
+        );
+    }
+    let warnings = issues.len();
+    if warnings > 0 {
+        return problem(
+            Need::Useful,
+            format!(
+                "arbre de {} widget(s), {warnings} avertissement(s) : {}",
+                tree.widgets.len(),
+                issues
+                    .iter()
+                    .take(UI_ISSUES_SHOWN)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ; ")
+            ),
+            "un widget hors fenêtre est légitime pour un contenu défilant ; sinon vérifier les rects (pixels de capture)",
+        );
+    }
+    ok(format!(
+        "arbre {} : {} widget(s), ids uniques, parents valides",
+        tree.schema,
+        tree.widgets.len()
+    ))
+}
+
 fn decide_cdp(n: Need, p: &Probes) -> (Level, String, Option<String>) {
     let svc = &p.cdp;
     match &svc.answer {
@@ -584,6 +697,7 @@ mod tests {
             x11: None,
             sdk: sdk_up("1.0", &["state", "commands", "info", "eval"]),
             cdp: cdp_down(),
+            ui: None,
             supported_protocol: "1.0".into(),
         }
     }
@@ -864,5 +978,77 @@ mod tests {
             host_port("https://exemple.test"),
             Some(("exemple.test".into(), 443))
         );
+    }
+
+    fn ui_probes(tree: serde_json::Value) -> Probes {
+        let mut p = base();
+        p.sdk = sdk_up(
+            "1.0",
+            &["state", "commands", "info", "eval", "ui.widgets/1"],
+        );
+        p.ui = Some(Ok(tree));
+        p
+    }
+
+    const UI_NAME: &str = "Arbre ui.widgets (facultatif)";
+
+    #[test]
+    fn ui_check_is_skipped_without_the_capability() {
+        let r = evaluate(TargetMode::Sdk, &base());
+        assert_eq!(level_of(&r, UI_NAME), Level::Skip);
+        let r = evaluate(TargetMode::KwinEis, &base());
+        assert_eq!(level_of(&r, UI_NAME), Level::Skip);
+    }
+
+    #[test]
+    fn ui_check_passes_on_a_valid_tree() {
+        let tree = serde_json::json!({
+            "schema": "deveye.ui/1",
+            "window": { "width": 100, "height": 100 },
+            "widgets": [
+                { "id": "a", "role": "button", "rect": [0, 0, 10, 10] },
+                { "id": "b", "parent": "a", "role": "label", "rect": [1, 1, 5, 5] }
+            ]
+        });
+        let r = evaluate(TargetMode::Sdk, &ui_probes(tree));
+        assert_eq!(level_of(&r, UI_NAME), Level::Ok, "{}", r.render("t"));
+    }
+
+    #[test]
+    fn ui_check_fails_on_duplicate_ids_and_lists_them() {
+        let tree = serde_json::json!({
+            "schema": "deveye.ui/1",
+            "window": { "width": 100, "height": 100 },
+            "widgets": [
+                { "id": "dup", "role": "button", "rect": [0, 0, 10, 10] },
+                { "id": "dup", "role": "label", "rect": [1, 1, 5, 5] }
+            ]
+        });
+        let r = evaluate(TargetMode::Sdk, &ui_probes(tree));
+        assert_eq!(level_of(&r, UI_NAME), Level::Fail);
+        assert_eq!(r.exit_code(), 1);
+        let text = r.render("t");
+        assert!(text.contains("dup"), "{text}");
+    }
+
+    #[test]
+    fn ui_check_warns_without_a_published_tree_or_on_a_read_failure() {
+        let empty = serde_json::json!({ "error": "aucun arbre publié" });
+        let r = evaluate(TargetMode::Sdk, &ui_probes(empty));
+        assert_eq!(level_of(&r, UI_NAME), Level::Warn);
+        let mut p = ui_probes(serde_json::json!({}));
+        p.ui = Some(Err("statut 500".into()));
+        let r = evaluate(TargetMode::Sdk, &p);
+        assert_eq!(level_of(&r, UI_NAME), Level::Warn);
+        assert_eq!(r.exit_code(), 0);
+    }
+
+    #[test]
+    fn ui_check_fails_on_an_unsupported_schema() {
+        let r = evaluate(
+            TargetMode::Sdk,
+            &ui_probes(serde_json::json!({ "schema": "deveye.ui/9", "widgets": [] })),
+        );
+        assert_eq!(level_of(&r, UI_NAME), Level::Fail);
     }
 }

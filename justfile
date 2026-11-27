@@ -79,3 +79,7 @@ sync-deveye *args:
 
 # Pipeline CI en local, hors msrv, semver et sbom (outils a part ou tag de reference requis)
 ci: fmt-check lint test doc x11 e2e deny conformance release-noop license-boundary packages
+
+# Régénère docs/schemas/ui-widgets-1.json depuis les types de deveye-core
+schema:
+    DEVEYE_UPDATE_SCHEMA=1 cargo test -p deveye-core --features schema --test ui_schema

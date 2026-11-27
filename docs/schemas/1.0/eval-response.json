@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/1.0/eval-response.json",
+  "$id": "https://github.com/Kovelt/DevEye/docs/schemas/1.0/eval-response.json",
   "title": "DevEye 1.0 : réponse de POST /devtools/eval",
   "description": "200 : exactement un des deux champs (value peut valoir null). 500, 503 et 504 : error seul.",
   "type": "object",

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/1.0/command-request.json",
+  "$id": "https://github.com/Kovelt/DevEye/docs/schemas/1.0/command-request.json",
   "title": "DevEye 1.0 : requête de POST /devtools/command",
   "description": "Invocation d'une commande logique enregistrée par l'app. payload absent équivaut à null.",
   "type": "object",

@@ -297,11 +297,27 @@ fn mcp_stdio_session_on_private_xvfb() {
         );
     }
 
-    // target_info décrit bien la cible x11 câblée.
+    // Sorties structurées (ADR-0067) : `outputSchema` pour les outils du palier
+    // A seulement ; la capture et l'évaluation JS restent en texte/image seuls.
+    let has_schema = |name: &str| {
+        tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("outil `{name}` absent"))
+            .get("outputSchema")
+            .is_some_and(Value::is_object)
+    };
+    assert!(has_schema("target_info") && has_schema("click"));
+    assert!(!has_schema("screenshot") && !has_schema("eval_js") && !has_schema("dom"));
+
+    // target_info décrit bien la cible x11 câblée ; son texte est inchangé et
+    // `structuredContent` en porte le même JSON.
     let info = mcp.call_tool("target_info", json!({}));
     assert_ne!(info["isError"], json!(true), "{info}");
     let text = info["content"][0]["text"].as_str().expect("texte JSON");
+    let info_structured = info["structuredContent"].clone();
     let info: Value = serde_json::from_str(text).expect("target_info est du JSON");
+    assert_eq!(info_structured, info, "structuredContent diverge du texte");
     assert_eq!(info["target"], "x11", "{info}");
     assert_eq!(info["eval_js"], json!(false), "{info}");
     assert_eq!(info["list_windows"], json!(true), "{info}");
@@ -348,5 +364,34 @@ fn mcp_stdio_session_on_private_xvfb() {
     let _ = fixture.button_presses();
     let click = mcp.call_tool("click", json!({ "x": 120, "y": 90 }));
     assert_ne!(click["isError"], json!(true), "{click}");
+    assert_eq!(click["content"][0]["text"], r#"{"ok":true}"#, "{click}");
+    assert_eq!(click["structuredContent"], json!({ "ok": true }), "{click}");
     assert_eq!(fixture.button_presses(), vec![(1, 120, 90)]);
+}
+
+/// Un client resté sur la révision 2024-11-05 (antérieure à `structuredContent`)
+/// négocie sa révision et lit le texte historique des outils sans erreur.
+#[test]
+#[ignore = "démarre un Xvfb privé et le binaire deveye-server"]
+fn mcp_stdio_session_with_the_2024_11_05_revision() {
+    let xvfb = Xvfb::start();
+    let _fixture = Fixture::new(&xvfb.display());
+    let mut mcp = McpSession::start(&xvfb.display());
+
+    let init = mcp.request(
+        "initialize",
+        json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "deveye-e2e-legacy", "version": "0" }
+        }),
+    );
+    assert_eq!(init["protocolVersion"], "2024-11-05", "{init}");
+    mcp.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+
+    let info = mcp.call_tool("target_info", json!({}));
+    assert_ne!(info["isError"], json!(true), "{info}");
+    let text = info["content"][0]["text"].as_str().expect("texte JSON");
+    let parsed: Value = serde_json::from_str(text).expect("target_info est du JSON");
+    assert_eq!(parsed["target"], "x11", "{parsed}");
 }

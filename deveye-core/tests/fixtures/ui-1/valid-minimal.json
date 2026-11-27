@@ -1,0 +1,7 @@
+{
+  "schema": "deveye.ui/1",
+  "window": { "width": 800, "height": 600 },
+  "widgets": [
+    { "id": "ok", "role": "button", "label": "Valider", "rect": [40, 120, 96, 28] }
+  ]
+}

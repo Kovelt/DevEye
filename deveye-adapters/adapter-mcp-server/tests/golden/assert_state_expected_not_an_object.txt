@@ -1,0 +1,3 @@
+isError: true
+--- bloc 0
+{"ok":false,"reason":"`expected` doit etre un objet JSON { cle: valeur }"}

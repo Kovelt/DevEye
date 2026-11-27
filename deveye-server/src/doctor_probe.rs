@@ -20,6 +20,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 const KWIN_PROCESSES: [&str; 2] = ["kwin_wayland", "kwin_x11"];
 const KWIN_VARIABLE: &str = "KWIN_SCREENSHOT_NO_PERMISSION_CHECKS";
+/// Capacité du SDK qui l'engage à servir la route `ui.widgets`.
+const UI_CAPABILITY: &str = "ui.widgets/1";
 const EIS_PATH: &str = "/org/kde/KWin/EIS/RemoteDesktop";
 
 /// Collecte tous les faits utiles à `target`.
@@ -52,6 +54,12 @@ pub(crate) async fn gather(args: &Args) -> Probes {
             }
         }
     );
+    let ui = match &sdk.answer {
+        Ok(view) if view.capabilities.iter().any(|c| c == UI_CAPABILITY) => {
+            Some(probe_ui(&args.sdk_url).await)
+        }
+        _ => None,
+    };
     Probes {
         session_type,
         desktop,
@@ -61,6 +69,7 @@ pub(crate) async fn gather(args: &Args) -> Probes {
         x11: args.display.as_deref().map(probe_x11),
         sdk,
         cdp,
+        ui,
         supported_protocol: deveye_sdk_client::SUPPORTED_PROTOCOL_VERSION.to_string(),
     }
 }
@@ -263,6 +272,24 @@ async fn probe_sdk(url: &str) -> ServiceProbe<SdkView> {
         tcp_open,
         answer,
     }
+}
+
+/// Lit la route `ui.widgets` (payload `{}`). Lecture seule : la route décrit
+/// l'interface, elle n'agit pas sur elle (ADR-0065).
+async fn probe_ui(url: &str) -> Result<serde_json::Value, String> {
+    let http = deveye_sdk_client::client();
+    let request = http
+        .post(format!("{}/devtools/command", url.trim_end_matches('/')))
+        .json(&serde_json::json!({ "route": "ui.widgets", "payload": {} }))
+        .send();
+    let response = tokio::time::timeout(PROBE_TIMEOUT, request)
+        .await
+        .map_err(|_| "délai dépassé".to_string())?
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("statut {}", response.status()));
+    }
+    response.json().await.map_err(|e| e.to_string())
 }
 
 /// `GET /json/version` du navigateur CDP.

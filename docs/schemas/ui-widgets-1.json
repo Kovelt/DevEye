@@ -1,0 +1,227 @@
+{
+  "$defs": {
+    "UiRole": {
+      "description": "Rôle d'un widget : chaîne ouverte, vocabulaire recommandé calqué sur ARIA.\n\nUne valeur hors vocabulaire est conservée telle quelle (un agent la lit comme\ndu texte). Vocabulaire recommandé : `window`, `panel`, `button`, `checkbox`,\n`radio`, `textbox`, `password`, `slider`, `knob`, `list`, `listitem`, `tab`,\n`menu`, `menuitem`, `label`, `image`, `scrollarea` (constantes `UiRole::*`).",
+      "type": "string"
+    },
+    "UiScroll": {
+      "description": "Position de défilement d'un conteneur, dans l'unité de l'app.",
+      "properties": {
+        "max_x": {
+          "format": "double",
+          "type": "number"
+        },
+        "max_y": {
+          "format": "double",
+          "type": "number"
+        },
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "max_x",
+        "max_y"
+      ],
+      "type": "object"
+    },
+    "UiState": {
+      "description": "État d'un widget. Les champs absents prennent leur valeur par défaut\n(`enabled` et `visible` à vrai, le reste à faux ou inconnu).",
+      "properties": {
+        "checked": {
+          "description": "Tri-état : absent si le widget n'est pas cochable.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "expanded": {
+          "description": "Absent si le widget n'est pas dépliable.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "focused": {
+          "type": "boolean"
+        },
+        "readonly": {
+          "type": "boolean"
+        },
+        "secret": {
+          "description": "Valeur sensible : jamais publiée par le builder. Les lecteurs\n([`UiTree::from_value`], [`UiTree::from_legacy`]) conservent la valeur reçue :\nle masquage à la lecture est à la charge de l'appelant\n([`UiTree::mask_secret_values`]) ; le serveur DevEye l'applique en amont.",
+          "type": "boolean"
+        },
+        "selected": {
+          "type": "boolean"
+        },
+        "visible": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "UiWidget": {
+      "description": "Un widget de l'interface.",
+      "properties": {
+        "actions": {
+          "description": "Actions acceptées : `click`, `double_click`, `type`, `toggle`, `scroll`,\n`set_value`…",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "clipped": {
+          "description": "Vrai si le widget est partiellement rogné par un conteneur défilant.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Identifiant stable fourni par l'app (unique dans l'arbre).",
+          "type": "string"
+        },
+        "id_ephemeral": {
+          "description": "Vrai si `id` a été synthétisé par le lecteur du format legacy : il change\navec l'ordre des widgets et ne doit pas servir de référence durable.",
+          "type": "boolean"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent": {
+          "description": "Identifiant du parent ; absent pour une racine.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rect": {
+          "description": "`[x, y, largeur, hauteur]` : voir la documentation du module.",
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "role": {
+          "$ref": "#/$defs/UiRole"
+        },
+        "scroll": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UiScroll"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/UiState",
+          "default": {}
+        },
+        "value": {
+          "description": "Valeur courante (texte d'un champ, position d'un curseur…). Jamais\npubliée pour un widget secret."
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "rect"
+      ],
+      "type": "object"
+    },
+    "UiWindow": {
+      "description": "Fenêtre observée : dimensions dans le repère des rects.",
+      "properties": {
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scale": {
+          "description": "Facteur d'échelle de l'app (points logiques vers pixels) : informatif.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/Kovelt/DevEye/docs/schemas/ui-widgets-1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Arbre de widgets d'une app à un instant.",
+  "properties": {
+    "focus": {
+      "description": "Identifiant du widget qui a le focus clavier.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "generation": {
+      "default": 0,
+      "description": "Compteur croissant propre à l'app, incrémenté à chaque publication.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "published_at_ms": {
+      "description": "Instant de publication (ms depuis l'epoch Unix) : sert à repérer un arbre\npérimé (UI gelée).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "schema": {
+      "default": "deveye.ui/1",
+      "description": "Toujours [`UI_SCHEMA`] pour les arbres produits par cette version.",
+      "type": "string"
+    },
+    "widgets": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/UiWidget"
+      },
+      "type": "array"
+    },
+    "window": {
+      "$ref": "#/$defs/UiWindow"
+    }
+  },
+  "required": [
+    "window"
+  ],
+  "title": "DevEye deveye.ui/1 : réponse de la route ui.widgets",
+  "type": "object"
+}

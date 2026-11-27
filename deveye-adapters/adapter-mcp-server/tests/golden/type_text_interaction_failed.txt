@@ -1,0 +1,3 @@
+isError: true
+--- bloc 0
+{"detail":"aucun champ éditable (mock)","ok":false,"reason":"interaction_failed"}

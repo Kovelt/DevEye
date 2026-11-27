@@ -30,7 +30,7 @@ Option 3.
 - Le code, les commentaires, les tests, les valeurs par défaut, les `Cargo.toml`, le `justfile`, les scripts et les documents de référence (`README.md`, `docs/usage.md`, `docs/architecture.md`, `docs/wire-protocol.md`, `docs/stability.md`) ne citent plus aucune app cliente ni référence privée ; les exemples utilisent des noms neutres (`mon_app`, « une app Dioxus desktop »).
 - `docs/audit-2026-06-25.md`, `docs/audit-2026-07-04.md`, `docs/tools-backlog-2026-06-26.md`, `docs/spike-atspi2-2026-07-04.md` et `docs/roadmap/` sont déplacés **sans modification** sous `docs/historique/` (`git mv`) ; `docs/historique/README.md` en explique le statut d'archives non normatives.
 - Les ADR peuvent évoquer l'histoire de façon neutre (« les apps consommatrices de l'époque ») sans nommer d'app.
-- Les références à `github.com/Morgan-Voltz/DevEye` et la ligne de copyright des licences restent légitimes.
+- Les références à `github.com/Kovelt/DevEye` et la ligne de copyright des licences restent légitimes.
 
 **Justification** : seule cette option rend la règle de découplage vérifiable sans détruire l'historique ni le falsifier ; le coût se limite à un déplacement de fichiers et à une purge mécanique.
 

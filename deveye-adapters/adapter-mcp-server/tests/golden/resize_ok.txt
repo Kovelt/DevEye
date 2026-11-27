@@ -1,0 +1,3 @@
+isError: false
+--- bloc 0
+{"ok":true}

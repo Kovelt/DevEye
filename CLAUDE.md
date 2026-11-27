@@ -33,7 +33,7 @@ DevEye n'est **pas un produit** : c'est un accélérateur de dev. Projet **open 
    ```
    `deveye-core` ne dépend de rien de technique. Un adapter ne dépend jamais d'un autre adapter ; le code partagé entre adapters vit dans un crate dédié (`deveye-sdk-client`) et la composition d'adapters vit dans `deveye-server` ou `adapter-composite` (qui ne connaît que des ports).
 4. **Découplage de l'app cible** : aucun crate `deveye-*` ne dépend d'une app cliente, et **aucun nom d'app cliente** n'apparaît dans le code, les valeurs par défaut, les tests ou les docs de référence (utiliser des exemples neutres : `mon_app`, `example`). Une app cible peut dépendre de `deveye-sdk` (en `cfg(debug_assertions)`) ; jamais l'inverse.
-5. **Pas de logique technique dans `deveye-core`** : pas de `reqwest`, pas de `tokio` réseau, pas de CDP. Du Rust pur sur le domaine (`chrono`, `serde`, `serde_json`, `thiserror`).
+5. **Pas de logique technique dans `deveye-core`** : pas de `reqwest`, pas de `tokio` réseau, pas de CDP. Du Rust pur sur le domaine (`chrono`, `serde`, `serde_json`, `thiserror` ; `schemars` uniquement derrière la feature optionnelle `schema`, désactivée par défaut, ADR-0063).
 6. **Pas de `unwrap()` / `expect()` / `panic!()`** dans le code de production sauf justification explicite en commentaire (init au démarrage, invariant impossible). Utiliser `Result<T, E>` et `?`.
 7. **Commentaires** : code expressif d'abord. Un commentaire = un *pourquoi* non évident, pas un *quoi*.
 8. **Surface stable** : depuis la 1.0, `deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`, le wire protocol HTTP du SDK, les noms et schémas des outils MCP et les flags de `deveye-server` suivent semver (voir `docs/stability.md`). Tout changement cassant de cette surface exige une version majeure. Les enums et structs publics évolutifs portent `#[non_exhaustive]`.
@@ -48,7 +48,7 @@ DevEye n'est **pas un produit** : c'est un accélérateur de dev. Projet **open 
 2. **Bind loopback uniquement** — le mini-serveur SDK écoute sur `127.0.0.1`, jamais `0.0.0.0`.
 3. **Port configurable** — par défaut `31337`, surchargeable par `DEVEYE_PORT`.
 4. **Garde Host anti DNS-rebinding + CORS deny-all** sur toutes les routes du SDK.
-5. **Pas de secret exposé** — l'état et les logs exposés par le SDK passent par le masquage des clés sensibles ; ne jamais ajouter de route qui le contourne. `eval_js`, résultats de commandes et `ui.widgets` ne sont pas filtrés (ADR-0016).
+5. **Pas de secret exposé** — l'état et les logs exposés par le SDK passent par le masquage des clés sensibles ; ne jamais ajouter de route qui le contourne. `eval_js` et les résultats de commandes ne sont pas filtrés (ADR-0016) ; `ui.widgets` ne publie pas la valeur des widgets secrets et `dom` la masque (ADR-0064).
 6. **Cible `x11` isolée par construction** — `--display` obligatoire, refus de la session vivante, d'XWayland et des displays < 100 ; aucune option ne lève ces refus.
 
 ---
@@ -114,7 +114,7 @@ DevEye/
 
 ## Workflow Git
 
-**Stratégie : GitHub Flow** sur `github.com/Morgan-Voltz/DevEye`. `main` est toujours propre et publiable. Tout travail se fait sur une branche dédiée dérivée de `main`, fusionnée par pull request.
+**Stratégie : GitHub Flow** sur `github.com/Kovelt/DevEye`. `main` est toujours propre et publiable. Tout travail se fait sur une branche dédiée dérivée de `main`, fusionnée par pull request.
 
 **Nommage des branches** : `<type>/<slug-kebab-case>` (`feat/outil-resize`, `fix/cdp-reconnect-timeout`, `docs/usage-mcp-json`, `release/1.0.0`).
 

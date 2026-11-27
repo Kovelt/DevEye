@@ -1,0 +1,28 @@
+name: Demande de fonctionnalité
+description: Proposer une amélioration ou un nouvel outil
+title: "[Fonctionnalité] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Rappel : une décision qui engage DevEye (nouvel outil, dépendance, contrat, plateforme, licence) passe par un ADR, voir docs/adr/README.md.
+  - type: textarea
+    id: need
+    attributes:
+      label: Besoin
+      description: Quel problème voulez-vous résoudre, et dans quel contexte ?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposition
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives envisagées
+    validations:
+      required: false

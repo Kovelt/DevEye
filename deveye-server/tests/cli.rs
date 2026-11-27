@@ -96,3 +96,76 @@ fn doctor_rejects_flags_ignored_by_the_target() {
     let out = run(&["doctor", "--target", "kwin-eis", "--cdp-accept-blank"]);
     assert_eq!(out.status.code(), Some(2));
 }
+
+/// Faux SDK : annonce `ui.widgets/1` et sert l'arbre donné sur la route de commande.
+fn fake_sdk(tree: &'static str) -> u16 {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port éphémère");
+    let port = listener.local_addr().expect("adresse").port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                // La sonde TCP ouvre d'abord une connexion muette.
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if n == 0 {
+                    return;
+                }
+                let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let body = if request.starts_with("GET /devtools/info") {
+                    r#"{"sdk_version":"1.1.0","protocol_version":"1.0","capabilities":["state","commands","info","eval","ui.widgets/1"]}"#
+                } else {
+                    tree
+                };
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                     x-deveye-protocol-version: 1.0\r\ncontent-length: {}\r\n\
+                     connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(reply.as_bytes());
+            });
+        }
+    });
+    port
+}
+
+#[test]
+fn doctor_fails_on_duplicate_widget_ids() {
+    let port = fake_sdk(
+        r#"{"schema":"deveye.ui/1","window":{"width":100,"height":100},"widgets":[
+            {"id":"dup","role":"button","rect":[0,0,10,10]},
+            {"id":"dup","role":"label","rect":[0,20,10,10]}]}"#,
+    );
+    let out = run(&[
+        "doctor",
+        "--target",
+        "sdk",
+        "--sdk-url",
+        &format!("http://127.0.0.1:{port}"),
+    ]);
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("Arbre ui.widgets") && text.contains("dup"),
+        "{text}"
+    );
+}
+
+#[test]
+fn doctor_accepts_a_valid_widget_tree() {
+    let port = fake_sdk(
+        r#"{"schema":"deveye.ui/1","window":{"width":100,"height":100},"widgets":[
+            {"id":"a","role":"button","rect":[0,0,10,10]}]}"#,
+    );
+    let out = run(&[
+        "doctor",
+        "--target",
+        "sdk",
+        "--sdk-url",
+        &format!("http://127.0.0.1:{port}"),
+    ]);
+    let text = stdout(&out);
+    assert!(text.contains("1 widget(s), ids uniques"), "{text}");
+}

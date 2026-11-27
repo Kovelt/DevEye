@@ -11,7 +11,7 @@ Référence unique et exacte de l'usage de DevEye : options du binaire, sous-com
 ## Installation et prérequis
 
 - **Linux uniquement** ([platforms.md](platforms.md)) ; un client MCP (Claude Code, par exemple).
-- Installer `deveye-server` : archive de release GitHub, `cargo install --git https://github.com/Morgan-Voltz/DevEye --tag v1.0.0 deveye-server --locked`, ou depuis les sources (`just install`) ; détail dans le [README](../README.md#installation).
+- Installer `deveye-server` : archive de release GitHub, `cargo install --git https://github.com/Kovelt/DevEye --tag v1.0.0 deveye-server --locked`, ou depuis les sources (`just install`) ; détail dans le [README](../README.md#installation).
 - Bibliothèques de compilation (installation depuis les sources) : voir le README.
 - Selon la cible : session KDE Plasma Wayland (`kwin-eis`), `Xvfb` (`x11`), navigateur ou webview Chromium avec le port de débogage ouvert (`cdp`), SDK embarqué dans l'app (`sdk`, état, logs, commandes).
 
@@ -149,7 +149,7 @@ deveye-server doctor --target kwin-eis
 deveye-server doctor --target x11 --display :250
 ```
 
-Diagnostic **en lecture seule** : il n'ouvre aucun serveur MCP, ne compose aucun adapter, n'injecte aucun événement. Il accepte les options de ciblage du serveur (`--target`, `--sdk-url`, `--cdp-url`, `--display`, `--screencap-window`…) ; les filtres de cible CDP (`--cdp-target-filter-*`, `--cdp-accept-blank`) ne servent qu’au serveur. Avec `--target x11` sans `--display`, il ne refuse pas la ligne de commande : il le diagnostique. Il ne sonde que ce que la cible utilise (CDP seulement pour `auto` et `cdp`), en parallèle. Huit vérifications, chacune avec un statut et, si besoin, un conseil :
+Diagnostic **sans effet voulu** : il n'ouvre aucun serveur MCP, ne compose aucun adapter, n'injecte aucun événement. Seule exception : la sonde facultative `ui.widgets` invoque la route de l'app, un handler que l'app fournit (en lecture seule par convention, mais non vérifiable par DevEye), ce qui enregistre une lecture et peut attendre jusqu'à 500 ms. Il accepte les options de ciblage du serveur (`--target`, `--sdk-url`, `--cdp-url`, `--display`, `--screencap-window`…) ; les filtres de cible CDP (`--cdp-target-filter-*`, `--cdp-accept-blank`) ne servent qu’au serveur. Avec `--target x11` sans `--display`, il ne refuse pas la ligne de commande : il le diagnostique. Il ne sonde que ce que la cible utilise (CDP seulement pour `auto` et `cdp`), en parallèle. Neuf vérifications, chacune avec un statut et, si besoin, un conseil :
 
 | Vérification | Rôle |
 |---|---|
@@ -161,6 +161,7 @@ Diagnostic **en lecture seule** : il n'ouvre aucun serveur MCP, ne compose aucun
 | Display X privé | le display passe la garde d'isolation et son socket existe |
 | SDK de l'app cible | `GET /devtools/info` répond, version du protocole compatible avec celle du serveur |
 | CDP (navigateur) | le point d'accès CDP répond |
+| Arbre `ui.widgets` (facultatif) | seulement si le SDK annonce `ui.widgets/1` : lit la route (`POST /devtools/command` sur la route de l'app, lecture seule par convention) et vérifie le schéma, les ids uniques et non vides, les parents et le focus connus ; un arbre invalide est un **échec**, une route illisible ou sans arbre publié un avertissement ([ADR-0065](adr/0065-helper-sdk-ui-lecture-serveur-et-controles.md)) |
 
 Statuts : `[OK]`, `[ATTENTION]` (utile mais non bloquant : capacité réduite), `[ÉCHEC]` (prérequis bloquant de la cible demandée), `[SANS OBJET]`. Code de sortie : **0** (prêt, ou avertissements seulement), **1** (au moins un prérequis bloquant manque), **2** (erreur d'usage). Le texte du diagnostic n'est pas couvert par la promesse de stabilité, ses codes de sortie le sont.
 
@@ -196,6 +197,7 @@ Codes de sortie : 0 conforme, 1 écarts, 2 la suite n'a pas pu s'exécuter. Le b
 
 - **Succès sans valeur** (clic, saisie, défilement, navigation…) : `{ "ok": true }`.
 - **Échec sémantique** : résultat d'outil avec `isError: true` et un JSON lisible, jamais une erreur de protocole. Formes courantes : `{ "ok": false, "reason": "unsupported", "detail": … }` (capacité absente sur la cible : DOM en `kwin-eis`, `resize` hors CDP, presse-papiers hors Wayland…), `{ "ok": false, "reason": "sdk_unavailable", "detail": … }` (SDK de l'app injoignable), `{ "ok": false, "reason": "js_exception", "message", "stack"? }` (exception levée par le JavaScript évalué), `{ "ok": false, "reason": "interaction_failed", "detail": … }`.
+- **Sorties structurées (depuis la 1.1)** : vingt-huit outils à petite sortie (`target_info`, `wait_*`, `assert_selector`, `assert_state`, `window_geometry`, `focus_window`, `click_selector`, `click_text` et les acquittements `{ "ok": true }`) déclarent un `outputSchema` dans `tools/list` et renvoient en plus de leur texte un `structuredContent` égal au même JSON. Le **texte est identique à celui de la 1.0**, octet pour octet : un client qui ignore ces champs ne voit aucune différence. Un échec sémantique de ces outils (attente expirée, assertion fausse) garde le type du succès ; une erreur typée (`unsupported`, `sdk_unavailable`, `interaction_failed`) porte `structuredContent` `{ ok: false, reason, detail, hint?, candidates? }`, qui ne suit pas l'`outputSchema` (il ne décrit que le succès). `reason` est une liste ouverte : traiter une valeur inconnue comme une erreur générique. Restent sans `outputSchema`, et en texte seul pour leurs **succès** (leurs erreurs typées `unsupported`, `sdk_unavailable` et `interaction_failed` portent, elles, le même `structuredContent` `{ ok: false, reason, detail }` : un client qui retransmet texte et structuré les voit en double, ce qui est assumé car elles sont courtes) : `logs_tail`, `logs_wait`, `list_windows`, `find_element`, `list_commands`, `collect_console_errors`, `eval_js`, `dom`, `state`, `invoke_command`, `observe`, `clipboard_get` et les captures ([ADR-0067](adr/0067-sorties-structurees-mcp-palier-a.md)). Claude Code transmet au modèle le `structuredContent` d'un succès (un seul exemplaire, pas de doublon de jetons) et le texte d'une erreur.
 - **Erreur de protocole JSON-RPC** : `-32602` (`invalid_params`) pour un appel mal formé (coordonnées invalides, `level_min` inconnu, commande logique inconnue), `-32603` pour une panne d'infrastructure.
 - **Captures** : un bloc image, puis un bloc texte JSON de métadonnées.
 - **Un seul outil à la fois** : les appels sont sérialisés dans l'ordre d'arrivée ; les attentes (`wait_*`) ne tiennent pas ce verrou pendant qu'elles patientent.
@@ -328,7 +330,43 @@ Place `text` dans le presse-papiers (`wl-copy`) ; avec `key_combo` Ctrl+V, saisi
 
 #### `dom`
 
-DOM courant (JSON), puis `{ captured_at }`. Au-delà de ~100 Ko sérialisés, `isError` explicite : préférer `find_element`, `assert_selector` ou `eval_js`. En `x11`, le « DOM » est la réponse de la route `ui.widgets` de l'app, sans interprétation ; absente, erreur d'inspection explicite.
+DOM courant (JSON), puis `{ captured_at }`. Au-delà de ~100 Ko sérialisés, `isError` explicite : préférer `find_element`, `assert_selector` ou `eval_js`. En `x11`, le « DOM » est la réponse de la route `ui.widgets` de l'app, sans conversion (format legacy conservé) mais **secrets masqués** : la valeur d'un widget secret est remplacée par `<secret>` ; absente, erreur d'inspection explicite.
+
+##### Route `ui.widgets` : schéma `deveye.ui/1`
+
+Pour une app sans DOM, la route `ui.widgets` publie une liste **plate** de widgets, chacun pointant vers son parent. Le contrat est typé dans `deveye-core` (module `ui`, [ADR-0062](adr/0062-schema-deveye-ui-1-de-la-route-ui-widgets.md)) et décrit par [`docs/schemas/ui-widgets-1.json`](schemas/ui-widgets-1.json) ; des fixtures valides, legacy et invalides sont dans `deveye-core/tests/fixtures/ui-1/`.
+
+```json
+{
+  "schema": "deveye.ui/1",
+  "generation": 42,
+  "window": { "width": 800, "height": 600, "scale": 1.0 },
+  "focus": "name",
+  "widgets": [
+    { "id": "root", "role": "window", "rect": [0, 0, 800, 600] },
+    { "id": "name", "parent": "root", "role": "textbox", "label": "Nom", "value": "Alice",
+      "rect": [40, 60, 240, 28], "actions": ["click", "type"], "state": { "focused": true } },
+    { "id": "password", "parent": "root", "role": "password", "label": "Mot de passe",
+      "rect": [40, 100, 240, 28], "state": { "secret": true } }
+  ]
+}
+```
+
+- `rect` = `[x, y, largeur, hauteur]` en pixels entiers, **dans le repère des gestes** de la cible (origine en haut à gauche de la fenêtre) : cliquer au centre du rect vise le widget. Une app en points logiques (egui) multiplie par son facteur d'échelle avant de publier ; les coordonnées fractionnaires sont arrondies vers la plus petite boîte entière qui contient le rectangle (`x`, `y` au plancher, bords droit et bas au plafond).
+- `role` est une chaîne ouverte (vocabulaire recommandé : `window`, `panel`, `button`, `checkbox`, `radio`, `textbox`, `password`, `slider`, `knob`, `list`, `listitem`, `tab`, `menu`, `menuitem`, `label`, `image`, `scrollarea`) ; une valeur inconnue est conservée.
+- Un widget `secret` (ou de rôle `password`) ne publie pas sa valeur ; le serveur masque en plus toute valeur reçue pour un tel widget, **y compris dans la sortie de `dom`** (changement de la 1.1 : avant, `dom` renvoyait la valeur brute de la route), et applique le masquage par clés (§2.4 du wire protocol) aux valeurs structurées, y compris pour `invoke_command {name: "ui.widgets"}` ; une réponse qui n'a pas la forme d'un arbre de widgets (liste racine ou champ `widgets`) est renvoyée intacte.
+- Côté app Rust, `deveye_sdk::ui` publie l'arbre : `ui::builder(w, h)` construit, `ui::publish(tree)` remplace l'arbre courant, `ui::is_observed()` dit si un agent a lu la route dans les 2 dernières secondes (l'app ne construit son arbre que dans ce cas, coût nul sinon). La route est enregistrée au premier appel de `publish` ou de `is_observed` et annonce la capacité `ui.widgets/1` ; en release, tout est un no-op. Une lecture qui arrive quand personne n'observait attend jusqu'à 500 ms la publication suivante.
+- Les lecteurs ignorent les champs inconnus : une évolution mineure ajoute des champs optionnels, une rupture publie `deveye.ui/2`, lu en plus de `/1`.
+
+Format d'avant le schéma (sans champ `schema`), lu et converti par le lecteur tolérant : une liste ou `{ window?, widgets }`, où `kind` tient lieu de `role`, `text` de `label`, `rect` est un tableau ou un objet `{ x, y, width, height }`, et un widget sans `id` reçoit un `id` éphémère `role[index]` (marqué `id_ephemeral`, à ne pas réutiliser d'un arbre à l'autre).
+
+<!-- ui-widgets-legacy-example -->
+```json
+[
+  { "id": "valider", "kind": "button", "text": "Valider",
+    "rect": { "x": 40, "y": 120, "width": 96, "height": 28 } }
+]
+```
 
 #### `find_element`
 
@@ -344,7 +382,7 @@ Paramètres : `selector` ; `expected_text` (texte attendu dans l'`innerText` du 
 
 #### `state`
 
-État applicatif publié par le SDK (JSON). `keys` (optionnel) restreint aux clés demandées (les absentes sont omises). Un second bloc `{ captured_at, signals, note? }` : `signals: 0` signifie « SDK joignable mais aucun signal publié », distinct de `sdk_unavailable`. Les valeurs de clés jugées secrètes sont remplacées par `<secret>`.
+État applicatif publié par le SDK (JSON). `keys` (optionnel) restreint aux clés demandées (les absentes sont omises). Un second bloc `{ captured_at, signals, note? }` : `signals: 0` signifie « SDK joignable mais aucun signal publié », distinct de `sdk_unavailable`. Le résultat porte aussi `_meta` : `io.deveye/captured_at`, `io.deveye/entry_count` et `io.deveye/state_source` (`sdk` si un pont SDK est câblé, `aucun` en mode CDP seul, où le state est toujours vide). Les valeurs de clés jugées secrètes sont remplacées par `<secret>`.
 
 #### `assert_state`
 
@@ -479,7 +517,7 @@ La capture est un `GetImage` de la **racine** du serveur X, rognée au rectangle
 - **Conteneur scrollable** : `scroll` ancré en (`x`, `y`) vise le conteneur sous le point ; pour une liste interne, ancrer **dans** la liste, pas au centre de la fenêtre.
 - **Coûts** : préférer `observe`, `screenshot_region`, `max_width` et `format: "jpeg"` à des captures pleines ; `find_element` et `assert_selector` à `dom`.
 - **Attendre, ne pas dormir** : `wait_for_selector`, `wait_for_text`, `wait_ready`, `wait_target_alive` plutôt qu'un délai fixe.
-- **Secrets** : `eval_js`, les valeurs de retour de `invoke_command` et la route `ui.widgets` ne sont pas masqués ([wire-protocol.md](wire-protocol.md) §2.4).
+- **Secrets** : `eval_js` et les valeurs de retour de `invoke_command` ne sont pas masqués ; la route `ui.widgets` ne publie pas la valeur des widgets secrets et `dom` la masque en seconde ligne ([wire-protocol.md](wire-protocol.md) §2.4 et §3.7).
 
 ---
 

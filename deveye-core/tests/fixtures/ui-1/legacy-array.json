@@ -1,0 +1,4 @@
+[
+  { "id": "valider", "kind": "button", "text": "Valider",
+    "rect": { "x": 40, "y": 120, "width": 96, "height": 28 } }
+]

@@ -1,0 +1,119 @@
+{
+  "$comment": "Vecteurs partages entre le SDK Rust (deveye-sdk), la suite de conformite (deveye-conformance) et les implementations tierces (shim .NET, addon Godot, adapter serveur) : un seul fichier pour que le masquage des secrets et la garde Host ne divergent pas entre implementations. Source de verite des comportements : docs/wire-protocol.md (2.2 et 2.4) et ADR-0016, ADR-0064.",
+  "version": 1,
+  "redaction": {
+    "placeholder": "<secret>",
+    "required_secret_keys": [
+      "password",
+      "user_password",
+      "apiKey",
+      "API-KEY",
+      "client_secret",
+      "Authorization",
+      "private_key",
+      "accessToken",
+      "refresh_token",
+      "github.token",
+      "set-cookie",
+      "sessionId",
+      "jwt",
+      "pwd",
+      "auth",
+      "bearer",
+      "otp"
+    ],
+    "extended_secret_keys": [
+      "tokens",
+      "cookies",
+      "access_key",
+      "signing_key",
+      "database_url",
+      "mdp",
+      "mot_de_passe",
+      "jeton"
+    ],
+    "ordinary_keys": [
+      "user",
+      "page",
+      "session",
+      "author",
+      "token_count",
+      "max_tokens",
+      "tokenizer",
+      "cookie_banner"
+    ],
+    "declared_keys": {
+      "declared": [
+        "iban"
+      ],
+      "secret": [
+        "iban",
+        "IBAN"
+      ],
+      "ordinary": [
+        "user_iban"
+      ]
+    },
+    "redact": [
+      {
+        "name": "sous-arbre remplace en bloc et cles imbriquees",
+        "input": {
+          "user": "alice",
+          "credentials": {
+            "login": "alice",
+            "pin": 1234
+          },
+          "devices": [
+            {
+              "name": "phone",
+              "push_token": "xyz"
+            }
+          ]
+        },
+        "expected": {
+          "user": "alice",
+          "credentials": "<secret>",
+          "devices": [
+            {
+              "name": "phone",
+              "push_token": "<secret>"
+            }
+          ]
+        }
+      },
+      {
+        "name": "scalaires et null inchanges",
+        "input": null,
+        "expected": null
+      }
+    ]
+  },
+  "host_guard": {
+    "port_placeholder": "{port}",
+    "accepted": [
+      "localhost",
+      "localhost:{port}",
+      "127.0.0.1",
+      "127.0.0.1:{port}",
+      "LocalHost:{port}",
+      "[::1]",
+      "[::1]:{port}"
+    ],
+    "rejected": [
+      "evil.com",
+      "evil.com:{port}",
+      "127.0.0.1.evil.com",
+      "localhost.evil.com",
+      "sub.localhost",
+      "0.0.0.0",
+      "::1",
+      "[::1]toto",
+      "[::1]evil.com",
+      "[::1]:abc",
+      "[::1]:",
+      "127.0.0.1:abc",
+      ""
+    ],
+    "absent_header": "une requete sans en-tete Host est rejetee (403, ou 400 de la pile HTTP)"
+  }
+}
