@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use deveye_core::{InteractionCommand, MouseButton, Position};
-use deveye_ports::{InteractionSink, PortError, PortResult};
+use deveye_ports::{InteractionSink, JsEvaluator, PortError, PortResult};
 
 use crate::client::CdpClient;
 
@@ -29,6 +29,16 @@ impl InteractionSink for CdpClient {
                 mouse_event(self, "mouseMoved", position, "left").await?;
             }
             InteractionCommand::Type { text } => {
+                // `Input.insertText` sur un élément non éditable ne fait rien et
+                // répond succès : sans cette garde, l'agent croit avoir saisi
+                // (ADR-0026).
+                match self.evaluate(EDITABLE_FOCUS_JS).await {
+                    Ok(verdict) => focus_verdict(&verdict)?,
+                    // Page qui ne se laisse pas interroger : on tente la saisie
+                    // plutôt que de la bloquer sur un doute.
+                    Err(PortError::Script { .. }) => {}
+                    Err(e) => return Err(e),
+                }
                 let _: Value = self
                     .call("Input.insertText", json!({ "text": text }))
                     .await
@@ -247,6 +257,39 @@ fn mouse_button_label(button: MouseButton) -> Option<&'static str> {
     }
 }
 
+/// Vrai si l'élément qui a le focus accepte une saisie texte : champ `input`
+/// (hors boutons, cases, curseurs, fichiers…), `textarea` ou contenu éditable,
+/// en traversant les shadow roots. Un `iframe` focalisé est opaque (son contenu
+/// n'est pas interrogeable d'ici) : on laisse passer. Lecture seule, sans effet
+/// de bord sur la page.
+const EDITABLE_FOCUS_JS: &str = "(function(){ \
+    let el = document.activeElement; \
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement; \
+    if (!el) return false; \
+    const tag = el.tagName; \
+    if (tag === 'IFRAME' || tag === 'FRAME') return true; \
+    if (el.isContentEditable) return true; \
+    if (tag === 'TEXTAREA') return !el.disabled && !el.readOnly; \
+    if (tag === 'INPUT') { \
+      const t = (el.type || 'text').toLowerCase(); \
+      const nonText = ['button','checkbox','radio','submit','reset','image','file','range','color','hidden']; \
+      return !nonText.includes(t) && !el.disabled && !el.readOnly; \
+    } \
+    return false; })()";
+
+/// Interprète la réponse de [`EDITABLE_FOCUS_JS`] : seul un `false` explicite
+/// refuse la saisie (une réponse inattendue ne bloque pas).
+fn focus_verdict(verdict: &Value) -> PortResult<()> {
+    if verdict == &Value::Bool(false) {
+        Err(PortError::Interaction(
+            "aucun champ éditable au focus : cliquer d'abord sur le champ (click_selector, click)"
+                .to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Requête CDP d'un `Resize`. `deviceScaleFactor: 0` conserve le facteur
 /// d'échelle réel de l'écran (ne change que les dimensions CSS). `0` x `0`
 /// retire l'émulation ; un seul côté nul n'a pas de sens et est refusé.
@@ -303,6 +346,25 @@ mod tests {
         assert_eq!(mouse_button_label(MouseButton::Left), Some("left"));
         assert_eq!(mouse_button_label(MouseButton::Right), Some("right"));
         assert_eq!(mouse_button_label(MouseButton::Middle), Some("middle"));
+    }
+
+    #[test]
+    fn focus_verdict_refuses_only_an_explicit_false() {
+        assert!(matches!(
+            focus_verdict(&json!(false)),
+            Err(PortError::Interaction(_))
+        ));
+        assert!(focus_verdict(&json!(true)).is_ok());
+        // Réponse inattendue : on ne bloque pas la saisie sur un doute.
+        assert!(focus_verdict(&Value::Null).is_ok());
+    }
+
+    #[test]
+    fn editable_focus_script_is_a_self_contained_read_only_expression() {
+        assert!(EDITABLE_FOCUS_JS.starts_with("(function(){"));
+        assert!(EDITABLE_FOCUS_JS.ends_with("})()"));
+        assert!(EDITABLE_FOCUS_JS.contains("shadowRoot"));
+        assert!(EDITABLE_FOCUS_JS.contains("isContentEditable"));
     }
 
     #[test]

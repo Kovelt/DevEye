@@ -2289,6 +2289,66 @@ mod dispatch_tests {
         assert_eq!(body_json(&result)["reason"], "sdk_unavailable");
     }
 
+    struct FailingInteraction(PortError);
+    #[async_trait]
+    impl InteractionSink for FailingInteraction {
+        async fn dispatch(&self, _command: InteractionCommand) -> PortResult<()> {
+            Err(match &self.0 {
+                PortError::Interaction(m) => PortError::Interaction(m.clone()),
+                _ => PortError::Unsupported("autre".to_string()),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn type_text_without_editable_focus_is_a_structured_is_error() {
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(FailingInteraction(PortError::Interaction(
+                "aucun champ éditable au focus".to_string(),
+            )));
+        });
+        let result = server
+            .type_text(Parameters(TypeParams {
+                text: "bonjour".to_string(),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire : un résultat à corriger");
+        assert_eq!(result.is_error, Some(true));
+        let body = body_json(&result);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["reason"], "interaction_failed");
+        assert!(body["detail"].as_str().unwrap().contains("éditable"));
+    }
+
+    #[tokio::test]
+    async fn type_text_still_reports_unsupported_and_success_as_before() {
+        let spy = DispatchSpy::default();
+        let ok = server_with(|ports| {
+            ports.interaction = Arc::new(spy.clone());
+        })
+        .type_text(Parameters(TypeParams {
+            text: "salut".to_string(),
+        }))
+        .await
+        .expect("pas d'erreur protocolaire");
+        assert_eq!(ok.is_error, Some(false));
+        assert_eq!(
+            spy.calls.lock().unwrap()[0],
+            InteractionCommand::type_text("salut")
+        );
+
+        let unsupported = server_with(|ports| {
+            ports.interaction =
+                Arc::new(FailingInteraction(PortError::Unsupported("x".to_string())));
+        })
+        .type_text(Parameters(TypeParams {
+            text: "salut".to_string(),
+        }))
+        .await
+        .expect("pas d'erreur protocolaire");
+        assert_eq!(body_json(&unsupported)["reason"], "unsupported");
+    }
+
     // ------------------------------------------------------------------
     // js_string / invoke_command : arguments stringifies.
     // ------------------------------------------------------------------

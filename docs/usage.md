@@ -99,7 +99,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `hover` | `{x, y}` | `"ok"` | « hover sur 10, 375 » (ouvre une zone rétractable sans cliquer) |
 | `click_selector` | `{selector}` | JSON `{ok, reason?}` | « clique sur `button.btn-primary` » (robuste aux décalages de coords) |
 | `click_text` | `{text}` | JSON `{ok, reason?}` | « clique sur le bouton "Valider" » (matche `button/a/[role=button]` par `innerText` exact) |
-| `type_text` | `{text}` | `"ok"` | « tape "Bonjour" dans le champ focus » |
+| `type_text` | `{text}` | JSON `{ok}` ; sans champ éditable au focus (cdp, sdk) : `isError` `{ok: false, reason: "interaction_failed", detail}` | « tape "Bonjour" dans le champ focus » (cliquer d'abord sur le champ ; en kwin-eis et x11, `ok` signifie « événements envoyés à la fenêtre focus », sans savoir si un champ les reçoit) |
 | `press_key` | `{key}` | `"ok"` | « presse Enter » (Tab/Escape/ArrowDown… ; marche en kwin-eis. Noms W3C en CDP, XKB en kwin-eis) |
 | `key_combo` | `{modifiers, key}` | `"ok"` | « Ctrl+S » (`modifiers`: ctrl/shift/alt/meta ; seul moyen d'envoyer Ctrl+Z/C/V) |
 | `navigate` | `{route}` | `"ok"` | « navigue vers `Agenda` » (routeur du SDK opt-in ; indispo en kwin-eis) |
@@ -132,6 +132,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 
 **Conseils d'usage** :
 
+- **Saisie sans focus** : `type_text` suppose un champ éditable au focus. Sur les cibles WebView (cdp, sdk), l'absence de champ focalisé est détectée et refusée en `isError` `interaction_failed` (avant, CDP répondait un faux succès) : cliquer d'abord (`click_selector`). En kwin-eis et x11, les touches partent à la fenêtre qui a le focus OS (`focus_window`) sans pouvoir être vérifiées : confirmer par `screenshot_region`.
 - **Sorties d'observation** : `screenshot`, `dom` et `state` renvoient leur contenu habituel dans le **premier** bloc (inchangé) et un **second bloc texte JSON** de métadonnées : `captured_at` (RFC 3339, UTC) pour savoir l'âge de ce qu'on lit, `viewport` pour `screenshot`, `signals` pour `state`. Un `state` vide se lit alors sans ambiguïté : `signals: 0` + `note` = le SDK répond mais l'app n'a publié aucun signal ; `isError` `sdk_unavailable` = le SDK est injoignable (app non lancée, mauvais `--sdk-url`).
 - **Coordonnées validées** : `click`, `right_click`, `double_click`, `hover`, `drag_drop` et l'ancrage de `scroll` refusent (erreur `invalid_params`, rien n'est envoyé) une coordonnée négative, ou hors du viewport quand sa taille est connue. Un clic hors fenêtre en kwin-eis/x11 échoue donc au lieu de réussir à vide ; un menu système qui déborde de la fenêtre n'est pas atteignable par coordonnées.
 - Pour les UI qui dépendent d'un hover (sidebar rétractable, menus contextuels), envoyer `hover(x, y)` d'abord, puis `click_text` / `click_selector` pour cibler l'élément révélé.

@@ -54,13 +54,29 @@ impl DeveyeMcpServer {
         .await
     }
 
-    #[tool(description = "Saisit du texte au focus courant de l'app cible.")]
+    #[tool(
+        description = "Saisit du texte au focus courant de l'app cible. Sans champ éditable au focus, sur les cibles WebView (cdp, sdk), la saisie est refusée en résultat isError structuré `{ ok: false, reason: \"interaction_failed\", detail }` (cliquer d'abord sur le champ avec click_selector ou click) : jamais un faux succès. Sur kwin-eis et x11 (événements clavier OS-level), le texte est envoyé à la fenêtre qui a le focus sans pouvoir savoir si un champ le reçoit : `{ ok: true }` y signifie « événements envoyés », pas « texte saisi » ; vérifier par une capture."
+    )]
     pub(crate) async fn type_text(
         &self,
         Parameters(p): Parameters<TypeParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.dispatch_ok(InteractionCommand::type_text(p.text))
+        let _serial = self.gate.lock().await;
+        match self
+            .interaction
+            .dispatch(InteractionCommand::type_text(p.text))
             .await
+        {
+            // Échec sémantique de la saisie (typiquement : aucun champ éditable
+            // au focus) : un résultat que l'agent corrige, pas une faute
+            // d'appel (ADR-0026).
+            Err(PortError::Interaction(detail)) => Ok(json_error(&serde_json::json!({
+                "ok": false,
+                "reason": "interaction_failed",
+                "detail": detail,
+            }))),
+            other => ok_or_unsupported(other),
+        }
     }
 
     #[tool(
