@@ -256,3 +256,18 @@ Audit post-M7 (108 constats priorisés, dont le gate MCP T1/M1 bloquant) : [docs
 - [docs/usage.md](docs/usage.md) — outils MCP détaillés, configuration client MCP, modes Linux/kwin-eis/x11/WASM, troubleshooting
 - [docs/architecture.md](docs/architecture.md) — architecture hexagonale, 12 ports, robustesse CDP, sécurité
 - [docs/wire-protocol.md](docs/wire-protocol.md) — contrat HTTP du SDK (5 endpoints, formes JSON, garde Host, checklist implémentation tierce)
+
+---
+
+## Licence
+
+DevEye est open source, sous deux licences selon le rôle du crate (décision : [ADR-0002](docs/adr/0002-licences-agpl-outil-mit-bibliotheques.md)) :
+
+| Crates | Licence | Pourquoi |
+|---|---|---|
+| `deveye-server`, tous les `adapter-*`, les scripts | **AGPL-3.0-or-later** ([LICENSE](LICENSE)) | l'outil ; la réciprocité réseau de l'AGPL protège contre une reprise fermée |
+| `deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client` | **MIT** ([LICENSE-MIT](LICENSE-MIT)) | les bibliothèques qu'une app embarque ou qu'un tiers réutilise |
+
+Concrètement : intégrer `deveye-sdk` dans votre app ne lui impose aucune contrainte de licence. Lancer ou modifier `deveye-server` est soumis à l'AGPL (publier ses modifications si on le propose en service). Un crate MIT ne dépend jamais d'un crate AGPL.
+
+Une contribution est reçue sous la licence du crate qu'elle touche. Les décisions du projet sont consignées dans [docs/adr/](docs/adr/README.md).

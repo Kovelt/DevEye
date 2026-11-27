@@ -1,7 +1,7 @@
 # cargo-deny — audit des dependances (audit du 04/07/2026, item I3).
-# Lancer : `cargo deny check advisories bans sources` (job CI `audit-deps`).
-# Le check `licenses` n'est volontairement pas active : outil interne
-# proprietaire, pas de redistribution — a revoir si le projet est publie.
+# Lancer : `cargo deny check` (advisories, bans, licenses, sources), comme le
+# job CI `audit-deps`. Decisions : ADR-0002 (licences), ADR-0006 et ADR-0007
+# (exceptions d'avis).
 
 [advisories]
 version = 2
@@ -15,6 +15,7 @@ ignore = [
     # xcap) pour parser les definitions de protocole X11 A LA COMPILATION —
     # jamais expose a une entree runtime non fiable. Pas de version corrigee
     # atteignable sans bump de xcb/xcap. A lever quand xcap remonte quick-xml.
+    # ADR-0007.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
     # chrono 0.4 : declare non maintenu (RUSTSEC-2026-0543), sans version
@@ -22,8 +23,41 @@ ignore = [
     # cause. chrono fait partie de l'API publique de deveye-core
     # (horodatages des snapshots et des evenements de log) : le remplacer est
     # un changement cassant, reserve a la 2.0. Exception posee le 27/11/2026,
-    # a rouvrir avant la 2.0.
+    # a rouvrir avant la 2.0. ADR-0006.
     "RUSTSEC-2026-0543",
+]
+
+[licenses]
+version = 2
+# Licences tierces acceptees (liste blanche exacte, completee a l'usage : toute
+# nouvelle licence dans le graphe doit etre examinee, pas ajoutee par reflexe).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+# Nos propres crates : AGPL-3.0-or-later (outil) et MIT (bibliotheques) sont
+# declares par chaque manifeste. L'exception AGPL est limitee a ces crates par
+# nom : aucune dependance tierce AGPL n'est acceptee implicitement. ADR-0002.
+exceptions = [
+    { crate = "deveye-server", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-cdp-webview", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-clipboard-wayland", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-commands-http", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-composite", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-dioxus-signals", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-interaction-kwin-eis", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-logs-tracing", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-mcp-server", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-screencap-kwin", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-screencap-xcap", allow = ["AGPL-3.0-or-later"] },
+    { crate = "adapter-x11", allow = ["AGPL-3.0-or-later"] },
 ]
 
 [bans]

@@ -1,15 +1,18 @@
-# DevEye — workspace autonome.
+# DevEye — workspace Cargo (16 crates, architecture hexagonale).
 #
-# Outil d'observation/pilotage d'apps en dev (screenshot, click, eval,
-# DOM, logs…), originellement extrait de Chronos (crates/deveye) par
-# `git subtree split`. Les crates gardent leurs métadonnées de package
-# figées ; seul ce manifeste de workspace définit les dépendances partagées.
+# Outil d'observation et de pilotage d'apps graphiques en développement
+# (capture, interaction, inspection, logs), exposé en serveur MCP. Les crates
+# `deveye-adapters/*` implémentent les ports de `deveye-ports` ; `deveye-server`
+# les compose.
 #
-# CE DÉPÔT EST LA SOURCE DE VÉRITÉ (depuis M0, 25/06/2026). Les copies
-# vendored consommées par les apps cibles (Chronos/crates/deveye,
-# Atelier/deveye — deveye-core/ports/sdk uniquement) sont régénérées par
-# scripts/sync-deveye.sh et ne doivent JAMAIS être éditées directement ;
-# tout correctif naît ici puis est propagé par le script.
+# Licences : l'outil (`deveye-server`, adapters) est sous AGPL-3.0-or-later,
+# valeur par défaut ci-dessous ; les bibliothèques embarquées ou réutilisées
+# (`deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`) sont sous
+# MIT et surchargent le champ `license`. Un crate MIT ne dépend jamais d'un
+# crate AGPL (ADR-0002). Chaque crate garde sa propre `version`.
+#
+# Documentation : docs/ (architecture, usage, protocole) et docs/adr/ pour les
+# décisions.
 
 [workspace]
 resolver = "2"
@@ -32,7 +35,17 @@ members = [
     "deveye-adapters/adapter-x11",
 ]
 
-# Dépendances partagées (versions reprises telles quelles du workspace Chronos).
+# Métadonnées communes, héritées par chaque crate (`x.workspace = true`).
+# `version` reste propre à chaque crate (cycle de release indépendant).
+[workspace.package]
+edition = "2021"
+rust-version = "1.88"
+license = "AGPL-3.0-or-later"
+authors = ["NuvoraCode / Morgan Voltz"]
+repository = "https://github.com/Morgan-Voltz/DevEye"
+homepage = "https://github.com/Morgan-Voltz/DevEye"
+
+# Dépendances partagées.
 # Chaque crate ajoute ses propres features par-dessus via `{ workspace = true }`.
 [workspace.dependencies]
 async-trait = "0.1"
