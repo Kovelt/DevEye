@@ -1,0 +1,74 @@
+# Décisions d'architecture (ADR)
+
+Toute décision qui engage DevEye passe par un ADR (*Architecture Decision Record*) : architecture, dépendance ajoutée ou retirée, licence, protocole, surface stable, plateforme supportée, outillage, exception de sécurité ou de lint, choix entre plusieurs options pendant un chantier. Un ADR court vaut mieux qu'une décision que personne ne sait plus justifier.
+
+## Processus
+
+1. **Écrire avant ou avec le changement** : l'ADR est créé dans le commit qui applique la décision, ou juste avant. Pas de décision structurante sans ADR.
+2. **Numéroter en continu** : `docs/adr/NNNN-slug-kebab.md`, quatre chiffres, sans trou ni réutilisation.
+3. **Statut** :
+   - `Proposé` : choix d'un contributeur (ou d'un agent) qui engage le mainteneur au-delà du chantier en cours ; en attente de validation ;
+   - `Accepté` : validé par le mainteneur, en vigueur ;
+   - `Remplacé par ADR-XXXX` : une décision plus récente la supplante ;
+   - `Déprécié` : plus d'actualité, sans remplaçante.
+4. **Ne jamais réécrire l'histoire** : un ADR accepté ne change pas de fond. Pour revenir sur une décision, créer un nouvel ADR, puis passer l'ancien en « Remplacé par ADR-XXXX » (seul son statut change). Les corrections de forme (coquille, lien) sont libres.
+5. **Mettre à jour l'index** ci-dessous dans le même commit.
+6. **Commits** : `docs(adr): ...` pour un ADR seul ; sinon l'ADR voyage avec le changement qu'il justifie.
+
+## Gabarit
+
+```markdown
+# ADR-NNNN — Titre court à l'indicatif
+
+- **Statut** : Proposé | Accepté | Remplacé par ADR-XXXX | Déprécié
+- **Date** : AAAA-MM-JJ
+- **Décideurs** : Morgan Voltz, mainteneur
+- **ADR liés** : ADR-XXXX (nature du lien), ou « aucun »
+
+## Contexte et problème
+
+Pourquoi faut-il décider ? Quel est l'état des lieux et la contrainte ?
+
+## Facteurs de décision
+
+- critère 1
+- critère 2
+
+## Options envisagées
+
+1. **Option A** — description courte.
+2. **Option B** — description courte.
+
+## Décision
+
+Option retenue, en une phrase.
+
+**Justification** : pourquoi elle l'emporte sur les autres, au regard des facteurs.
+
+## Conséquences
+
+**Positives**
+
+- ...
+
+**Coûts et risques**
+
+- ...
+
+## Notes
+
+(Facultatif : références, preuves, chantier de suivi.)
+```
+
+## Index
+
+| ADR | Titre | Statut |
+|---|---|---|
+| [0001](0001-consigner-chaque-decision-dans-un-adr.md) | Consigner chaque décision dans un ADR | Accepté |
+| [0002](0002-licences-agpl-outil-mit-bibliotheques.md) | Licences : AGPL-3.0-or-later pour l'outil, MIT pour les bibliothèques embarquées | Accepté |
+| [0003](0003-hebergement-github-ci-github-actions.md) | Hébergement sur GitHub, intégration continue GitHub Actions, GitLab archivé | Accepté |
+| [0004](0004-preparer-publication-cratesio-sans-publier.md) | Préparer la publication crates.io des bibliothèques sans publier | Accepté |
+| [0005](0005-migration-rmcp-3.md) | Migrer rmcp 1.8 vers 3.12 (RUSTSEC-2026-0462) | Accepté |
+| [0006](0006-exception-rustsec-chrono.md) | Exception d'audit pour chrono (RUSTSEC-2026-0543) | Accepté |
+| [0007](0007-exception-rustsec-quick-xml.md) | Exception d'audit pour quick-xml en build-dependency (RUSTSEC-2026-0194 et 0195) | Accepté |
+| [0008](0008-montees-de-version-avis-rustsec.md) | Montées de version des dépendances touchées par les avis RUSTSEC | Accepté |
