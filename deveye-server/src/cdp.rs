@@ -14,8 +14,8 @@ use deveye_ports::{
 use crate::cli::{Args, TargetMode};
 
 /// Construit le filtre de selection de la page CDP cible a partir des arguments
-/// CLI. Sans flag de filtre, le filtre est ouvert (premiere page qui n'est pas
-/// about:blank, ADR-0014) ; --cdp-accept-blank (false par defaut) autorise en
+/// CLI. Sans flag de filtre, le filtre est ouvert (première page qui n'est pas
+/// about:blank, ADR-0014) ; --cdp-accept-blank (false par défaut) autorise en
 /// plus la page about:blank transitoire d'une webview au boot.
 pub(crate) fn build_cdp_filter(args: &Args) -> TargetFilter {
     TargetFilter {

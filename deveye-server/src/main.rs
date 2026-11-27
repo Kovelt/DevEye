@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
         .context("composition des adapters echouee au demarrage")?;
     mcp.serve_stdio()
         .await
-        .context("le serveur MCP stdio s'est arrete sur erreur")?;
+        .context("le serveur MCP stdio s'est arrêté sur erreur")?;
     Ok(())
 }
 

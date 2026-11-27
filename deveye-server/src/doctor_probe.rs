@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use crate::cli::{Args, TargetMode};
 use crate::doctor::{
-    host_port, CdpView, EisProbe, KwinProbe, Probes, SdkView, ServiceProbe, X11Probe,
+    host_port, wants_cdp, wants_sdk, CdpView, EisProbe, KwinProbe, Probes, SdkView, ServiceProbe,
+    X11Probe,
 };
 
 /// Délai de chaque sonde réseau ou processus : `doctor` doit répondre vite,
@@ -31,16 +32,45 @@ pub(crate) async fn gather(args: &Args) -> Probes {
         // Sans objet ou sans KWin : la décision n'utilisera pas ce fait.
         EisProbe::Unknown("non sondé".to_string())
     };
+    let session_type = env_var("XDG_SESSION_TYPE");
+    let desktop = env_var("XDG_CURRENT_DESKTOP");
+    // Sondes réseau en parallèle, et seulement celles que la cible utilise :
+    // chacune peut attendre jusqu'à son délai complet.
+    let (sdk, cdp) = tokio::join!(
+        async {
+            if wants_sdk(target) {
+                probe_sdk(&args.sdk_url).await
+            } else {
+                not_probed(&args.sdk_url)
+            }
+        },
+        async {
+            if wants_cdp(target) {
+                probe_cdp(args.cdp_url()).await
+            } else {
+                not_probed(args.cdp_url())
+            }
+        }
+    );
     Probes {
-        session_type: env_var("XDG_SESSION_TYPE"),
-        desktop: env_var("XDG_CURRENT_DESKTOP"),
+        session_type,
+        desktop,
         kwin,
         eis,
         xvfb_installed: in_path("Xvfb"),
         x11: args.display.as_deref().map(probe_x11),
-        sdk: probe_sdk(&args.sdk_url).await,
-        cdp: probe_cdp(args.cdp_url()).await,
+        sdk,
+        cdp,
         supported_protocol: deveye_sdk_client::SUPPORTED_PROTOCOL_VERSION.to_string(),
+    }
+}
+
+/// Service que la cible n'utilise pas : la décision le marque « sans objet ».
+fn not_probed<T>(url: &str) -> ServiceProbe<T> {
+    ServiceProbe {
+        url: url.to_string(),
+        tcp_open: false,
+        answer: Err("non sondé (sans objet pour cette cible)".to_string()),
     }
 }
 

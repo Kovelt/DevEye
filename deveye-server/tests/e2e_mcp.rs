@@ -46,23 +46,42 @@ fn display_is_free(n: u32) -> bool {
 
 impl Xvfb {
     fn start() -> Self {
-        let number = (231..=239)
-            .find(|&n| display_is_free(n))
-            .expect("aucun display libre entre :231 et :239");
-        let child = Command::new("Xvfb")
-            .arg(format!(":{number}"))
-            .args(["-nolisten", "tcp", "-screen", "0", "1400x1000x24"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("lancement de Xvfb");
-        let x = Xvfb { child, number };
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while RustConnection::connect(Some(&x.display())).is_err() {
-            assert!(Instant::now() < deadline, "Xvfb ne répond pas");
-            std::thread::sleep(Duration::from_millis(50));
+        // Entre `display_is_free` et le lancement de Xvfb, un autre test peut
+        // prendre le numéro : on essaie le suivant si Xvfb quitte aussitôt, et
+        // on garde son stderr pour que l'échec reste diagnostiquable.
+        let mut last_failure = String::new();
+        for number in (231..=239).filter(|&n| display_is_free(n)) {
+            let mut child = Command::new("Xvfb")
+                .arg(format!(":{number}"))
+                .args(["-nolisten", "tcp", "-screen", "0", "1400x1000x24"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("lancement de Xvfb");
+            let display = format!(":{number}");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let ready = loop {
+                if RustConnection::connect(Some(&display)).is_ok() {
+                    break true;
+                }
+                if let Some(status) = child.try_wait().expect("état de Xvfb") {
+                    let mut stderr = String::new();
+                    if let Some(mut pipe) = child.stderr.take() {
+                        let _ = std::io::Read::read_to_string(&mut pipe, &mut stderr);
+                    }
+                    last_failure = format!("Xvfb {display} a quitté ({status}) : {stderr}");
+                    break false;
+                }
+                assert!(Instant::now() < deadline, "Xvfb {display} ne répond pas");
+                std::thread::sleep(Duration::from_millis(50));
+            };
+            if ready {
+                // stderr n'est plus lu : le libérer évite de remplir le tube.
+                drop(child.stderr.take());
+                return Xvfb { child, number };
+            }
         }
-        x
+        panic!("aucun display Xvfb utilisable entre :231 et :239 ({last_failure})");
     }
 
     fn display(&self) -> String {
@@ -291,6 +310,20 @@ fn mcp_stdio_session_on_private_xvfb() {
         env!("CARGO_PKG_VERSION"),
         "{info}"
     );
+
+    // state : sans SDK ni signaux, l'outil répond par un résultat structuré
+    // (jamais une erreur de protocole), qu'il soit succès ou `isError`.
+    let state = mcp.call_tool("state", json!({}));
+    assert!(state["content"].is_array(), "{state}");
+
+    // Un outil non pris en charge par la cible x11 (pas de JS) : `isError`
+    // structuré, pas une erreur JSON-RPC.
+    let eval = mcp.call_tool("eval_js", json!({ "expression": "1 + 1" }));
+    assert_eq!(eval["isError"], json!(true), "{eval}");
+    let text = eval["content"][0]["text"]
+        .as_str()
+        .expect("texte de l'erreur");
+    assert!(text.contains("unsupported"), "{text}");
 
     // screenshot : un bloc image PNG non vide (signature PNG en base64).
     let shot = mcp.call_tool("screenshot", json!({}));

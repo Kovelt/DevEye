@@ -17,7 +17,7 @@ pub(crate) struct Args {
     // et `--target x11 doctor` sont equivalents.
     /// URL HTTP du webview CDP cible (par defaut http://localhost:9222).
     /// Refuse avec les cibles `sdk`, `kwin-eis` et `x11` (aucun CDP).
-    /// Option absente = valeur par defaut : voir [`Args::cdp_url`].
+    /// Option absente = valeur par défaut : voir [`Args::cdp_url`].
     #[arg(long, global = true)]
     pub(crate) cdp_url: Option<String>,
 
@@ -30,8 +30,8 @@ pub(crate) struct Args {
 
     /// Titre (sous-chaine, insensible a la casse) de la fenetre native a
     /// capturer via xcap quand les yeux ne passent pas par CDP (cible `sdk`,
-    /// ou repli du mode `auto`). Absent dans ces modes : repli plein ecran
-    /// (MonitorRenderer). En cible `x11`, c'est la fenetre pilotee
+    /// ou repli du mode `auto`). Absent dans ces modes : repli plein écran
+    /// (MonitorRenderer). En cible `x11`, c'est la fenêtre pilotée
     /// (alias `--window`) ; sans elle, tout l'ecran du serveur X.
     #[arg(long, global = true, visible_alias = "window")]
     pub(crate) screencap_window: Option<String>,
@@ -39,8 +39,10 @@ pub(crate) struct Args {
     /// Display du serveur X PRIVE pilote par `--target x11` (ex. `:250`).
     /// Obligatoire pour cette cible, SANS valeur par defaut et sans repli sur
     /// `$DISPLAY` : refus des displays < 100, de celui de la session courante
-    /// et de tout serveur XWayland (voir `adapter-x11`).
-    #[arg(long, global = true, required_if_eq("target", "x11"))]
+    /// et de tout serveur XWayland (voir `adapter-x11`). Exigé par `validate`
+    /// (et non par clap) pour que `doctor --target x11` puisse diagnostiquer
+    /// l'absence de display au lieu d'être refusé avant de s'exécuter.
+    #[arg(long, global = true)]
     pub(crate) display: Option<String>,
 
     /// Cible `x11` : sous-chaine qui doit en plus figurer dans `WM_CLASS` de la
@@ -67,8 +69,8 @@ pub(crate) struct Args {
 
     /// Sous-chaine (insensible a la casse) que doit contenir l'URL de la page
     /// CDP cible. Sans ce flag ni --cdp-target-filter-title, la cible est la
-    /// premiere page qui n'est pas about:blank ; si aucune page ne convient,
-    /// l'erreur liste les pages vues. Sert a viser une page precise quand
+    /// première page qui n'est pas about:blank ; si aucune page ne convient,
+    /// l'erreur liste les pages vues. Sert a viser une page précise quand
     /// plusieurs sont ouvertes (ex. `localhost:5000`). Refuse hors cibles `auto`/`cdp`.
     #[arg(long)]
     pub(crate) cdp_target_filter_url: Option<String>,
@@ -80,7 +82,7 @@ pub(crate) struct Args {
     pub(crate) cdp_target_filter_title: Option<String>,
 
     /// Accepte aussi la page "about:blank" comme cible CDP (transitoire d'une
-    /// webview au boot). Desactive par defaut : un filtre ne doit pas s'attacher
+    /// webview au boot). Desactive par défaut : un filtre ne doit pas s'attacher
     /// a l'about:blank d'une page avant son chargement. Refuse hors cibles
     /// `auto`/`cdp`.
     #[arg(long, default_value_t = false)]
@@ -98,7 +100,7 @@ pub(crate) struct Args {
 /// Sous-commandes de `deveye-server`.
 #[derive(Subcommand, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
-    /// Diagnostique l'environnement pour la cible choisie (`--target`, defaut
+    /// Diagnostique l'environnement pour la cible choisie (`--target`, défaut
     /// `auto`) : session, KWin, EIS, Xvfb, SDK, CDP, ports. Lecture seule, un
     /// statut et un conseil par verification ; code de sortie non nul si un
     /// prerequis bloquant manque.
@@ -132,7 +134,7 @@ impl Args {
         args
     }
 
-    /// URL CDP effective (`--cdp-url` ou valeur par defaut).
+    /// URL CDP effective (`--cdp-url` ou valeur par défaut).
     pub(crate) fn cdp_url(&self) -> &str {
         self.cdp_url.as_deref().unwrap_or(DEFAULT_CDP_URL)
     }
@@ -142,7 +144,7 @@ impl Args {
         self.screencap_backend.unwrap_or(ScreencapBackend::Auto)
     }
 
-    /// Refuse les options sans effet sur la cible choisie, plutot que de les
+    /// Refuse les options sans effet sur la cible choisie, plutôt que de les
     /// ignorer en silence (ADR-0031) :
     /// - `--display` et `--x11-class` : uniquement `--target x11` ;
     /// - `--cdp-url`, `--cdp-target-filter-*`, `--cdp-accept-blank` : uniquement
@@ -154,6 +156,15 @@ impl Args {
     pub(crate) fn validate(&self) -> Result<(), clap::Error> {
         use clap::CommandFactory;
         let mut ignored: Vec<(&str, &str)> = Vec::new();
+        if self.target == TargetMode::X11
+            && self.display.is_none()
+            && !matches!(self.command, Some(Command::Doctor))
+        {
+            return Err(Self::command().error(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "--display est obligatoire avec --target x11 (serveur X privé, ex. --display :250)",
+            ));
+        }
         if self.target != TargetMode::X11 {
             for (set, flag) in [
                 (self.display.is_some(), "--display"),
@@ -276,6 +287,13 @@ mod tests {
         assert!(err.to_string().contains("--display"));
         // Un window seul ne suffit pas, et $DISPLAY n'est jamais un repli.
         assert!(parse(&["--target", "x11", "--window", "Probe"]).is_err());
+    }
+
+    #[test]
+    fn doctor_diagnoses_x11_without_display() {
+        let a = parse(&["--target", "x11", "doctor"]).unwrap();
+        assert!(a.display.is_none());
+        assert!(matches!(a.command, Some(Command::Doctor)));
     }
 
     #[test]

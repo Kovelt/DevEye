@@ -31,9 +31,9 @@ const UNDETERMINED: u8 = 0;
 const PRIMARY: u8 = 1;
 const FALLBACK: u8 = 2;
 
-/// Backend qui sert reellement les appels du mode `auto`, partage par toutes
+/// Backend qui sert réellement les appels du mode `auto`, partage par toutes
 /// les facades de repli et lu par `target_info` (ADR-0034). Chaque **bascule**
-/// est journalisee (pas chaque appel) : un repli silencieux faisait croire a
+/// est journalisée (pas chaque appel) : un repli silencieux faisait croire a
 /// l'agent qu'il pilotait le webview alors que les gestes passaient par le pont
 /// natif.
 pub(crate) struct FallbackState {
@@ -41,7 +41,7 @@ pub(crate) struct FallbackState {
 }
 
 impl FallbackState {
-    /// `primary_up` : le primaire etait joignable au demarrage (sinon l'etat
+    /// `primary_up` : le primaire était joignable au démarrage (sinon l'état
     /// reste indetermine jusqu'au premier appel).
     pub(crate) fn new(primary_up: bool) -> Self {
         Self {
@@ -49,7 +49,7 @@ impl FallbackState {
         }
     }
 
-    /// Le primaire a repondu (succes ou erreur d'une autre nature que la liaison).
+    /// Le primaire a repondu (succès ou erreur d'une autre nature que la liaison).
     pub(crate) fn mark_primary(&self) {
         if self.current.swap(PRIMARY, Ordering::Relaxed) == FALLBACK {
             info!("CDP de nouveau joignable : les appels repassent par le primaire");
@@ -67,7 +67,7 @@ impl FallbackState {
         }
     }
 
-    /// Libelle expose par `target_info` : "cdp", "sdk" ou "indetermine".
+    /// Libellé expose par `target_info` : "cdp", "sdk" ou "indetermine".
     pub(crate) fn label(&self) -> &'static str {
         match self.current.load(Ordering::Relaxed) {
             PRIMARY => "cdp",
@@ -286,11 +286,11 @@ mod tests {
             !called.load(Ordering::SeqCst),
             "le repli ne doit pas etre invoque sur Timeout"
         );
-        // Une erreur non liee a la liaison prouve que le primaire repond.
+        // Une erreur non liée a la liaison prouve que le primaire répond.
         assert_eq!(state.label(), "cdp");
     }
 
-    /// Le repli puis le retour du primaire se refletent dans le libelle.
+    /// Le repli puis le retour du primaire se reflètent dans le libellé.
     #[test]
     fn state_follows_fallback_and_recovery() {
         let state = FallbackState::new(true);

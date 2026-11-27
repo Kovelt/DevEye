@@ -149,7 +149,7 @@ deveye-server doctor --target kwin-eis
 deveye-server doctor --target x11 --display :250
 ```
 
-Diagnostic **en lecture seule** : il n'ouvre aucun serveur MCP, ne compose aucun adapter, n'injecte aucun événement. Il accepte les mêmes options que le serveur (`--target`, `--sdk-url`, `--cdp-url`, `--display`…). Huit vérifications, chacune avec un statut et, si besoin, un conseil :
+Diagnostic **en lecture seule** : il n'ouvre aucun serveur MCP, ne compose aucun adapter, n'injecte aucun événement. Il accepte les options de ciblage du serveur (`--target`, `--sdk-url`, `--cdp-url`, `--display`, `--screencap-window`…) ; les filtres de cible CDP (`--cdp-target-filter-*`, `--cdp-accept-blank`) ne servent qu’au serveur. Avec `--target x11` sans `--display`, il ne refuse pas la ligne de commande : il le diagnostique. Il ne sonde que ce que la cible utilise (CDP seulement pour `auto` et `cdp`), en parallèle. Huit vérifications, chacune avec un statut et, si besoin, un conseil :
 
 | Vérification | Rôle |
 |---|---|

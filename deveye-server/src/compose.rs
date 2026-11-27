@@ -247,7 +247,7 @@ const JS_DEPENDENT_TOOLS: &[&str] = &[
 /// choisi et la session : capacités distinctives, version du serveur, notes sur
 /// les pièges et indisponibilités propres à chaque cible.
 fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
-    // Fenetres, geometrie et focus par KWin (hors x11, qui a les siens).
+    // Fenêtres, géométrie et focus par KWin (hors x11, qui a les siens).
     let kwin_windows = host.kwin;
     let kwin_focus = host.kwin && host.window_title;
     let wm_kwin = if host.kwin { "kwin" } else { "aucun" };
@@ -278,9 +278,9 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
                 "CDP Input.* (events natifs), repli events JS synthetiques (pont SDK)".to_string();
             info.list_windows = true;
             info.notes = "Repli appel-par-appel sur le pont SDK des que le CDP est injoignable ; \
-                    `effective_backend` dit lequel sert (cdp, sdk, indetermine) et la premiere \
-                    bascule est journalisee. list_windows reste CDP : il echoue quand le CDP \
-                    est tombe. Les capacites webview (eval_js/dom) supposent un webview joignable \
+                    `effective_backend` dit lequel sert (cdp, sdk, indetermine) et la première \
+                    bascule est journalisée. list_windows reste CDP : il échoue quand le CDP \
+                    est tombe. Les capacités webview (eval_js/dom) supposent un webview joignable \
                     (CDP ou pompe SDK)."
                 .to_string();
         }
@@ -289,14 +289,14 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
             info.hands = "CDP Input.* (events natifs navigateur, isTrusted=true)".to_string();
             info.list_windows = true;
             info.notes = "state/logs/commandes dependent du SDK opt-in embarque dans l'app — \
-                    absent en cible WASM/.NET pure (renvoie alors une erreur reseau). \
+                    absent en cible WASM/.NET pure (renvoie alors une erreur réseau). \
                     window_geometry/focus_window passent par KWin (KDE/Wayland) et non par le CDP."
                 .to_string();
         }
         TargetMode::Sdk => {
             info.eyes = "screencap OS (KWin sous Wayland/KDE, xcap sinon)".to_string();
-            info.hands = "events JS synthetiques via la pompe document::eval de l'app".to_string();
-            info.notes = "resize indisponible (emulation des metriques moteur = CDP). Pas de \
+            info.hands = "events JS synthétiques via la pompe document::eval de l'app".to_string();
+            info.notes = "resize indisponible (emulation des métriques moteur = CDP). Pas de \
                     visibilite inter-fenetres (list_windows vide). window_geometry/focus_window \
                     necessitent KDE/Wayland."
                 .to_string();
@@ -309,19 +309,19 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
             info.notes =
                 "Rendu natif, pas de WebView : dom/eval_js/find_element \
                     renvoient Unsupported, navigate indisponible ; wait_for_selector/wait_for_text \
-                    attendent le timeout complet puis repondent found:false. state/logs via le SDK/shim \
+                    attendent le timeout complet puis répondent found:false. state/logs via le SDK/shim \
                     de l'app si lance. Yeux et assertions visuelles : screenshot/assert_visual. \
                     list_windows/window_geometry/focus_window via KWin Scripting : necessitent \
                     KDE/Wayland (ces champs sont faux ailleurs). list_windows enumere tout le \
                     workspace (aucun titre requis) ; window_geometry cible par titre (celui de \
-                    l'appel ou, a defaut, --screencap-window) ; focus_window exige \
-                    --screencap-window au demarrage."
+                    l'appel ou, a défaut, --screencap-window) ; focus_window exige \
+                    --screencap-window au démarrage."
                     .to_string();
         }
         TargetMode::X11 => {
-            info.eyes = "GetImage du serveur X prive, rogne a la fenetre (--window)".to_string();
+            info.eyes = "GetImage du serveur X privé, rogne a la fenêtre (--window)".to_string();
             info.hands =
-                "injection XTEST reelle sur le serveur X prive (souris, molette, clavier du serveur)"
+                "injection XTEST réelle sur le serveur X privé (souris, molette, clavier du serveur)"
                     .to_string();
             info.list_windows = true;
             info.window_geometry = true;
@@ -333,7 +333,7 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
                     $DISPLAY et XWayland refuses. Pas de WebView : eval_js/find_element/\
                     click_text renvoient Unsupported, navigate/handle_dialog/\
                     upload_file aussi ; wait_for_selector/wait_for_text attendent le timeout \
-                    complet puis repondent found:false. dom = reponse de la route `ui.widgets` de l'app (rects en \
+                    complet puis répondent found:false. dom = réponse de la route `ui.widgets` de l'app (rects en \
                     coordonnees fenetre : cliquer au centre avec `click`), vide d'erreur Inspect \
                     si l'app ne l'expose pas ; state/logs/commandes via le SDK (--sdk-url). \
                     Attentes : wait_condition (state-key, screenshot-stable, screenshot-region-stable, \
@@ -341,8 +341,8 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
                     Clavier = celui du serveur X ; un caractere absent est injecte par remappage \
                     temporaire. Molette : un cran par tranche de 120 px de dx/dy. Presse-papiers \
                     indisponible. Limites de capture : l'image est la racine du serveur X \
-                    rognee a la fenetre (une fenetre recouvrante y apparait, la partie hors \
-                    ecran est noire), sans mise a l'echelle HiDPI ni compositeur."
+                    rognee a la fenêtre (une fenêtre recouvrante y apparait, la partie hors \
+                    écran est noire), sans mise a l'échelle HiDPI ni compositeur."
                     .to_string();
         }
     }
@@ -375,7 +375,7 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
     let initial: Option<Arc<CdpClient>> =
         try_initial_cdp(args.cdp_url(), cdp_filter.clone(), args.target).await;
 
-    // Mode `auto` : etat du repli, lu par `target_info` (ADR-0034).
+    // Mode `auto` : état du repli, lu par `target_info` (ADR-0034).
     let cdp_up = initial.is_some();
     let mut fallback_state: Option<Arc<FallbackState>> = None;
 
@@ -439,15 +439,15 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
             }
             // Mains OS-level EIS ; yeux par screencap (M1) ; DOM/JS indisponibles
             // (rendu natif). Le state/les logs restent servis par le SDK plus bas.
-            // L'origine fenetre est resolue au demarrage (best-effort, repli (0,0)).
+            // L'origine fenêtre est résolue au démarrage (best-effort, repli (0,0)).
             TargetMode::KwinEis => {
                 let window_origin =
                     resolve_kwin_origin(screencap_title.as_deref(), args.screencap_backend()).await;
-                // KwinEisInteraction::new echoue seulement si l'OS refuse la creation
+                // KwinEisInteraction::new échoue seulement si l'OS refuse la création
                 // du thread worker (RLIMIT_NPROC, OOM...) : propage au lieu du
                 // `.expect` d'origine, qui paniquait tout le binaire (A6).
                 let interaction = KwinEisInteraction::new(window_origin)
-                    .context("--target kwin-eis : demarrage du thread worker EIS impossible")?;
+                    .context("--target kwin-eis : démarrage du thread worker EIS impossible")?;
                 (
                     build_os_renderer(screencap_title.as_deref(), args.screencap_backend()),
                     Arc::new(interaction),

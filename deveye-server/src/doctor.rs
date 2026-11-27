@@ -296,17 +296,31 @@ pub(crate) fn protocol_compat(announced: &str, supported: &str) -> Compat {
     }
 }
 
-/// Hôte et port d'une URL `http://hôte:port[/…]` (port 80 par défaut).
+/// Hôte et port d'une URL `http://hôte:port[/…]` (port par défaut du schéma :
+/// 80 pour `http`, et pour une URL sans schéma). Les identifiants éventuels
+/// (`user@hôte`) sont ignorés et un littéral IPv6 est rendu sans crochets.
 pub(crate) fn host_port(url: &str) -> Option<(String, u16)> {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    let authority = rest.split(['/', '?', '#']).next()?;
-    if authority.is_empty() {
+    let parsed = if url.contains("://") {
+        reqwest::Url::parse(url).ok()?
+    } else {
+        reqwest::Url::parse(&format!("http://{url}")).ok()?
+    };
+    let host = parsed.host_str()?.trim_matches(['[', ']']).to_string();
+    if host.is_empty() {
         return None;
     }
-    match authority.rsplit_once(':') {
-        Some((host, port)) if !host.is_empty() => Some((host.to_string(), port.parse().ok()?)),
-        _ => Some((authority.to_string(), 80)),
-    }
+    Some((host, parsed.port_or_known_default()?))
+}
+
+/// La cible a-t-elle une raison de sonder le SDK / CDP ? (Sinon la décision
+/// les marque « sans objet » : inutile d'attendre leur délai.)
+/// Ces deux lignes de la table `need` ne dépendent pas de la session.
+pub(crate) fn wants_sdk(target: TargetMode) -> bool {
+    need(target, Item::Sdk, false) != Need::NotApplicable
+}
+
+pub(crate) fn wants_cdp(target: TargetMode) -> bool {
+    need(target, Item::Cdp, false) != Need::NotApplicable
 }
 
 /// Décide, pour chaque vérification, de son statut et du conseil associé.
@@ -809,6 +823,15 @@ mod tests {
     }
 
     #[test]
+    fn only_browser_targets_probe_cdp() {
+        for t in [TargetMode::Sdk, TargetMode::KwinEis, TargetMode::X11] {
+            assert!(!wants_cdp(t), "{t:?}");
+            assert!(wants_sdk(t), "{t:?}");
+        }
+        assert!(wants_cdp(TargetMode::Auto) && wants_cdp(TargetMode::Cdp));
+    }
+
+    #[test]
     fn host_port_parsing() {
         assert_eq!(
             host_port("http://127.0.0.1:31337"),
@@ -824,5 +847,22 @@ mod tests {
         );
         assert_eq!(host_port("http://"), None);
         assert_eq!(host_port("http://hote:abc"), None);
+        assert_eq!(host_port("http://[::1]"), Some(("::1".into(), 80)));
+        assert_eq!(
+            host_port("http://[::1]:31337/x"),
+            Some(("::1".into(), 31337))
+        );
+        assert_eq!(
+            host_port("http://user:pw@127.0.0.1:9222"),
+            Some(("127.0.0.1".into(), 9222))
+        );
+        assert_eq!(
+            host_port("localhost:9222"),
+            Some(("localhost".into(), 9222))
+        );
+        assert_eq!(
+            host_port("https://exemple.test"),
+            Some(("exemple.test".into(), 443))
+        );
     }
 }
