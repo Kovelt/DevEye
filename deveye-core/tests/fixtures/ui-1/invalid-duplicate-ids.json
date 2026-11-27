@@ -1,0 +1,9 @@
+{
+  "schema": "deveye.ui/1",
+  "window": { "width": 100, "height": 100 },
+  "widgets": [
+    { "id": "a", "role": "button", "rect": [0, 0, 10, 10] },
+    { "id": "a", "role": "button", "rect": [20, 0, 10, 10] },
+    { "id": "b", "parent": "ghost", "role": "label", "rect": [0, 20, 10, 10] }
+  ]
+}

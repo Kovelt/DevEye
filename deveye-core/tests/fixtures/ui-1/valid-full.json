@@ -1,0 +1,21 @@
+{
+  "schema": "deveye.ui/1",
+  "generation": 42,
+  "window": { "width": 1280, "height": 720, "scale": 2.0 },
+  "focus": "name",
+  "published_at_ms": 1767225600000,
+  "widgets": [
+    { "id": "root", "role": "window", "label": "Agenda", "rect": [0, 0, 1280, 720] },
+    { "id": "name", "parent": "root", "role": "textbox", "label": "Nom", "value": "Alice",
+      "rect": [40, 60, 240, 28], "actions": ["click", "type", "set_value"],
+      "state": { "focused": true } },
+    { "id": "password", "parent": "root", "role": "password", "label": "Mot de passe",
+      "rect": [40, 100, 240, 28], "state": { "secret": true } },
+    { "id": "remember", "parent": "root", "role": "checkbox", "label": "Se souvenir",
+      "rect": [40, 140, 160, 24], "actions": ["toggle"], "state": { "checked": true } },
+    { "id": "list", "parent": "root", "role": "scrollarea", "rect": [320, 60, 400, 300],
+      "scroll": { "x": 0, "y": 120, "max_x": 0, "max_y": 900 }, "clipped": true },
+    { "id": "gauge", "parent": "list", "role": "gauge", "value": 0.4, "rect": [330, 70, 380, 12] }
+  ],
+  "added_in_a_later_minor": { "ignored": true }
+}

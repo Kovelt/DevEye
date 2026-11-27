@@ -129,3 +129,5 @@ Les ADR rédigés pendant la préparation de la 1.0 avec le statut « Proposé �
 | [0059](0059-politique-de-securite-et-conventions-de-contribution.md) | Politique de sécurité et conventions de contribution | Accepté |
 | [0060](0060-dependances-d-adapters-cache-de-ci-et-verrous-empoisonnes.md) | Dépendances d'adapters, cache de CI et verrous empoisonnés du SDK | Accepté |
 | [0061](0061-version-1-0-0-perimetre-de-la-sortie.md) | Version 1.0.0 : périmètre de la sortie | Accepté |
+| [0062](0062-schema-deveye-ui-1-de-la-route-ui-widgets.md) | Schéma `deveye.ui/1` de la route `ui.widgets` | Accepté |
+| [0063](0063-dependance-optionnelle-schemars-dans-deveye-core.md) | Dépendance optionnelle `schemars` dans `deveye-core` | Accepté |

@@ -10,10 +10,11 @@ Tant que la version majeure ne change pas, ces éléments ne cassent pas.
 
 | Élément | Ce qui est couvert |
 |---|---|
-| `deveye-core` | types publics du domaine (commandes, prédicats, snapshots, niveaux de log, descripteurs) |
+| `deveye-core` | types publics du domaine (commandes, prédicats, snapshots, niveaux de log, descripteurs) ; module `ui` (arbre `deveye.ui/1`, depuis 1.1) et feature optionnelle `schema` (dérive `schemars::JsonSchema`, désactivée par défaut) |
 | `deveye-ports` | traits des ports, `PortError`, `PortResult` |
 | `deveye-sdk` | API publique embarquée dans l'app cible (`init`, `Config`, `set_state`, `expose_route`, `take_eval_requests`, constantes publiques) |
 | `deveye-sdk-client` | client HTTP et constantes partagés avec les adapters |
+| **Schéma `deveye.ui/1`** (depuis 1.1) | forme de la réponse de la route `ui.widgets` ([usage.md](usage.md), `docs/schemas/ui-widgets-1.json`, [ADR-0062](adr/0062-schema-deveye-ui-1-de-la-route-ui-widgets.md)) : champs et sémantique actuels figés ; une évolution mineure n'ajoute que des champs optionnels, une rupture publie `deveye.ui/2` lu en plus de `/1` ; le rôle d'un widget est une chaîne ouverte, son vocabulaire recommandé n'est pas une énumération fermée |
 | **Wire protocol v1** | endpoints, formes JSON et en-têtes décrits dans [wire-protocol.md](wire-protocol.md), dont `X-DevEye-Protocol-Version: 1.0` (la mineure augmente à chaque ajout, la majeure à chaque rupture) |
 | **Outils MCP** | le nom de chaque outil, le nom et le type de chaque paramètre, la forme de chaque réponse |
 | **`deveye-server`** | les options (`--target`, `--display`, `--cdp-url`, `--sdk-url`, `--screencap-window`, etc.), leurs valeurs possibles, leurs valeurs par défaut et les combinaisons refusées ([ADR-0031](adr/0031-validation-des-flags-selon-la-cible.md)) ; `--version` ; la sous-commande `doctor` et ses codes de sortie (0 : prêt ou avertissements, 1 : prérequis bloquant manquant, 2 : erreur d'usage) — le texte du diagnostic n'est pas couvert |
@@ -40,6 +41,8 @@ Aucune promesse de compatibilité sur :
 | Ajouter un champ à une réponse JSON (les clients ignorent les champs inconnus) | mineure |
 | Ajouter une variante à un enum `#[non_exhaustive]` (`InteractionCommand`, `WaitPredicate`, `PortError`, `MouseButton`, `LogLevel`, `ConsoleLevel`) | mineure |
 | Ajouter un champ à un struct `#[non_exhaustive]` | mineure |
+| Ajouter un champ optionnel au schéma `deveye.ui/1` (lecteurs tolérants) | mineure |
+| Retirer ou changer le sens d'un champ de `deveye.ui/1` | majeure du schéma (`deveye.ui/2`) |
 | Ajouter une fonction, un type ou un trait par défaut implémentable | mineure |
 | Ajouter une méthode **sans implémentation par défaut** à un trait de port | majeure |
 | Renommer ou supprimer un outil, un paramètre, une option de CLI, un endpoint, un type ou une fonction publics | majeure |

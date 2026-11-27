@@ -330,6 +330,41 @@ Place `text` dans le presse-papiers (`wl-copy`) ; avec `key_combo` Ctrl+V, saisi
 
 DOM courant (JSON), puis `{ captured_at }`. Au-delà de ~100 Ko sérialisés, `isError` explicite : préférer `find_element`, `assert_selector` ou `eval_js`. En `x11`, le « DOM » est la réponse de la route `ui.widgets` de l'app, sans interprétation ; absente, erreur d'inspection explicite.
 
+##### Route `ui.widgets` : schéma `deveye.ui/1`
+
+Pour une app sans DOM, la route `ui.widgets` publie une liste **plate** de widgets, chacun pointant vers son parent. Le contrat est typé dans `deveye-core` (module `ui`, [ADR-0062](adr/0062-schema-deveye-ui-1-de-la-route-ui-widgets.md)) et décrit par [`docs/schemas/ui-widgets-1.json`](schemas/ui-widgets-1.json) ; des fixtures valides, legacy et invalides sont dans `deveye-core/tests/fixtures/ui-1/`.
+
+```json
+{
+  "schema": "deveye.ui/1",
+  "generation": 42,
+  "window": { "width": 800, "height": 600, "scale": 1.0 },
+  "focus": "name",
+  "widgets": [
+    { "id": "root", "role": "window", "rect": [0, 0, 800, 600] },
+    { "id": "name", "parent": "root", "role": "textbox", "label": "Nom", "value": "Alice",
+      "rect": [40, 60, 240, 28], "actions": ["click", "type"], "state": { "focused": true } },
+    { "id": "password", "parent": "root", "role": "password", "label": "Mot de passe",
+      "rect": [40, 100, 240, 28], "state": { "secret": true } }
+  ]
+}
+```
+
+- `rect` = `[x, y, largeur, hauteur]` en pixels entiers, **dans le repère des gestes** de la cible (origine en haut à gauche de la fenêtre) : cliquer au centre du rect vise le widget. Une app en points logiques (egui) multiplie par son facteur d'échelle avant de publier ; les coordonnées fractionnaires sont arrondies vers la plus petite boîte entière qui contient le rectangle (`x`, `y` au plancher, bords droit et bas au plafond).
+- `role` est une chaîne ouverte (vocabulaire recommandé : `window`, `panel`, `button`, `checkbox`, `radio`, `textbox`, `password`, `slider`, `knob`, `list`, `listitem`, `tab`, `menu`, `menuitem`, `label`, `image`, `scrollarea`) ; une valeur inconnue est conservée.
+- Un widget `secret` (ou de rôle `password`) ne publie pas sa valeur ; le serveur masque en plus toute valeur reçue pour un tel widget.
+- Les lecteurs ignorent les champs inconnus : une évolution mineure ajoute des champs optionnels, une rupture publie `deveye.ui/2`, lu en plus de `/1`.
+
+Format d'avant le schéma (sans champ `schema`), lu et converti par le lecteur tolérant : une liste ou `{ window?, widgets }`, où `kind` tient lieu de `role`, `text` de `label`, `rect` est un tableau ou un objet `{ x, y, width, height }`, et un widget sans `id` reçoit un `id` éphémère `role[index]` (marqué `id_ephemeral`, à ne pas réutiliser d'un arbre à l'autre).
+
+<!-- ui-widgets-legacy-example -->
+```json
+[
+  { "id": "valider", "kind": "button", "text": "Valider",
+    "rect": { "x": 40, "y": 120, "width": 96, "height": 28 } }
+]
+```
+
 #### `find_element`
 
 Premier élément qui correspond à `selector` : `{ found, tag, text, rect: { x, y, width, height }, visible, disabled, attributes, value_prop }` (`value_prop` : propriété `.value` des champs, `null` sinon).

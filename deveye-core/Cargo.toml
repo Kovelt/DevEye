@@ -21,3 +21,11 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# Optionnelle et désactivée par défaut : sert uniquement à générer le JSON Schema
+# de deveye.ui/1 (ADR-0063). Une app qui embarque le SDK n'en tire rien.
+schemars = { version = "1", optional = true }
+
+[features]
+default = []
+# Dérive `schemars::JsonSchema` sur les types du module `ui`.
+schema = ["dep:schemars"]

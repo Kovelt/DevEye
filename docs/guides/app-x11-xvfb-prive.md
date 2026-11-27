@@ -48,7 +48,7 @@ deveye_sdk::expose_route("ui.widgets", "Arbre des widgets", |_payload| {
 });
 ```
 
-Le schéma des nœuds appartient à l'app ; il est conseillé d'y mettre des rects en coordonnées de fenêtre : l'agent clique alors au centre avec `click`. Sans cette route, `dom` répond une erreur d'inspection explicite. Au-delà de ~100 Ko, `dom` refuse l'arbre.
+Le contrat recommandé est le schéma `deveye.ui/1` ([usage.md](../usage.md), section « Route `ui.widgets` ») ; l'exemple ci-dessus est le format d'avant le schéma, toujours lu par le serveur. Il est conseillé d'y mettre des rects en coordonnées de fenêtre : l'agent clique alors au centre avec `click`. Sans cette route, `dom` répond une erreur d'inspection explicite. Au-delà de ~100 Ko, `dom` refuse l'arbre.
 
 ## 4. Limites de la capture
 
