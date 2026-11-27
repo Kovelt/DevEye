@@ -41,7 +41,7 @@ La règle 5 du `CLAUDE.md` est amendée : « Du Rust pur sur le domaine (`chrono
 
 **Coûts et risques**
 
-- la feature `schema` entre dans la surface de `deveye-core` (additive, documentée dans `docs/stability.md`) ; sa montée de version majeure de `schemars` serait un changement de la sortie, pas de l'API ;
+- la feature `schema` entre dans la surface de `deveye-core` (additive, documentée dans `docs/stability.md`) ; une montée de version majeure de `schemars` est un changement majeur pour `deveye-core` (la dépendance est exposée par la feature, cf. `docs/stability.md`, « Dépendances exposées ») : elle n'est pas publiée dans une mineure ;
 - le texte des doc-comments des types alimente les descriptions du schéma : ils sont rédigés pour le fil, pas pour Rust seul.
 
 ## Notes

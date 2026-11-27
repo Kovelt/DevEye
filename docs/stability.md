@@ -83,6 +83,8 @@ Certains types de dépendances apparaissent dans l'API stable. Un changement de 
 | `tokio` | `Receiver<EvalRequest>` et `oneshot::Sender` dans `deveye-sdk` |
 | `reqwest` | `reqwest::Client` et `reqwest::Response` dans les signatures de `deveye-sdk-client` (`fetch_info`, `check_protocol_version`) |
 | `async-trait` | les traits de `deveye-ports` ; un adapter les implémente avec `#[async_trait]` |
+| `schemars` 1.x | `schemars::JsonSchema` dérivé sur les types de `deveye-core`, **uniquement** avec la feature optionnelle `schema` ([ADR-0063](adr/0063-dependance-optionnelle-schemars-dans-deveye-core.md)) |
+| `tracing-subscriber` 0.3 | `tracing_subscriber::Layer` implémenté par `DeveyeLayer`, **uniquement** avec la feature optionnelle `tracing-layer` de `deveye-sdk` ([ADR-0066](adr/0066-push-de-logs-et-layer-du-sdk.md)) ; candidat à la 2.0 |
 | `thiserror` | implémentation de `std::error::Error` sur `PortError` (le trait seul est exposé, pas la macro) |
 
 `EvalRequest` (`deveye-sdk`) est un message produit par le SDK et lu par la pompe de l'app : ses champs publics se lisent et se déstructurent avec `..`, mais il n'a volontairement pas de constructeur, un consommateur n'ayant jamais à en fabriquer. `SdkInfo` (`deveye-sdk-client`) se construit par `SdkInfo::new`.
