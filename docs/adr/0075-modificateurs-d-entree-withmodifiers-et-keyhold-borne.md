@@ -57,3 +57,8 @@ Les gestes de pointeur (`Click`, `DoubleClick`, `Hover`, `DragDrop`, `Scroll`) n
 - `key_hold` bloque le verrou des gestes jusqu'à 10 s : un client dont le délai d'appel est plus court verra l'appel expirer alors que la touche est bien relâchée côté serveur.
 
 **Suites possibles** : `KeyHold` en cdp par `dispatchKeyEvent` si un besoin réel apparaît ; `#[non_exhaustive]` sur les variantes struct en 2.0, qui rendrait possible l'option 1.
+
+## Amendements issus de la revue de suivi
+
+- **Désérialisation** : `KeyHold` refuse aussi un nom de touche vide (les trois contrôles sont ainsi identiques) ; le geste interne d'un `WithModifiers` est lu par une énumération restreinte aux cinq gestes de pointeur, sans récursion sur `InteractionCommand` : une imbrication hostile est refusée à la première couche, même par `from_value`.
+- **x11** : les pas de modificateurs comptent comme du clavier (`needs_keyboard`) ; sans gestionnaire de fenêtres, le focus est donc fixé sur la fenêtre cible avant l'appui d'un modificateur.

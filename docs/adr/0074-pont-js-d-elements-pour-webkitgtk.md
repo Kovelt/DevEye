@@ -54,3 +54,9 @@ Sous Linux, seul système supporté en 1.x, le webview d'une app Dioxus desktop 
 - **Centre hors fenêtre** : `locate` amène l'élément en vue aussi quand son rect recouvre la fenêtre mais que son **centre** (le point cliqué) est dehors ; l'élément « à moitié visible » n'est plus refusé en `offscreen`.
 - **Profondeur de sortie** : chaque niveau d'arbre coûte deux niveaux JSON ; le décodeur `serde_json` du serveur refuse au-delà de 128. La sortie est donc bornée à 50 niveaux (`truncated` quand coupée), quelle que soit la profondeur du DOM (parcours borné à 300). `max_depth: 0` vaut 1, comme sur les widgets natifs.
 - **Secrets** : voir « Secrets » ci-dessus ; la limite est consignée dans `SECURITY.md`.
+
+## Amendements issus de la revue de suivi
+
+- **Coupe des libellés** : un libellé coupé en pleine paire de substitution UTF-16 laisserait une moitié d'emoji, que `serde_json` refuse : la coupe retire la surrogate haute finale.
+- **`tabindex`** : seul un `tabindex` strictement positif classe un élément sans rôle en `clickable` ; `tabindex="0"` ou vide désigne un conteneur simplement focusable.
+- **Défilement de `locate`** : un simple recouvrement ne fait plus défiler la page, sauf si l'élément vit dans un conteneur qui défile (le défilement peut alors le dégager). Hors vue ou centre hors fenêtre, le défilement reste systématique. Limite assumée : un élément de taille 0x0 (`display: none` apparu après l'instantané) est rendu `offscreen`, faute d'état distinct dans le port stable `ElementLocation`.
