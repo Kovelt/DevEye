@@ -1,6 +1,6 @@
 [package]
 name = "adapter-dioxus-signals"
-version = "0.2.0"
+version = "1.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Adapter DevEye : AppInspector::state_snapshot via le SDK opt-in (HTTP local)."
-publish = false  # interne, non publie
+publish = false  # interne, non publié
 
 [lints]
 workspace = true

@@ -1,13 +1,13 @@
 [package]
 name = "deveye-core"
-version = "0.2.0"
+version = "1.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license = "MIT"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Domaine pur de DevEye : sessions, snapshots, commandes d'interaction, enregistrements et diff."
+description = "Domaine pur de DevEye : commandes d'interaction, snapshots, prédicats d'attente, logs, erreurs console et fenêtres."
 readme = "README.md"
 keywords = ["devtools", "testing", "ui", "mcp", "debugging"]
 categories = ["development-tools", "development-tools::testing", "data-structures"]

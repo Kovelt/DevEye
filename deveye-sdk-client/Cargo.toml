@@ -1,6 +1,6 @@
 [package]
 name = "deveye-sdk-client"
-version = "0.2.0"
+version = "1.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license = "MIT"
@@ -19,7 +19,7 @@ workspace = true
 [dependencies]
 # Dépendances internes MIT -> MIT (invariant ADR-0002) : PortError pour les
 # erreurs de protocole ; `tracing` pour l'avertissement de version.
-deveye-ports = { path = "../deveye-ports", version = "0.2.0" }
+deveye-ports = { path = "../deveye-ports", version = "1.0.0" }
 reqwest = { workspace = true }
 serde = { workspace = true }
 tracing = "0.1"
