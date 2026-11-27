@@ -44,6 +44,12 @@ const FIXTURE: &str = r##"<!doctype html>
   <input type="text" aria-label="Nom" value="Ada">
   <input type="password" aria-label="Mot de passe" value="hunter2">
   <input type="text" autocomplete="current-password" aria-label="Mot de passe visible" value="hunter3">
+  <input type="text" name="api_key" aria-label="Cle API" value="sk-live-hunter4">
+  <input type="text" autocomplete="one-time-code" aria-label="Code recu" value="hunter5">
+  <input type="text" id="cvv" aria-label="Cryptogramme" value="hunter6">
+  <input type="password" id="pw2" aria-label="Bascule" value="hunter7">
+  <div data-deveye-secret><input type="text" aria-label="Marque secret" value="hunter8"></div>
+  <input type="text" name="author" aria-label="Auteur" value="Ada Lovelace">
   <label><input type="checkbox" id="chk" checked> Se souvenir</label>
   <div class="pointer" onclick="window.zone = 1">Zone cliquable</div>
   <div id="scroller"><div class="tall"></div><button id="deep" onclick="window.deep = 1">Tout en bas</button></div>
@@ -65,7 +71,12 @@ const FIXTURE: &str = r##"<!doctype html>
         '<button class="btn btn-primary btn-sm rounded px-3" data-id="' + i + '">Ouvrir</button></li>');
     }
     const root = document.getElementById('host').attachShadow({mode: 'open'});
-    root.innerHTML = '<button id="shadowbtn" onclick="window.shadow = 1">Ombre</button>';
+    root.innerHTML = '<button id="shadowbtn" onclick="window.shadow = 1" ' +
+      'onmousedown="window.sdown = (window.sdown || 0) + 1">Ombre</button>' +
+      '<input id="sin" type="text" aria-label="Saisie ombre">' +
+      '<div id="sce" contenteditable="true" role="textbox" aria-label="Edition ombre"></div>' +
+      '<div id="sscroll" style="height:60px;width:200px;overflow:auto;border:1px solid #888">' +
+      '<div style="height:400px">defile</div></div>';
   </script>
 </body></html>"##;
 
@@ -368,6 +379,247 @@ async fn the_bridge_script_behaves_like_the_native_contract_in_chromium() {
         json.len(),
         dom_len
     );
+
+    // 8 bis. Secrets : indices d'autocomplétion, de nom, de marquage explicite, champ
+    // basculé de password à text après avoir été vu ; un champ ordinaire reste lu.
+    let secrets = inspector
+        .snapshot(&SnapshotQuery::new())
+        .await
+        .expect("snapshot secrets");
+    client
+        .evaluate("document.getElementById('pw2').type = 'text'")
+        .await
+        .expect("bascule");
+    let toggled = inspector
+        .snapshot(&SnapshotQuery::new())
+        .await
+        .expect("snapshot bascule");
+    for snapshot in [&secrets, &toggled] {
+        let mut flat = Vec::new();
+        flatten(&snapshot.nodes, &mut flat);
+        let json = serde_json::to_string(snapshot).expect("json");
+        for leak in ["hunter4", "hunter5", "hunter6", "hunter7", "hunter8"] {
+            assert!(!json.contains(leak), "{leak} fuit dans l'instantané");
+        }
+        assert_eq!(
+            find(&flat, "textbox", "Auteur").value.as_deref(),
+            Some("Ada Lovelace")
+        );
+    }
+
+    // 8 ter. Toutes les clés des vecteurs partagés (ADR-0064) sont masquées, aucune
+    // clé ordinaire ne l'est.
+    let vectors: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../docs/schemas/shared-vectors-1.json"
+        ))
+        .expect("vecteurs partagés"),
+    )
+    .expect("json des vecteurs");
+    let keys = |group: &str| -> Vec<String> {
+        vectors["redaction"][group]
+            .as_array()
+            .expect("liste")
+            .iter()
+            .map(|k| k.as_str().expect("chaîne").to_string())
+            .collect()
+    };
+    let secret_keys: Vec<String> = ["required_secret_keys", "extended_secret_keys"]
+        .iter()
+        .flat_map(|g| keys(g))
+        .collect();
+    let ordinary_keys = keys("ordinary_keys");
+    let fields = secret_keys
+        .iter()
+        .chain(ordinary_keys.iter())
+        .enumerate()
+        .map(|(i, k)| {
+            format!(
+                "<input type=\"text\" name=\"{k}\" aria-label=\"champ-{i}\" value=\"valeur-{i}\">"
+            )
+        })
+        .collect::<String>();
+    client
+        .evaluate(&format!(
+            "document.getElementById('spacer').insertAdjacentHTML('beforebegin', {})",
+            serde_json::to_string(&format!("<div id=\"vecteurs\">{fields}</div>")).expect("html")
+        ))
+        .await
+        .expect("champs des vecteurs");
+    let vec_snap = inspector
+        .snapshot(&SnapshotQuery::new().with_max_nodes(2000))
+        .await
+        .expect("snapshot vecteurs");
+    let mut vec_flat = Vec::new();
+    flatten(&vec_snap.nodes, &mut vec_flat);
+    for (i, key) in secret_keys.iter().enumerate() {
+        let node = find(&vec_flat, "textbox", &format!("champ-{i}"));
+        assert_eq!(node.value, None, "la clé secrète {key} doit être masquée");
+    }
+    for (offset, key) in ordinary_keys.iter().enumerate() {
+        let i = secret_keys.len() + offset;
+        let node = find(&vec_flat, "textbox", &format!("champ-{i}"));
+        assert_eq!(
+            node.value.as_deref(),
+            Some(format!("valeur-{i}").as_str()),
+            "la clé ordinaire {key} ne doit pas être masquée"
+        );
+    }
+
+    // 8 quater. Élément à moitié visible dont le centre est hors fenêtre : ramené en vue.
+    client
+        .evaluate(
+            "window.scrollTo(0, 0); document.body.insertAdjacentHTML('beforeend', \
+             '<div id=\"big\" role=\"button\" aria-label=\"Grande carte\" onclick=\"window.big = 1\" \
+              style=\"position:absolute;left:0;width:300px;height:400px;top:' + (innerHeight - 100) + 'px\"></div>')",
+        )
+        .await
+        .expect("grande carte");
+    let big_snap = inspector
+        .snapshot(&SnapshotQuery::new())
+        .await
+        .expect("snapshot carte");
+    let mut big_flat = Vec::new();
+    flatten(&big_snap.nodes, &mut big_flat);
+    let big = find(&big_flat, "button", "Grande carte");
+    assert!(!big.offscreen, "à moitié visible n'est pas hors vue");
+    let big_ref = big.reference.clone();
+    click_ref(&inspector, &click, &big_ref)
+        .await
+        .expect("clic sur la grande carte");
+    assert!(eval_bool(&client, "window.big === 1").await);
+    // La carte recouvrirait le shadow root testé plus bas.
+    client
+        .evaluate("document.getElementById('big').remove()")
+        .await
+        .expect("retrait de la carte");
+
+    // 8 quinquies. Shadow DOM ouvert : saisie (champ et contenteditable), défilement,
+    // glisser. Chaque geste doit atteindre l'élément DANS le shadow root.
+    client
+        .evaluate("window.scrollTo(0, document.getElementById('host').offsetTop - 100)")
+        .await
+        .expect("vers l'hôte");
+    let shadow_snap = inspector
+        .snapshot(&SnapshotQuery::new())
+        .await
+        .expect("snapshot ombre");
+    let mut sflat = Vec::new();
+    flatten(&shadow_snap.nodes, &mut sflat);
+    let field = find(&sflat, "textbox", "Saisie ombre").reference.clone();
+    click_ref(&inspector, &click, &field)
+        .await
+        .expect("focus champ");
+    click
+        .dispatch(InteractionCommand::type_text("abc"))
+        .await
+        .expect("saisie dans le shadow root");
+    assert!(
+        eval_bool(
+            &client,
+            "document.getElementById('host').shadowRoot.getElementById('sin').value === 'abc'"
+        )
+        .await
+    );
+    let editable = find(&sflat, "textbox", "Edition ombre").reference.clone();
+    click_ref(&inspector, &click, &editable)
+        .await
+        .expect("focus contenteditable");
+    click
+        .dispatch(InteractionCommand::type_text("xyz"))
+        .await
+        .expect("saisie contenteditable");
+    assert!(
+        eval_bool(
+            &client,
+            "document.getElementById('host').shadowRoot.getElementById('sce').textContent === 'xyz'"
+        )
+        .await
+    );
+    let scroller = client
+        .evaluate(
+            "(() => { const r = document.getElementById('host').shadowRoot.getElementById('sscroll')\
+             .getBoundingClientRect(); return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)]; })()",
+        )
+        .await
+        .expect("rect du conteneur");
+    let (sx, sy) = (
+        scroller[0].as_i64().expect("x") as i32,
+        scroller[1].as_i64().expect("y") as i32,
+    );
+    click
+        .dispatch(InteractionCommand::Scroll {
+            position: Position::new(sx, sy),
+            dx: 0,
+            dy: 120,
+        })
+        .await
+        .expect("défilement");
+    assert!(
+        eval_bool(
+            &client,
+            "document.getElementById('host').shadowRoot.getElementById('sscroll').scrollTop > 0"
+        )
+        .await,
+        "le conteneur défilant du shadow root doit défiler"
+    );
+    let before = client
+        .evaluate("window.sdown || 0")
+        .await
+        .expect("compteur")
+        .as_i64()
+        .expect("entier");
+    let shadow_btn = inspector
+        .locate(&find(&sflat, "button", "Ombre").reference)
+        .await
+        .expect("locate bouton");
+    let (bx, by) = shadow_btn.center();
+    click
+        .dispatch(InteractionCommand::DragDrop {
+            from: Position::new(bx, by),
+            to: Position::new(bx, by),
+        })
+        .await
+        .expect("glisser");
+    let after = client
+        .evaluate("window.sdown || 0")
+        .await
+        .expect("compteur")
+        .as_i64()
+        .expect("entier");
+    assert_eq!(
+        after,
+        before + 1,
+        "le glisser doit partir du bouton du shadow root"
+    );
+
+    // 8 sexies. DOM très profond : la sortie reste décodable (limite serde_json de
+    // 128 niveaux), tronquée et signalée ; `max_depth: 0` vaut 1.
+    client
+        .evaluate(
+            "document.getElementById('spacer').insertAdjacentHTML('beforebegin', \
+             '<div id=\"abyss\"></div>'); let n = document.getElementById('abyss'); \
+             for (let i = 0; i < 120; i++) { const d = document.createElement('div'); \
+             d.setAttribute('role', 'group'); d.setAttribute('aria-label', 'niveau ' + i); \
+             d.style.height = '1px'; n.appendChild(d); n = d; } true",
+        )
+        .await
+        .expect("DOM profond");
+    let deep_snap = inspector
+        .snapshot(
+            &SnapshotQuery::new()
+                .with_scope("#abyss")
+                .with_interactive_only(false),
+        )
+        .await
+        .expect("un DOM profond ne doit pas faire échouer l'instantané");
+    assert!(deep_snap.truncated, "profondeur coupée et signalée");
+    let one = inspector
+        .snapshot(&SnapshotQuery::new().with_max_depth(0))
+        .await
+        .expect("max_depth 0");
+    assert!(one.count() >= 1 && one.nodes.iter().all(|n| n.children.is_empty()));
 
     // 9. Rechargement de page : autre epoch, anciennes références périmées, numéros
     // jamais réutilisés.

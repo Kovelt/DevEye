@@ -18,6 +18,10 @@
   var VALUE_MAX = 200;
   var VISIT_CAP = 50000;
   var MAX_DEPTH = 300;
+  // Profondeur de SORTIE (en nœuds) : chaque niveau coûte deux niveaux JSON
+  // (objet puis tableau `children`) et le décodeur serde_json côté serveur refuse
+  // au-delà de 128 ; 50 niveaux laissent de la marge pour l'enveloppe et `state`.
+  var MAX_OUTPUT_DEPTH = 50;
 
   // Une clé = `<epoch>:<n>`. L'epoch change à chaque chargement de page : une
   // clé d'une page précédente est reconnue comme étrangère, jamais réattribuée.
@@ -124,12 +128,49 @@
     return null;
   }
 
+  // Filet heuristique (ADR-0064, ADR-0074) : la page n'a pas de notion de secret,
+  // seulement des indices. Les listes reprennent celles du masquage par noms de
+  // clés du wire protocol (`docs/schemas/shared-vectors-1.json`) ; un test dans un
+  // vrai navigateur vérifie chaque clé requise des vecteurs partagés.
+  var SECRET_CONTAINS = [
+    'password', 'passwd', 'secret', 'apikey', 'privatekey', 'credential',
+    'authorization', 'accesskey', 'signingkey', 'encryptionkey', 'databaseurl',
+    'connectionstring', 'motdepasse', 'mdp', 'jeton', 'passphrase', 'passcode',
+    'cardnumber', 'creditcard', 'cvv', 'cvc'
+  ];
+  var SECRET_SUFFIXES = ['token', 'cookie', 'sessionid'];
+  var SECRET_EXACT = ['pwd', 'auth', 'jwt', 'bearer', 'otp', 'tokens', 'cookies', 'pin', 'iban'];
+  var SECRET_AUTOCOMPLETE =
+    /(^|\s)(current-password|new-password|one-time-code|cc-number|cc-csc|cc-exp|cc-exp-month|cc-exp-year)(\s|$)/i;
+  // Champs vus un jour en type=password : un bouton « afficher » les bascule en
+  // type=text, ils restent secrets.
+  var wasPassword = typeof WeakSet === 'function' ? new WeakSet() : null;
+
+  function secretWord(text) {
+    var k = String(text || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!k) return false;
+    var i;
+    for (i = 0; i < SECRET_CONTAINS.length; i++) if (k.indexOf(SECRET_CONTAINS[i]) >= 0) return true;
+    for (i = 0; i < SECRET_SUFFIXES.length; i++) {
+      var s = SECRET_SUFFIXES[i];
+      if (k.length >= s.length && k.lastIndexOf(s) === k.length - s.length) return true;
+    }
+    return SECRET_EXACT.indexOf(k) >= 0;
+  }
+
   function isSecretField(el) {
-    if (el.localName !== 'input') return false;
-    if ((el.getAttribute('type') || '').toLowerCase() === 'password') return true;
-    // Un champ « afficher le mot de passe » bascule en type=text : l'indication
-    // d'autocomplétion reste.
-    return /(^|\s)(current|new)-password(\s|$)/i.test(el.getAttribute('autocomplete') || '');
+    // Opt-out explicite posé par l'app, sur le champ ou un ancêtre.
+    var marked = el.closest ? el.closest('[data-deveye-secret]') : null;
+    if (marked && (marked.getAttribute('data-deveye-secret') || '').toLowerCase() !== 'false') return true;
+    if (el.localName !== 'input' && el.localName !== 'textarea') return false;
+    if ((el.getAttribute('type') || '').toLowerCase() === 'password') {
+      if (wasPassword) wasPassword.add(el);
+      return true;
+    }
+    if (wasPassword && wasPassword.has(el)) return true;
+    if (SECRET_AUTOCOMPLETE.test(el.getAttribute('autocomplete') || '')) return true;
+    return secretWord(el.getAttribute('name')) || secretWord(el.id) ||
+      secretWord(el.getAttribute('aria-label')) || secretWord(el.getAttribute('placeholder'));
   }
 
   function contentText(el) {
@@ -181,7 +222,7 @@
   }
 
   function valueOf(el, role) {
-    // Jamais la valeur d'un champ secret, quelle que soit la requête.
+    // Jamais la valeur d'un champ reconnu comme secret (heuristique, voir plus haut).
     if (isSecretField(el)) return null;
     var tag = el.localName;
     var v = null;
@@ -243,6 +284,14 @@
     var right = rect[0] + rect[2];
     var bottom = rect[1] + rect[3];
     return right <= 0 || bottom <= 0 || rect[0] >= window.innerWidth || rect[1] >= window.innerHeight;
+  }
+
+  // Le centre (point où l'on clique) est hors de la fenêtre, même si le rect la
+  // recouvre en partie : une grande carte à moitié visible.
+  function centerOut(rect) {
+    var cx = rect[0] + Math.floor(rect[2] / 2);
+    var cy = rect[1] + Math.floor(rect[3] / 2);
+    return cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight;
   }
 
   function isScrollable(el, cs) {
@@ -386,9 +435,13 @@
       truncated: false
     };
     var nodes = visit(root, ctx, 0);
+    // 0 est traité comme 1 (même règle que les widgets natifs) ; la sortie est
+    // bornée à MAX_OUTPUT_DEPTH niveaux quoi qu'on demande.
+    var depth = MAX_OUTPUT_DEPTH;
     if (typeof q.max_depth === 'number' && q.max_depth >= 0) {
-      if (limitDepth(nodes, q.max_depth)) ctx.truncated = true;
+      depth = Math.min(Math.max(1, Math.floor(q.max_depth)), MAX_OUTPUT_DEPTH);
     }
+    if (limitDepth(nodes, depth)) ctx.truncated = true;
     var budget = typeof q.max_nodes === 'number' ? q.max_nodes : 400;
     var total = count(nodes);
     if (total > budget) {
@@ -434,12 +487,12 @@
     var hidden = rect[2] === 0 && rect[3] === 0;
     // Hors vue ou masqué par un conteneur qui défile : on amène l'élément au
     // centre (sans animation, pour mesurer tout de suite), comme un humain.
-    if (isOffscreen(rect) || (!hidden && covered(el, rect))) {
+    if (isOffscreen(rect) || (!hidden && (centerOut(rect) || covered(el, rect)))) {
       try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); }
       catch (e) { el.scrollIntoView(); }
       rect = rectOf(el);
     }
-    var offscreen = isOffscreen(rect);
+    var offscreen = isOffscreen(rect) || centerOut(rect);
     var out = { epoch: epoch, state: 'ok', rect: rect, offscreen: offscreen, disabled: isDisabled(el) };
     if (!offscreen) {
       var top = covered(el, rect);

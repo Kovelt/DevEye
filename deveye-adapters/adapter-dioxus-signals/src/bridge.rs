@@ -146,6 +146,12 @@ const DEEP_AT: &str = "const deepAt = (e, x, y) => { \
      while (e && e.shadowRoot) { const d = e.shadowRoot.elementFromPoint(x, y); \
      if (!d || d === e) break; e = d; } return e; };";
 
+/// Élément actif, shadow roots ouverts traversés : `document.activeElement` s'arrête
+/// à l'hôte du shadow root, qui n'est ni un champ ni l'élément qui a le focus.
+const DEEP_ACTIVE: &str = "const deepActive = () => { let a = document.activeElement; \
+     while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; \
+     return a; };";
+
 /// `None` pour un bouton inconnu (`MouseButton` est `#[non_exhaustive]`).
 fn button_code(button: MouseButton) -> Option<u8> {
     match button {
@@ -158,7 +164,8 @@ fn button_code(button: MouseButton) -> Option<u8> {
 
 /// Fragment d'objet d'options JS portant les booleens de modificateurs
 /// (`ctrlKey: true, ...`), a inserer dans les options d'un `MouseEvent`.
-/// Vide sans modificateur : les scripts historiques restent identiques.
+/// Vide sans modificateur : les options d'evenement ne changent pas. (Les scripts
+/// eux-memes traversent desormais les shadow roots ouverts, ADR-0074.)
 fn modifier_flags(modifiers: &[Modifier]) -> String {
     let mut flags = String::new();
     for (modifier, key) in [
@@ -227,8 +234,17 @@ fn type_snippet(text: &str) -> String {
     // Setter natif du prototype : les frameworks réactifs interceptent la
     // propriété `value` de l'instance — passer par le prototype garantit que
     // l'événement `input` voit la nouvelle valeur.
+    // Champ de formulaire (y compris dans un shadow root ouvert) ou zone
+    // `contenteditable` : `execCommand('insertText')` insere au curseur comme une
+    // frappe ; a defaut, ajout en fin de contenu.
     format!(
-        "(function(){{ const el = document.activeElement; const text = {text}; \
+        "(function(){{ {DEEP_ACTIVE} const el = deepActive(); const text = {text}; \
+         if (el && el.isContentEditable && !('value' in el)) {{ \
+           let done = false; \
+           try {{ done = document.execCommand('insertText', false, text); }} catch (e) {{}} \
+           if (!done) {{ el.textContent = (el.textContent ?? '') + text; \
+             el.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: text, inputType: 'insertText' }})); }} \
+           return {{ ok: true }}; }} \
          if (!el || !('value' in el)) return {{ ok: false, reason: 'aucun champ éditable au focus' }}; \
          const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value'); \
          const next = (el.value ?? '') + text; \
@@ -241,7 +257,7 @@ fn type_snippet(text: &str) -> String {
 fn keypress_snippet(key: &str) -> String {
     let key = js_string(key);
     format!(
-        "(function(){{ const el = document.activeElement || document.body; \
+        "(function(){{ {DEEP_ACTIVE} const el = deepActive() || document.body; \
          const opts = {{ key: {key}, bubbles: true, cancelable: true }}; \
          el.dispatchEvent(new KeyboardEvent('keydown', opts)); \
          el.dispatchEvent(new KeyboardEvent('keyup', opts)); \
@@ -267,7 +283,7 @@ fn keycombo_snippet(modifiers: &[String], key: &str) -> String {
     // vrai event OS (les raccourcis du moteur ne se declenchent pas), mais
     // suffisant pour les handlers applicatifs.
     format!(
-        "(function(){{ const el = document.activeElement || document.body; \
+        "(function(){{ {DEEP_ACTIVE} const el = deepActive() || document.body; \
          const opts = {{ key: {key}, ctrlKey: {ctrl}, shiftKey: {shift}, altKey: {alt}, metaKey: {meta}, \
                          bubbles: true, cancelable: true }}; \
          el.dispatchEvent(new KeyboardEvent('keydown', opts)); \
@@ -312,14 +328,15 @@ fn scroll_snippet(position: Position, dx: i32, dy: i32, mods: &str) -> String {
     };
     // Piege connu (usage.md) : le scroll de l'app vit souvent dans un conteneur
     // (.shell__content), pas dans window. On remonte les ancetres a la recherche
-    // du premier element reellement scrollable sous le point ; sinon window.
+    // du premier element reellement scrollable sous le point, en sortant des shadow
+    // roots par leur hote ; sinon window.
     format!(
-        "(function(){{ let n = document.elementFromPoint({x}, {y}); \
+        "(function(){{ {DEEP_AT} let n = deepAt(document.elementFromPoint({x}, {y}), {x}, {y}); \
          const scrollable = (e) => {{ while (e && e !== document.body && e !== document.documentElement) {{ \
            const s = getComputedStyle(e); \
            if (/(auto|scroll)/.test((s.overflowY || '') + (s.overflowX || '')) \
                && (e.scrollHeight > e.clientHeight || e.scrollWidth > e.clientWidth)) return e; \
-           e = e.parentElement; }} return null; }}; \
+           e = e.parentElement || (e.getRootNode && e.getRootNode().host) || null; }} return null; }}; \
          {wheel}const t = scrollable(n); \
          if (t) t.scrollBy({dx}, {dy}); else window.scrollBy({dx}, {dy}); \
          return {{ ok: true }}; }})()"
@@ -343,13 +360,13 @@ fn navigate_snippet(route: &str) -> String {
 fn dragdrop_snippet(from: Position, to: Position, mods: &str) -> String {
     let (fx, fy, tx, ty) = (from.x, from.y, to.x, to.y);
     format!(
-        "(function(){{ const src = document.elementFromPoint({fx}, {fy}); \
+        "(function(){{ {DEEP_AT} const src = deepAt(document.elementFromPoint({fx}, {fy}), {fx}, {fy}); \
          if (!src) return {{ ok: false, reason: 'aucun élément source à ({fx}, {fy})' }}; \
          const o = (x, y) => ({{ bubbles: true, cancelable: true, composed: true, view: window, {mods}\
                                  clientX: x, clientY: y, pointerId: 1, isPrimary: true, button: 0, buttons: 1 }}); \
          src.dispatchEvent(new PointerEvent('pointerdown', o({fx}, {fy}))); \
          src.dispatchEvent(new MouseEvent('mousedown', o({fx}, {fy}))); \
-         const dst = document.elementFromPoint({tx}, {ty}) || src; \
+         const dst = deepAt(document.elementFromPoint({tx}, {ty}), {tx}, {ty}) || src; \
          dst.dispatchEvent(new PointerEvent('pointermove', o({tx}, {ty}))); \
          dst.dispatchEvent(new MouseEvent('mousemove', o({tx}, {ty}))); \
          dst.dispatchEvent(new PointerEvent('pointerup', o({tx}, {ty}))); \
@@ -618,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn snippets_sans_modificateur_sont_inchanges() {
+    fn snippets_sans_modificateur_n_ajoutent_ni_booleen_ni_wheel() {
         let p = Position::new(3, 4);
         assert!(!click_snippet(p, MouseButton::Left, "")
             .unwrap()
@@ -673,6 +690,19 @@ mod tests {
         .unwrap();
         sink.dispatch(ok).await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn tous_les_gestes_traversent_les_shadow_roots_ouverts() {
+        let p = Position::new(3, 4);
+        assert!(scroll_snippet(p, 0, 10, "").contains("deepAt("));
+        assert!(scroll_snippet(p, 0, 10, "").contains("getRootNode().host"));
+        let drag = dragdrop_snippet(p, p, "");
+        assert_eq!(drag.matches("deepAt(document.elementFromPoint").count(), 2);
+        assert!(type_snippet("x").contains("deepActive()"));
+        assert!(type_snippet("x").contains("isContentEditable"));
+        assert!(keypress_snippet("a").contains("deepActive()"));
+        assert!(keycombo_snippet(&[], "a").contains("deepActive()"));
     }
 
     #[test]
