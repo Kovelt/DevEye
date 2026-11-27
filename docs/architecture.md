@@ -24,8 +24,10 @@ DevEye n'est **pas un produit**. C'est un outillage qui accélère le dev. Déci
 
 - **Dev-only, jamais en prod** — tout le code DevEye est strictement gardé par `#[cfg(debug_assertions)]` côté SDK et n'apparaît jamais dans un binaire release de l'app cible.
 - **Hexagonal dès le départ** — le métier (« observer et piloter une app ») est isolé du *comment* (CDP, screencap, MCP). Ajouter une cible de plus = nouvel adapter, pas de refonte.
-- **Première cible = app Dioxus desktop (wry)** — concentré sur Windows en priorité, macOS/Linux ensuite.
+- **Linux seul en 1.0** — `deveye-server` ne compile que sous Linux (ADR-0037) ; la matrice complète des environnements supportés, expérimentaux ou non supportés est dans [`platforms.md`](./platforms.md).
+- **Première cible historique = app Dioxus desktop (wry)** — pilotée aujourd'hui par CDP (webview Chromium) ou par le pont natif du SDK (WebKitGTK), puis élargie aux apps Wayland et X11 natives.
 - **Pas de cible web exigée** — on pilote l'app desktop directement, pas une variante web servie séparément.
+- **Chaque décision structurante est un ADR** — voir [`adr/`](./adr/README.md) ; les six choix fondateurs (hexagonal, dev-only, pont natif, x11 isolé, KWin, repli `auto`) y sont consignés rétroactivement (ADR-0041 à 0046).
 
 ---
 
@@ -36,7 +38,7 @@ Cinq cercles, avec la règle d'or : **le sens des dépendances pointe toujours v
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │   ADAPTERS DevEye (cercle extérieur)                              │
-│   - CDP WebView (Chromium / WebView2)                             │
+│   - CDP WebView (Chromium)                                        │
 │   - Screencap xcap (X11 / XWayland / Wayland non-KDE)             │
 │   - Screencap KWin (KDE Wayland, D-Bus ScreenShot2 + Scripting)   │
 │   - Logs tracing-subscriber                                       │
@@ -77,14 +79,19 @@ Cinq cercles, avec la règle d'or : **le sens des dépendances pointe toujours v
 
 ```
 DevEye/
-├── deveye-core/                ← DOMAINE PUR (aucune dépendance technique)
+├── deveye-core/                ← DOMAINE PUR (aucune dépendance technique), MIT
 │   └── src/
-│       ├── snapshot.rs         # Snapshot { visual, dom, state, timestamp }
+│       ├── snapshot.rs         # Screenshot, DomTree, StateDump, Position, Size
 │       ├── command.rs          # InteractionCommand (Click, Hover, Type, KeyPress, KeyCombo,
-│       │                       # Navigate, DragDrop, Scroll, DoubleClick, HandleDialog, UploadFile)
-│       └── log_event.rs        # LogEvent, niveaux, fields
+│       │                       # Navigate, DragDrop, Scroll, DoubleClick, HandleDialog, UploadFile,
+│       │                       # Resize), MouseButton, CommandDescriptor
+│       ├── wait_condition.rs   # WaitPredicate, WaitOutcome
+│       ├── console_error.rs    # ConsoleError, ConsoleLevel
+│       ├── window_info.rs      # WindowInfo
+│       ├── window_rect.rs      # WindowRect
+│       └── log_event.rs        # LogEvent, LogLevel, fields
 │
-├── deveye-ports/               ← INTERFACES (traits uniquement)
+├── deveye-ports/               ← INTERFACES (traits uniquement), MIT
 │   └── src/
 │       ├── renderer.rs              # trait Renderer
 │       ├── inspector.rs             # trait AppInspector
@@ -112,10 +119,13 @@ DevEye/
 │   ├── adapter-composite/                 # WaitCondition + ConsoleErrorSource + AppInspector composites (sans I/O propre) ; RouteDomInspector (DOM par route de commande)
 │   └── adapter-mcp-server/               # consomme les 12 ports, expose au Model Context Protocol
 │
-├── deveye-sdk/                 ← micro-lib opt-in à intégrer dans l'app cible (cfg debug)
-├── deveye-sdk-client/          ← client HTTP partagé (timeouts, URL par défaut) des adapters qui parlent au SDK
+├── deveye-sdk/                 ← micro-lib opt-in à intégrer dans l'app cible (cfg debug), MIT
+├── deveye-sdk-client/          ← client HTTP partagé (timeouts, URL par défaut, version du protocole) des adapters qui parlent au SDK, MIT
+├── deveye-conformance/         ← suite de conformité boîte noire du wire protocol (bibliothèque + binaire `deveye-conformance`)
 └── deveye-server/              ← BINAIRE orchestrateur (compose les adapters selon les options CLI)
 ```
+
+Les quatre crates MIT sont ceux qu'une app embarque ou qu'un tiers réutilise ; l'outil (`deveye-server`, les adapters, la suite de conformité) est sous AGPL-3.0-or-later. Un crate MIT ne dépend jamais d'un crate AGPL ([ADR-0002](adr/0002-licences-agpl-outil-mit-bibliotheques.md)).
 
 ### Convention de nommage
 
@@ -139,7 +149,7 @@ pub trait Renderer: Send + Sync {
 
 `PortResult<T>` = `Result<T, PortError>` (défini dans `deveye-ports::errors`). `Screenshot` est un wrapper newtype autour de `Vec<u8>` (bytes PNG).
 
-- `adapter-cdp-webview` (`Page.captureScreenshot` CDP) — app desktop wry WebView2
+- `adapter-cdp-webview` (`Page.captureScreenshot` CDP) — webview Chromium (app desktop wry, navigateur)
 - `adapter-screencap-xcap` (capture fenêtre OS) — X11 / XWayland / Wayland non-KDE
 - `adapter-screencap-kwin` (KWin D-Bus `ScreenShot2`) — KDE Wayland natif
 
@@ -297,25 +307,17 @@ Lit la géométrie écran (position + taille) d'une fenêtre de l'app cible. Mot
 
 ---
 
-## Validation technique CDP wry
+## Disponibilité du CDP selon la webview
 
-Dioxus 0.7 expose nativement le hook nécessaire pour activer CDP sur le webview wry desktop côté Windows :
+Le protocole CDP n'existe que sur les webviews Chromium. Une app Dioxus desktop l'active par un argument de lancement de sa webview (côté app, par exemple `--remote-debugging-port=9222`) ; sur un navigateur Chromium, par `--remote-debugging-port`.
 
-```rust
-// côté app cible, en cfg(debug_assertions)
-dioxus::desktop::Config::new()
-    .with_menu(None)
-    .with_windows_browser_args("--remote-debugging-port=9222")
-```
+| Webview | CDP | Pilotage par DevEye |
+|---|---|---|
+| Chromium, WebView2, Chrome, Brave | oui (point d'accès `http://localhost:9222/json`) | `--target cdp` (ou `auto`) |
+| WebKitGTK (apps desktop Linux) | non standard | pont natif du SDK (`--target sdk`, ou repli de `auto`, [ADR-0043](adr/0043-pont-natif-via-le-sdk-sans-cdp.md)) |
+| Rendu natif sans webview (Skia, egui, GTK, Qt) | sans objet | `kwin-eis` (Wayland KDE) ou `x11` (serveur X privé) |
 
-`with_windows_browser_args` passe le flag à `wry::WebViewBuilderExtWindows::with_additional_browser_args`, qui le transmet à WebView2. Résultat : un endpoint CDP standard sur `http://localhost:9222/json` auquel n'importe quel client CDP se connecte.
-
-**Portée** :
-- **Windows (WebView2)** : confirmé.
-- **macOS (WKWebView)** : CDP non disponible nativement. Alternative : DevTools Apple — pilotage par script JS uniquement, pas CDP standard.
-- **Linux (WebKitGTK)** : partiel (`WEBKIT_INSPECTOR_HTTP_SERVER`, pas CDP standard).
-
-**Conséquence** : l'adapter CDP cible **Windows** en priorité. Le fallback `adapter-screencap-xcap` couvre les autres OS pour le visuel ; l'interactivité macOS/Linux viendra avec un adapter spécifique.
+`deveye-server` ne compile que sous Linux ([`platforms.md`](./platforms.md)) : la mention de WebView2 décrit l'app cible, pas une plateforme du serveur.
 
 ---
 
@@ -350,7 +352,9 @@ Conséquence : un hot-reload ne nécessite plus de reconnexion manuelle du MCP. 
 
 Détails opérationnels : [`usage.md`](./usage.md).
 
-**Hors périmètre** : le pont natif ne couvre pas `resize` (émulation des métriques du moteur, exige CDP). Sous Wayland non-KDE, xcap reste le fallback screencap (XWayland requis).
+**Limites de la cible `x11`** : l'image est un `GetImage` de la **racine** du serveur X rognée au rectangle de la fenêtre (le drawable de la fenêtre peut rendre du noir pour un enfant GL). Trois conséquences à connaître : (1) **occultation** — toute fenêtre qui en recouvre une autre apparaît dans la capture à la place de ce qu'elle cache, et la partie hors écran est noire ; (2) **pas de mise à l'échelle HiDPI** — l'image est en pixels du serveur X, et les coordonnées des gestes sont les mêmes pixels ; (3) **sans compositeur ni gestionnaire de fenêtres** — pas de décorations, d'ombres ni de transparence composée : l'image est exactement ce que contient le serveur, ce que verrait un utilisateur de ce serveur. Voir [`usage.md`](./usage.md#limites-de-la-cible-x11).
+
+**Hors périmètre** : le pont natif ne couvre pas `resize` (émulation des métriques du moteur, exige CDP). Sous Wayland non-KDE, xcap reste le fallback screencap (XWayland requis) ; GNOME Wayland n'est pas supporté ([`platforms.md`](./platforms.md)).
 
 ---
 
@@ -381,7 +385,7 @@ Le contrat complet des routes HTTP du SDK (codes de statut, formes des corps, ga
 
 ## Hors périmètre actuel
 
-- Adapter macOS (alternative à CDP sur WKWebView)
+- Windows et macOS (`deveye-server` ne compile que sous Linux, ADR-0037) ; GNOME Wayland (portails XDG envisagés en 1.x)
 - `adapter-tauri`
 - `adapter-cdp-chrome-standalone` (piloter Chrome déjà ouvert sans wry)
 - VRT (Visual Regression Testing) — `Diff` est dans le domaine, le comparateur viendra plus tard
