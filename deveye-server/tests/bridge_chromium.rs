@@ -54,6 +54,8 @@ const FIXTURE: &str = r##"<!doctype html>
   <div class="pointer" onclick="window.zone = 1">Zone cliquable</div>
   <div id="scroller"><div class="tall"></div><button id="deep" onclick="window.deep = 1">Tout en bas</button></div>
   <div id="target"><button id="covered" onclick="window.covered = 1">Couvert</button><div id="veil"></div></div>
+  <div id="tab0" tabindex="0">Focusable seulement</div>
+  <div id="tab1" tabindex="1">Zone tabindex</div>
   <div id="host"></div>
   <div id="hidden" style="display:none"><button>Invisible</button></div>
   <iframe srcdoc="<button>Dans iframe</button>" width="200" height="40"></iframe>
@@ -61,6 +63,9 @@ const FIXTURE: &str = r##"<!doctype html>
   <div id="spacer"></div>
   <button id="foot" onclick="window.foot = 1">Pied de page</button>
   <script>
+    // Libellé dont un emoji tombe sur la frontière de coupe (120 unités UTF-16).
+    document.body.insertAdjacentHTML('beforeend',
+      '<button id="long">' + 'a'.repeat(118) + '\u{1F600}\u{1F600} fin</button>');
     // Liste réaliste (balisage verbeux d'une app) : sert à mesurer le gain de taille.
     for (let i = 1; i <= 40; i++) {
       document.getElementById('rows').insertAdjacentHTML('beforeend',
@@ -260,6 +265,16 @@ async fn the_bridge_script_behaves_like_the_native_contract_in_chromium() {
     );
     assert_eq!(find(&flat, "clickable", "Zone cliquable").role, "clickable");
     find(&flat, "button", "Ombre");
+    // tabindex : seul un tabindex strictement positif désigne une zone d'action.
+    find(&flat, "clickable", "Zone tabindex");
+    assert!(!flat
+        .iter()
+        .any(|n| n.name.as_deref() == Some("Focusable seulement")));
+    // Une coupe en pleine paire de substitution ne casse pas le JSON de l'instantané.
+    assert!(flat.iter().any(|n| n
+        .name
+        .as_deref()
+        .is_some_and(|name| name.starts_with("aaaa") && name.ends_with('…'))));
     // Jamais la valeur d'un champ secret, ni par le type ni par l'autocomplétion.
     assert_eq!(find(&flat, "textbox", "Mot de passe").value, None);
     assert_eq!(find(&flat, "textbox", "Mot de passe visible").value, None);

@@ -62,7 +62,13 @@
   function squash(s) { return (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim(); }
   function clip(s, max) {
     s = squash(s);
-    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+    if (s.length <= max) return s;
+    var cut = s.slice(0, max - 1);
+    // Une surrogate haute finale (paire coupée en deux) rendrait le JSON
+    // illisible pour serde_json : on la retire.
+    var last = cut.charCodeAt(cut.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+    return cut + '…';
   }
 
   var INPUT_ROLES = {
@@ -334,7 +340,9 @@
     if (!role) {
       // Zone cliquable sans rôle : curseur « main » posé ici et pas hérité du parent.
       var tabindex = el.getAttribute('tabindex');
-      if ((tabindex !== null && Number(tabindex) >= 0) ||
+      // Seul un tabindex strictement positif compte (tabindex="0" et "" désignent
+      // un conteneur simplement focusable, pas une zone d'action).
+      if ((tabindex !== null && tabindex.trim() !== '' && Number(tabindex) > 0) ||
           (cs.cursor === 'pointer' && !parentCursorIsPointer(el))) {
         role = 'clickable';
       }
@@ -478,6 +486,15 @@
     return top;
   }
 
+  function inScroller(el) {
+    for (var p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
+      var o = getComputedStyle(p);
+      var scrolls = /(auto|scroll)/.test(o.overflowY + o.overflowX);
+      if (scrolls && (p.scrollHeight > p.clientHeight || p.scrollWidth > p.clientWidth)) return true;
+    }
+    return false;
+  }
+
   function locate(key) {
     var r = resolve(key);
     if (r.foreign) return { epoch: epoch, state: 'foreign' };
@@ -487,7 +504,9 @@
     var hidden = rect[2] === 0 && rect[3] === 0;
     // Hors vue ou masqué par un conteneur qui défile : on amène l'élément au
     // centre (sans animation, pour mesurer tout de suite), comme un humain.
-    if (isOffscreen(rect) || (!hidden && (centerOut(rect) || covered(el, rect)))) {
+    // Un simple recouvrement ne fait défiler que si l'élément vit dans un
+    // conteneur qui défile (sinon on déplacerait la page sous une modale pour rien).
+    if (isOffscreen(rect) || (!hidden && (centerOut(rect) || (inScroller(el) && covered(el, rect))))) {
       try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); }
       catch (e) { el.scrollIntoView(); }
       rect = rectOf(el);
