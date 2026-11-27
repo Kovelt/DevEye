@@ -16,7 +16,10 @@ Architecture **hexagonale** (ports & adapters) sur un **workspace Cargo multi-cr
 - `kwin-eis` : app native sous Wayland KDE (yeux KWin ScreenShot2, mains KWin EIS) ;
 - `x11` : app X11 native dans un serveur X **privé** (Xvfb + XTEST), jamais la session vivante.
 
-DevEye n'est **pas un produit** : c'est un accélérateur de dev. Projet **open source** (`MIT OR Apache-2.0`) à partir de la 1.0, hébergé sur GitHub.
+DevEye n'est **pas un produit** : c'est un accélérateur de dev. Projet **open source** à partir de la 1.0, hébergé sur GitHub, sous deux licences selon le rôle du crate :
+
+- **`AGPL-3.0-or-later`** pour l'outil : `deveye-server`, tous les adapters, l'outillage (licence par défaut du dépôt) ;
+- **`MIT`** pour les bibliothèques qu'une app embarque ou qu'un tiers réutilise : `deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`. Intégrer le SDK dans une app ne lui impose rien.
 
 ---
 
@@ -34,6 +37,8 @@ DevEye n'est **pas un produit** : c'est un accélérateur de dev. Projet **open 
 6. **Pas de `unwrap()` / `expect()` / `panic!()`** dans le code de production sauf justification explicite en commentaire (init au démarrage, invariant impossible). Utiliser `Result<T, E>` et `?`.
 7. **Commentaires** : code expressif d'abord. Un commentaire = un *pourquoi* non évident, pas un *quoi*.
 8. **Surface stable** : depuis la 1.0, `deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`, le wire protocol HTTP du SDK, les noms et schémas des outils MCP et les flags de `deveye-server` suivent semver (voir `docs/stability.md`). Tout changement cassant de cette surface exige une version majeure. Les enums et structs publics évolutifs portent `#[non_exhaustive]`.
+9. **Toute décision passe par un ADR** (`docs/adr/NNNN-slug.md`, index et gabarit dans `docs/adr/README.md`) : architecture, dépendance ajoutée ou retirée, licence, protocole, surface stable, plateforme, outillage, exception de sécurité ou de lint, choix entre plusieurs options. L'ADR est écrit avant ou avec le commit qui applique la décision ; une décision qui en remplace une autre crée un nouvel ADR et passe l'ancien en « Remplacé par ».
+10. **Frontière de licences** : un crate sous `MIT` ne dépend jamais d'un crate sous `AGPL-3.0-or-later`. Un nouveau crate déclare explicitement sa licence (AGPL par défaut, MIT seulement s'il est destiné à être embarqué ou réutilisé, avec un ADR).
 
 ---
 
@@ -75,6 +80,7 @@ DevEye/
     adapter-mcp-server/         expose les ports au Model Context Protocol (outils MCP)
   deveye-server/                binaire orchestrateur (CLI, composition selon --target)
   docs/                         architecture, usage, wire protocol, stabilité, plateformes
+  docs/adr/                     décisions d'architecture (ADR) et leur index
   scripts/                      outillage (synchronisation des copies embarquées)
 ```
 
@@ -93,7 +99,7 @@ DevEye/
 - **Formatage** : `cargo fmt --all`.
 - **Lint** : `cargo clippy --workspace --all-targets -- -D warnings`.
 - **Lints crate** : `#![forbid(unsafe_code)]` + `#![deny(rust_2018_idioms)]` en tête des crates internes (exception documentée pour l'adapter KWin EIS si une dépendance l'impose).
-- **Dépendances** : ne pas ajouter de dépendance Cargo sans en discuter ; préférer les dépendances déjà présentes dans `[workspace.dependencies]`.
+- **Dépendances** : pas de dépendance Cargo nouvelle sans ADR ; préférer les dépendances déjà présentes dans `[workspace.dependencies]`.
 
 ---
 
@@ -148,7 +154,8 @@ Pour le workflow complet avec une app cible (`.mcp.json`, ordre des lancements, 
 
 ## Ce qu'il NE faut PAS faire spontanément
 
-- **Ne pas ajouter** de dépendance Cargo sans en discuter (chaque dépendance pèse à long terme).
+- **Ne pas ajouter** de dépendance Cargo sans ADR (chaque dépendance pèse à long terme).
+- **Ne pas trancher** une décision (architecture, licence, protocole, surface stable, plateforme, outillage) sans l'écrire dans un ADR.
 - **Ne pas créer** de fichiers `.md` de « résumé » ou de « plan » sans demande explicite.
 - **Ne pas faire** de `git push`, de tag ou de publication (crates.io, release GitHub) sans demande explicite.
 - **Ne pas introduire** de logique technique dans `deveye-core`.
@@ -160,6 +167,7 @@ Pour le workflow complet avec une app cible (`.mcp.json`, ordre des lancements, 
 
 ## Workflow recommandé pour ajouter une capacité
 
+0. **Décider** : consigner les choix structurants dans un ADR (`docs/adr/`).
 1. **Modéliser** le besoin dans le domaine (`deveye-core`) si une nouvelle entité est nécessaire.
 2. **Définir / enrichir** le port (trait) concerné dans `deveye-ports`.
 3. **Implémenter** l'adapter dans `deveye-adapters/<adapter>` (un crate par technologie).
