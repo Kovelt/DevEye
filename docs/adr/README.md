@@ -62,7 +62,7 @@ Option retenue, en une phrase.
 
 ## À arbitrer avant le tag 1.0
 
-Les ADR « Proposé » ci-dessous sont déjà appliqués dans le code et la documentation et figent la surface 1.0 (`#[non_exhaustive]`, types `tokio` exposés par le SDK, annotations et version du protocole MCP, `doctor`, `PortError::Script`, CI de release). Le mainteneur doit les passer à « Accepté », ou les remplacer par un ADR plus récent et ajuster le code, **avant** de poser le tag : ADR-0012, 0020 à 0034, 0039, 0048 à 0053. Le choix d'exposer les types `tokio` (version majeure de `tokio` = surface du SDK) n'est consigné que dans ADR-0012 ; `docs/stability.md` en est le relais.
+Les ADR « Proposé » ci-dessous sont déjà appliqués dans le code et la documentation et figent la surface 1.0 (`#[non_exhaustive]`, types `tokio` exposés par le SDK, annotations et version du protocole MCP, `doctor`, `PortError::Script`, CI de release). Le mainteneur doit les passer à « Accepté », ou les remplacer par un ADR plus récent et ajuster le code, **avant** de poser le tag : ADR-0005 à 0010, 0012, 0020 à 0035, 0039, 0048 à 0060. Le choix d'exposer les types `tokio` (version majeure de `tokio` = surface du SDK) n'est consigné que dans ADR-0012 ; `docs/stability.md` en est le relais.
 
 ## Index
 
@@ -128,3 +128,4 @@ Les ADR « Proposé » ci-dessous sont déjà appliqués dans le code et la docu
 | [0058](0058-critere-de-support-verification-par-la-ci-ou-manuelle.md) | Critère de support : vérification par la CI ou par le mainteneur | Proposé |
 | [0059](0059-politique-de-securite-et-conventions-de-contribution.md) | Politique de sécurité et conventions de contribution | Proposé |
 | [0060](0060-dependances-d-adapters-cache-de-ci-et-verrous-empoisonnes.md) | Dépendances d'adapters, cache de CI et verrous empoisonnés du SDK | Proposé |
+| [0061](0061-version-1-0-0-perimetre-de-la-sortie.md) | Version 1.0.0 : périmètre de la sortie | Accepté |
