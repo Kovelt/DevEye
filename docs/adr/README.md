@@ -140,3 +140,4 @@ Les ADR rédigés pendant la préparation de la 1.0 avec le statut « Proposé �
 | [0070](0070-pas-de-feature-tracing-layer-en-1x.md) | Pas de feature `tracing-layer` en 1.x : compatibilité de `default-features = false` | Accepté |
 | [0071](0071-depot-heberge-dans-l-organisation-github-kovelt.md) | Dépôt hébergé dans l'organisation GitHub Kovelt | Accepté |
 | [0072](0072-references-d-elements-stables-et-outils-snapshot-act.md) | Références d'éléments stables et outils `snapshot` et `act` | Accepté |
+| [0073](0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md) | Widgets natifs, `snapshot` et `act` : relocalisation à l'action, candidats et surface expérimentale | Accepté |

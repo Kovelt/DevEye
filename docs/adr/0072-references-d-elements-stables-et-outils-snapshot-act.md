@@ -3,7 +3,7 @@
 - **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
-- **ADR liés** : ADR-0069 (surface expérimentale), ADR-0062 (schéma `deveye.ui/1`), ADR-0067 (sorties structurées), ADR-0068 (capacités additives), ADR-0070 (compatibilité de `default-features = false`), ADR-0041 (architecture hexagonale)
+- **ADR liés** : ADR-0069 (surface expérimentale), ADR-0062 (schéma `deveye.ui/1`), ADR-0067 (sorties structurées), ADR-0068 (capacités additives), ADR-0070 (compatibilité de `default-features = false`), ADR-0041 (architecture hexagonale) ; amendé par ADR-0073 (`ElementLocation::disabled`, `ElementError::Ambiguous`)
 
 ## Contexte et problème
 
