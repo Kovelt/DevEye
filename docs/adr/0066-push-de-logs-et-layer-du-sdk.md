@@ -20,12 +20,12 @@ Les logs n'arrivaient dans `logs_tail` que par `install_tracing_layer()`, qui po
 
 1. **`log()` seul** — zéro couplage, mais n'aide pas l'hôte qui a déjà un subscriber et des événements `tracing` à capter.
 2. **`log()` + `layer()` public, sans feature** — impose `tracing-subscriber` à tous.
-3. **`log()` + `layer()` derrière la feature `tracing-layer` (par défaut), `try_install_tracing_layer()` qui signale l'échec** — retenue.
+3. **`log()` + `layer()` derrière la feature `tracing-layer` (par défaut), `try_install_tracing_layer()` qui signale l'échec** — retenue à l'origine ; le volet « feature » est remplacé par l'ADR-0070 (aucune feature en 1.x, `layer()` et `try_install_tracing_layer()` restent toujours disponibles).
 4. **Verrou du buffer** : `tokio::sync::Mutex` + `blocking_lock` (panique depuis un contexte async), ou canal non borné (état précédent), ou `std::sync::Mutex` — `std` retenu.
 
 ## Décision
 
-Option 3 et `std::sync::Mutex` pour le buffer.
+Option 3 (hors feature, cf. ADR-0070) et `std::sync::Mutex` pour le buffer.
 
 - `log(level, target, message)` et `log_with(…, fields)` empilent directement dans le buffer (horodatage UTC, filtre `DEVEYE_LOG_LEVEL` défaut `info`, abandon des plus anciens à 1 024), sans abonné ni runtime. `LogLevel` est réexporté.
 - `layer()` renvoie `DeveyeLayer`, un `tracing_subscriber::Layer` composable avec le subscriber de l'hôte ; `DeveyeLayer` ne se construit que par `layer()`.
@@ -38,7 +38,7 @@ Option 3 et `std::sync::Mutex` pour le buffer.
 
 **Positives** : tout hôte peut alimenter `logs_tail` ; l'échec d'installation devient observable ; plus de panique possible depuis un contexte async ; code plus simple.
 
-**Coûts et risques** : `DeveyeLayer` expose `tracing_subscriber::Layer` 0.3 dans l'API stable ; un changement de majeure de `tracing-subscriber` ferait passer la feature `tracing-layer` en 2.0 (candidat consigné dans `docs/stability.md`). La feature est active par défaut pour ne pas retirer `install_tracing_layer` ; `default-features = false` écarte la dépendance. Risque résiduel : en 1.0 le SDK n'avait aucune feature, donc `default-features = false` était sans effet ; un consommateur 1.0 qui le déclare perdrait `install_tracing_layer` en passant à 1.1 (erreur de compilation, cas rare), ce qui est noté dans le CHANGELOG et `docs/stability.md`. `layer()` annonce `logs` dès sa construction : un layer jamais composé dans un abonné actif laisse `logs_tail` vide (limite assumée, documentée). Le chemin `--no-default-features` est testé en CI (`cargo test -p deveye-sdk --no-default-features`). Un seul subscriber global par process : `layer()` ne règle pas le cas d'un hôte qui n'en compose aucun, d'où `log()`. Le texte du message n'est pas masqué, seuls les champs le sont (ADR-0016).
+**Coûts et risques** : `DeveyeLayer` expose `tracing_subscriber::Layer` 0.3 dans l'API stable ; un changement de majeure de `tracing-subscriber` serait un changement de surface du SDK (cf. ADR-0070 et `docs/stability.md`). (Les points de cette phrase relatifs à la feature `tracing-layer`, à `default-features = false`, au CHANGELOG, à `docs/stability.md` et au test `--no-default-features` sont caducs : il n'y a plus de feature, donc aucune rupture pour un consommateur 1.0 ; voir ADR-0070.) `layer()` annonce `logs` dès sa construction : un layer jamais composé dans un abonné actif laisse `logs_tail` vide (limite assumée, documentée). Un seul subscriber global par process : `layer()` ne règle pas le cas d'un hôte qui n'en compose aucun, d'où `log()`. Le texte du message n'est pas masqué, seuls les champs le sont (ADR-0016).
 
 ## Notes
 

@@ -1,0 +1,16 @@
+name: Demande de contact (sécurité)
+description: Repli si le signalement privé de vulnérabilité de GitHub n'est pas disponible
+title: "Demande de contact (sécurité)"
+labels: ["security-contact"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        N'indiquez AUCUN détail technique ici : ni composant, ni étapes, ni preuve de concept. Un mainteneur vous répondra avec un canal privé, puis cette issue sera supprimée. Voir SECURITY.md.
+  - type: input
+    id: contact
+    attributes:
+      label: Moyen de vous répondre
+      description: Identifiant GitHub suffisant ; ne collez pas de détail de la faille.
+    validations:
+      required: true

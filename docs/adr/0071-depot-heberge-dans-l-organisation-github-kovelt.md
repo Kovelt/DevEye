@@ -24,7 +24,7 @@ Le code de conduite s'appuie sur la fonction de signalement de contenu de GitHub
 
 ## Décision
 
-Option 3. Le dépôt est transféré vers `github.com/Kovelt/DevEye` (le 2026-11-27). Le mainteneur active le réglage Settings, Access, Moderation options, Reported content. Le repli par issue de demande de contact est conservé pour les comportements hors de GitHub.
+Option 3. Le dépôt est transféré vers `github.com/Kovelt/DevEye` (le 2026-11-27). Le mainteneur active les réglages Settings, Access, Moderation options, Reported content, et Settings, Code security, Private vulnerability reporting (le lien du modèle d'issue vers `security/advisories/new` mène à une 404 tant que ce dernier n'est pas actif). Le repli par issue de demande de contact est conservé pour les comportements hors de GitHub.
 
 ## Conséquences
 
