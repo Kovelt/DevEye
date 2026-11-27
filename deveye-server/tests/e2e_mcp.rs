@@ -11,10 +11,12 @@
 //! display < 100 ou égal à `$DISPLAY`. Xvfb est arrêté par SIGTERM à la fin
 //! (jamais de `pkill -f`).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use adapter_mcp_server::{EXPECTED_TOOL_COUNT, MCP_PROTOCOL_VERSION};
@@ -185,6 +187,75 @@ impl Fixture {
     }
 }
 
+/// SDK factice : un serveur HTTP minimal qui sert la route `ui.widgets` (arbre
+/// `deveye.ui/1` modifiable par le test, comme une app qui re-met en page) et
+/// répond 404 à tout le reste. Aucune dépendance : `std::net` seulement.
+struct FakeSdk {
+    url: String,
+    tree: Arc<Mutex<Option<Value>>>,
+}
+
+impl FakeSdk {
+    fn start(tree: Value) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("port local");
+        let url = format!("http://{}", listener.local_addr().expect("adresse"));
+        let tree = Arc::new(Mutex::new(Some(tree)));
+        let shared = tree.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let tree = shared.clone();
+                std::thread::spawn(move || Self::serve(&mut stream, &tree));
+            }
+        });
+        FakeSdk { url, tree }
+    }
+
+    fn set(&self, tree: Value) {
+        *self.tree.lock().expect("verrou") = Some(tree);
+    }
+
+    fn serve(stream: &mut std::net::TcpStream, tree: &Mutex<Option<Value>>) {
+        let mut reader = BufReader::new(stream.try_clone().expect("clone du flux"));
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+            return; // sonde TCP muette
+        }
+        let mut length = 0usize;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                if name.eq_ignore_ascii_case("content-length") {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+        }
+        let mut body = vec![0u8; length];
+        let _ = reader.read_exact(&mut body);
+        let asked: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        let served = if request_line.starts_with("POST /devtools/command")
+            && asked["route"] == "ui.widgets"
+        {
+            tree.lock().expect("verrou").clone()
+        } else {
+            None
+        };
+        let (status, payload) = match served {
+            Some(tree) => ("200 OK", tree),
+            None => ("404 Not Found", json!({ "error": "route inconnue" })),
+        };
+        let payload = payload.to_string();
+        let reply = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\nx-deveye-protocol-version: 1.0\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}",
+            payload.len()
+        );
+        let _ = stream.write_all(reply.as_bytes());
+    }
+}
+
 /// Le binaire en mode MCP, piloté ligne à ligne (un message JSON par ligne).
 struct McpSession {
     child: Child,
@@ -195,8 +266,17 @@ struct McpSession {
 
 impl McpSession {
     fn start(display: &str) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_deveye-server"))
-            .args(["--target", "x11", "--display", display])
+        Self::start_with_sdk(display, None)
+    }
+
+    /// `sdk_url` : SDK factice qui sert la route `ui.widgets` (voir [`FakeSdk`]).
+    fn start_with_sdk(display: &str, sdk_url: Option<&str>) -> Self {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_deveye-server"));
+        command.args(["--target", "x11", "--display", display]);
+        if let Some(url) = sdk_url {
+            command.args(["--sdk-url", url]);
+        }
+        let mut child = command
             .args(["--window", TITLE, "--serve-mcp"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -394,4 +474,208 @@ fn mcp_stdio_session_with_the_2024_11_05_revision() {
     let text = info["content"][0]["text"].as_str().expect("texte JSON");
     let parsed: Value = serde_json::from_str(text).expect("target_info est du JSON");
     assert_eq!(parsed["target"], "x11", "{parsed}");
+}
+
+/// Arbre `deveye.ui/1` de la fenêtre fixture (400 x 300) : un bouton « Enregistrer »,
+/// un champ, un bouton hors vue, au gré de `save_rect`.
+fn widget_tree(save_rect: [i32; 4], with_save: bool) -> Value {
+    let mut widgets = vec![
+        json!({ "id": "root", "role": "window", "label": "Fixture", "rect": [0, 0, 400, 300] }),
+        json!({ "id": "name", "parent": "root", "role": "textbox", "label": "Nom",
+                "value": "alice", "rect": [10, 20, 200, 24] }),
+        json!({ "id": "off", "parent": "root", "role": "button", "label": "Hors vue",
+                "rect": [10, 900, 80, 30] }),
+    ];
+    if with_save {
+        widgets.push(json!({ "id": "save", "parent": "root", "role": "button",
+            "label": "Enregistrer", "rect": save_rect }));
+    }
+    json!({
+        "schema": "deveye.ui/1",
+        "window": { "width": 400, "height": 300 },
+        "widgets": widgets,
+    })
+}
+
+/// Critères 1, 2 et 5 de la 1.2 : sous Xvfb, `snapshot` liste les `w:<id>`, `act`
+/// clique au centre REMESURÉ (le rect a changé depuis l'instantané), les références
+/// sont stables d'un instantané à l'autre, et un id retiré donne `stale_ref` avec un
+/// `hint`, sans aucun événement émis. Mesure aussi la taille du snapshot (critère 6).
+#[test]
+#[ignore = "démarre un Xvfb privé, un SDK factice et le binaire deveye-server"]
+fn snapshot_and_act_by_reference_on_private_xvfb() {
+    let xvfb = Xvfb::start();
+    let fixture = Fixture::new(&xvfb.display());
+    let sdk = FakeSdk::start(widget_tree([100, 80, 80, 30], true));
+    let mut mcp = McpSession::start_with_sdk(&xvfb.display(), Some(&sdk.url));
+    mcp.request(
+        "initialize",
+        json!({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": { "name": "deveye-e2e-elements", "version": "0" }
+        }),
+    );
+    mcp.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+
+    // Annoncé comme expérimental, hors des 44 outils stables.
+    let listed = mcp.request("tools/list", json!({}));
+    let tools = listed["tools"].as_array().expect("tools");
+    for name in ["snapshot", "act"] {
+        let tool = tools.iter().find(|t| t["name"] == name).expect("outil");
+        assert!(
+            tool["description"]
+                .as_str()
+                .is_some_and(|d| d.starts_with("[expérimental]")),
+            "{tool}"
+        );
+    }
+    let info = mcp.call_tool("target_info", json!({}));
+    assert_eq!(info["structuredContent"]["elements"], json!(true), "{info}");
+
+    // snapshot : les widgets, avec leurs références `w:<id>`, en texte compact.
+    let text_of = |result: &Value| {
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    let first = mcp.call_tool("snapshot", json!({}));
+    assert_ne!(first["isError"], json!(true), "{first}");
+    let first_text = text_of(&first);
+    for expected in [
+        "[ref=w:root]",
+        "[ref=w:name]",
+        "[ref=w:save]",
+        "[ref=w:off] [offscreen]",
+        "= \"alice\"",
+    ] {
+        assert!(
+            first_text.contains(expected),
+            "{expected} absent de :\n{first_text}"
+        );
+    }
+    assert!(
+        first["structuredContent"].is_null(),
+        "texte seul par défaut"
+    );
+    let second_text = text_of(&mcp.call_tool("snapshot", json!({})));
+    assert_eq!(first_text, second_text, "deux snapshots, mêmes références");
+
+    // Critère 6 : taille mesurée et consignée, sans seuil bloquant.
+    let json = mcp.call_tool("snapshot", json!({ "format": "json" }));
+    assert_eq!(
+        json["structuredContent"]["nodes"][0]["ref"], "w:root",
+        "{json}"
+    );
+    let dom = mcp.call_tool("dom", json!({}));
+    eprintln!(
+        "MESURE (4 widgets) : snapshot texte {} octets, snapshot json {} octets, dom {} octets",
+        first_text.len(),
+        text_of(&json).len(),
+        text_of(&dom).len()
+    );
+
+    // L'app re-met en page entre l'instantané et l'action : act clique au centre frais.
+    sdk.set(widget_tree([200, 150, 80, 30], true));
+    let _ = fixture.button_presses();
+    let click = mcp.call_tool("act", json!({ "ref": "w:save", "action": "click" }));
+    assert_ne!(click["isError"], json!(true), "{click}");
+    let body: Value = serde_json::from_str(&text_of(&click)).expect("JSON");
+    assert_eq!(
+        (body["x"].as_i64(), body["y"].as_i64()),
+        (Some(240), Some(165)),
+        "{body}"
+    );
+    assert_eq!(fixture.button_presses(), vec![(1, 240, 165)]);
+
+    // Un id retiré : stale_ref avec hint, aucun événement émis.
+    sdk.set(widget_tree([200, 150, 80, 30], false));
+    let stale = mcp.call_tool("act", json!({ "ref": "w:save", "action": "click" }));
+    assert_eq!(stale["isError"], json!(true), "{stale}");
+    let body: Value = serde_json::from_str(&text_of(&stale)).expect("JSON");
+    assert_eq!(body["reason"], "stale_ref", "{body}");
+    assert!(
+        body["hint"].as_str().is_some_and(|h| !h.is_empty()),
+        "{body}"
+    );
+    assert_eq!(fixture.button_presses(), Vec::<(u8, i16, i16)>::new());
+
+    // Une référence inventée n'est pas une référence périmée.
+    let unknown = mcp.call_tool("act", json!({ "ref": "w:jamais", "action": "click" }));
+    let body: Value = serde_json::from_str(&text_of(&unknown)).expect("JSON");
+    assert_eq!(body["reason"], "unknown_ref", "{body}");
+
+    // Hors vue : refusé sans émission.
+    let off = mcp.call_tool("act", json!({ "ref": "w:off", "action": "click" }));
+    let body: Value = serde_json::from_str(&text_of(&off)).expect("JSON");
+    assert_eq!(body["reason"], "offscreen", "{body}");
+    assert_eq!(fixture.button_presses(), Vec::<(u8, i16, i16)>::new());
+
+    // Mesure sur un arbre plus représentatif (liste de 50 lignes et 10 contrôles).
+    let mut big = widget_tree([200, 150, 80, 30], true);
+    for i in 0..50 {
+        big["widgets"].as_array_mut().expect("widgets").push(json!({
+            "id": format!("row/{i}"), "parent": "root", "role": "listitem",
+            "label": format!("Ligne numéro {i}"), "actions": ["click"],
+            "rect": [10, 20 + (i % 10) * 20, 300, 18]
+        }));
+    }
+    sdk.set(big);
+    let big_snapshot = text_of(&mcp.call_tool("snapshot", json!({})));
+    let big_dom = text_of(&mcp.call_tool("dom", json!({})));
+    eprintln!(
+        "MESURE (~55 widgets) : snapshot texte {} octets, dom {} octets ({} %)",
+        big_snapshot.len(),
+        big_dom.len(),
+        big_snapshot.len() * 100 / big_dom.len().max(1)
+    );
+    sdk.set(widget_tree([200, 150, 80, 30], false));
+
+    // observe n'ajoute la section qu'à la demande.
+    let observe = mcp.call_tool("observe", json!({ "include": ["elements"] }));
+    let body: Value = serde_json::from_str(
+        observe["content"]
+            .as_array()
+            .and_then(|c| c.iter().find(|b| b["type"] == "text"))
+            .and_then(|b| b["text"].as_str())
+            .expect("texte d'observe"),
+    )
+    .expect("JSON");
+    assert_eq!(
+        body["sections"]["elements"]["available"],
+        json!(true),
+        "{body}"
+    );
+}
+
+/// Critère 5 : sans route `ui.widgets`, `snapshot` répond `unsupported` avec un hint
+/// qui dit comment faire (exposer la route, ou passer par screenshot et click).
+#[test]
+#[ignore = "démarre un Xvfb privé et le binaire deveye-server"]
+fn snapshot_without_a_widget_route_is_unsupported_with_a_hint() {
+    let xvfb = Xvfb::start();
+    let _fixture = Fixture::new(&xvfb.display());
+    let sdk = FakeSdk::start(Value::Null);
+    *sdk.tree.lock().expect("verrou") = None;
+    let mut mcp = McpSession::start_with_sdk(&xvfb.display(), Some(&sdk.url));
+    mcp.request(
+        "initialize",
+        json!({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": { "name": "deveye-e2e-elements", "version": "0" }
+        }),
+    );
+    mcp.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+    let result = mcp.call_tool("snapshot", json!({}));
+    assert_eq!(result["isError"], json!(true), "{result}");
+    let body: Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().expect("texte")).expect("JSON");
+    assert_eq!(body["reason"], "unsupported", "{body}");
+    let hint = body["hint"].as_str().expect("hint");
+    assert!(
+        hint.contains("ui.widgets") && hint.contains("screenshot"),
+        "{hint}"
+    );
 }
