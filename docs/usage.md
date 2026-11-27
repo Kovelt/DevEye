@@ -1,6 +1,6 @@
 # DevEye : guide d'usage et référence
 
-Référence unique et exacte de l'usage de DevEye : options du binaire, sous-commande `doctor`, suite de conformité, **les 44 outils MCP** avec leurs paramètres et leurs retours, comportement par cible, limites, dépannage. Chaque affirmation a été relue contre le code ; en cas d'écart, le code a raison et ce document a un bug.
+Référence unique et exacte de l'usage de DevEye : options du binaire, sous-commande `doctor`, suite de conformité, **les 45 outils MCP** avec leurs paramètres et leurs retours, comportement par cible, limites, dépannage. Chaque affirmation a été relue contre le code ; en cas d'écart, le code a raison et ce document a un bug.
 
 - Pour **démarrer** avec un type d'app précis : [guides/](guides/README.md).
 - Pour **intégrer le SDK** dans une app : [integration.md](integration.md).
@@ -191,7 +191,7 @@ Codes de sortie : 0 conforme, 1 écarts, 2 la suite n'a pas pu s'exécuter. Le b
 
 ## Les outils MCP
 
-44 outils stables en sept familles, plus deux outils **expérimentaux** (`snapshot` et `act`, [Désigner un élément par référence](#désigner-un-élément-par-référence-expérimental)) hors de la promesse de stabilité. Appeler **`target_info` en premier** : il dit quels outils répondront sur la cible active.
+45 outils stables en sept familles, plus deux outils **expérimentaux** (`snapshot` et `act`, [Désigner un élément par référence](#désigner-un-élément-par-référence-expérimental)) hors de la promesse de stabilité. Appeler **`target_info` en premier** : il dit quels outils répondront sur la cible active.
 
 ### Conventions de résultat
 
@@ -201,7 +201,7 @@ Codes de sortie : 0 conforme, 1 écarts, 2 la suite n'a pas pu s'exécuter. Le b
 - **Erreur de protocole JSON-RPC** : `-32602` (`invalid_params`) pour un appel mal formé (coordonnées invalides, `level_min` inconnu, commande logique inconnue), `-32603` pour une panne d'infrastructure.
 - **Captures** : un bloc image, puis un bloc texte JSON de métadonnées.
 - **Un seul outil à la fois** : les appels sont sérialisés dans l'ordre d'arrivée ; les attentes (`wait_*`) ne tiennent pas ce verrou pendant qu'elles patientent.
-- **Annotations** : chaque outil déclare ses quatre indices MCP (lecture seule, destructif, idempotent, monde ouvert) pour que le client puisse classer le risque ([ADR-0027](adr/0027-annotations-des-outils-mcp-et-classification-des-risques.md)). Lecture seule : captures (sauf `screenshot_element` qui défile la page), `dom`, `state`, `find_element`, `assert_selector`, `assert_state`, `logs_*` (qui drainent un tampon), `wait_*`, `target_info`, `list_*`, `window_geometry`, `observe` ; `clipboard_get` est lecture seule **et monde ouvert** (il lit le vrai presse-papiers de l'utilisateur : le client doit demander confirmation, [ADR-0050](adr/0050-clipboard-get-monde-ouvert-et-limites-de-la-classification.md)). Destructifs : `eval_js`, `invoke_command`, `key_combo`, `navigate`, `upload_file`, `clipboard_set`, `assert_visual` (peut écrire la baseline).
+- **Annotations** : chaque outil déclare ses quatre indices MCP (lecture seule, destructif, idempotent, monde ouvert) pour que le client puisse classer le risque ([ADR-0027](adr/0027-annotations-des-outils-mcp-et-classification-des-risques.md)). Lecture seule : captures (sauf `screenshot_element` qui défile la page), `dom`, `state`, `find_element`, `assert_selector`, `assert_state`, `logs_*` (qui drainent un tampon), `wait_*`, `target_info`, `list_*`, `window_geometry`, `observe` ; `clipboard_get` est lecture seule **et monde ouvert** (il lit le vrai presse-papiers de l'utilisateur : le client doit demander confirmation, [ADR-0050](adr/0050-clipboard-get-monde-ouvert-et-limites-de-la-classification.md)). Destructifs : `eval_js`, `invoke_command`, `key_combo`, `key_hold`, `navigate`, `upload_file`, `clipboard_set`, `assert_visual` (peut écrire la baseline).
 - **Coordonnées** : pixels de la capture (en CDP, pixels CSS ; voir `screenshot`). Elles sont validées avant l'envoi : négatives, ou hors du viewport quand sa taille est connue, elles donnent `invalid_params`.
 - **Options de coût** des captures (`screenshot`, `screenshot_region`, `screenshot_element`, `observe`) : `max_width` (entier ≥ 1, réduction proportionnelle, jamais d'agrandissement), `format` (`png` par défaut, ou `jpeg`), `quality` (JPEG, 1 à 100, défaut 80). Une valeur invalide est `invalid_params`, détectée avant la capture.
 
@@ -217,6 +217,8 @@ Codes de sortie : 0 conforme, 1 écarts, 2 la suite n'a pas pu s'exécuter. Le b
 | `wait_condition` (`state-key`, `log-message`) | SDK | SDK | SDK | SDK |
 | `wait_condition` (`screenshot-stable`, `screenshot-region-stable`), `wait_screenshot_region`, `wait_target_alive` | oui | oui | oui | oui |
 | `click`, `double_click`, `right_click`, `hover`, `drag_drop`, `type_text`, `press_key`, `key_combo`, `scroll` | oui | oui | oui | oui |
+| paramètre `modifiers` des outils de pointeur | oui (masque des événements souris) | oui (booléens d'événements synthétiques) | oui (vraies touches) | oui (vraies touches) |
+| `key_hold` | non | non | oui | oui |
 | `navigate` | oui | oui | non | non |
 | `resize`, `handle_dialog`, `upload_file` | oui | non | non | non |
 | `dom` | oui | oui (`outerHTML`) | non | oui, si l'app sert la route `ui.widgets` |
@@ -254,6 +256,14 @@ Assertion visuelle (golden). Paramètres : `baseline_path` (obligatoire, **confi
 ### Interaction
 
 Tous renvoient `{ ok: true }` sauf mention contraire.
+
+Les huit outils de pointeur (`click`, `double_click`, `right_click`, `hover`, `drag_drop`, `scroll`, `click_selector`, `click_text`) acceptent un paramètre optionnel **`modifiers`** : une liste parmi `ctrl`/`control`, `shift`, `alt`/`option`, `meta`/`super`/`cmd`, insensibles à la casse, maintenus pendant le geste (Shift+clic pour étendre une sélection, Ctrl+glisser, Alt+molette). Absent ou vide : le geste part nu, comme avant. **Un nom inconnu donne `invalid_params` et rien n'est émis** : jamais un clic sans le modificateur demandé. Fidélité selon la cible ([ADR-0075](adr/0075-modificateurs-d-entree-withmodifiers-et-keyhold-borne.md)) :
+
+| Cible | Ce que voit l'application |
+|---|---|
+| `x11`, `kwin-eis` | de vraies touches pressées autour du geste (`ShiftMask` dans le `state` des événements X, touche Shift réelle côté Wayland) ; relâchées en ordre inverse même si le geste échoue |
+| `cdp` | le masque `modifiers` des événements souris (`event.shiftKey` est vrai) ; **aucun `keydown` de modificateur** n'est émis |
+| `sdk` (pont JS) | les booléens `ctrlKey`, `shiftKey`, `altKey`, `metaKey` d'événements synthétiques, **`isTrusted` faux** ; avec modificateurs, `scroll` émet d'abord un `WheelEvent` qui les porte |
 
 #### `click`
 
@@ -294,6 +304,10 @@ Presse une touche (`key`) : keydown puis keyup, sans modificateur. Noms W3C (`En
 #### `key_combo`
 
 Combinaison de touches : `modifiers` (liste parmi `ctrl`/`control`, `shift`, `alt`, `meta`/`super`/`cmd`, insensibles à la casse) maintenus pendant la frappe de `key`, puis relâchés. Noms de touche W3C (`KeyZ` ou `z`) en `cdp`/`sdk`, XKB en `kwin-eis`.
+
+#### `key_hold`
+
+Maintient `key` enfoncée `duration_ms` millisecondes (0 à 10 000), puis la relâche, **en un seul appel** : jamais de touche collante entre deux appels. Sert à tester un comportement tant que la touche est tenue (mode au Shift, pan à la barre d'espace). Noms de touche comme `press_key` (XKB en `kwin-eis`, noms X11 en `x11` : `Shift_L`, `space`). Disponible en `x11` et `kwin-eis` ; en `cdp` et `sdk`, résultat `{ ok: false, reason: "unsupported" }`. Une durée au-delà de 10 000 ms, une touche vide ou un nom de touche inconnu sont refusés avant toute émission. L'outil garde le verrou des gestes pendant la durée demandée : les autres appels attendent, et un client dont le délai d'appel est plus court verra l'appel expirer alors que la touche est bien relâchée côté serveur. Annoté destructif et non idempotent. Pour un geste de pointeur avec modificateur, préférer `modifiers`.
 
 #### `scroll`
 
@@ -475,7 +489,7 @@ Observe l'app en **un appel** (remplace quatre ou cinq). Paramètres (tous optio
 
 ### Désigner un élément par référence (expérimental)
 
-> **Expérimental, hors promesse semver** ([ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md), [ADR-0073](adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)). Leur description commence par « [expérimental] » ; les noms, paramètres et formes de réponse de ces deux outils peuvent changer dans une version mineure. Ils ne comptent pas dans les 44 outils stables.
+> **Expérimental, hors promesse semver** ([ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md), [ADR-0073](adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)). Leur description commence par « [expérimental] » ; les noms, paramètres et formes de réponse de ces deux outils peuvent changer dans une version mineure. Ils ne comptent pas dans les 45 outils stables.
 
 Un agent désigne d'ordinaire un élément par sélecteur CSS, par texte ou par coordonnées. `snapshot` rend un arbre compact d'éléments, chacun avec une **référence** ; `act` agit dessus. Sur une cible sans DOM (egui, GTK, Godot, Uno), c'est la seule désignation qui ne passe pas par des pixels.
 

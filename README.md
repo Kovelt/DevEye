@@ -79,12 +79,12 @@ Pour donner à l'agent l'état, les logs et les commandes de votre app Rust, int
 ## Les outils MCP
 
 <!-- outils:debut -->
-### 44 outils MCP, en sept familles
+### 45 outils MCP, en sept familles
 
 | Famille | Outils |
 |---|---|
 | **Capture** | `screenshot`, `screenshot_region`, `screenshot_element`, `assert_visual` |
-| **Interaction** | `click`, `double_click`, `right_click`, `hover`, `drag_drop`, `click_selector`, `click_text`, `type_text`, `press_key`, `key_combo`, `scroll`, `resize`, `navigate`, `handle_dialog`, `upload_file`, `focus_window`, `clipboard_get`, `clipboard_set` |
+| **Interaction** | `click`, `double_click`, `right_click`, `hover`, `drag_drop`, `click_selector`, `click_text`, `type_text`, `press_key`, `key_combo`, `key_hold`, `scroll`, `resize`, `navigate`, `handle_dialog`, `upload_file`, `focus_window`, `clipboard_get`, `clipboard_set` |
 | **Inspection DOM et état** | `dom`, `find_element`, `assert_selector`, `assert_state`, `eval_js`, `state`, `collect_console_errors`, `list_windows`, `window_geometry`, `target_info` |
 | **Logs** | `logs_tail`, `logs_wait` |
 | **Attente** | `wait_for_selector`, `wait_for_text`, `wait_condition`, `wait_for_log`, `wait_screenshot_region`, `wait_target_alive`, `wait_ready` |
@@ -128,7 +128,7 @@ Client MCP (Claude Code)
         ▼
   deveye-server  ── compose les adapters selon --target
         │
-  adapter-mcp-server ── expose les 44 outils, consomme les 12 ports (deveye-ports)
+  adapter-mcp-server ── expose les 45 outils, consomme les 12 ports (deveye-ports)
         │
   ┌─────┴───────────────┬───────────────────┬──────────────────┐
   adapter-cdp-webview   adapter-screencap-*  adapter-interaction-kwin-eis   adapter-x11
@@ -151,7 +151,7 @@ Architecture hexagonale : un domaine pur, 12 ports (traits Rust), un adapter par
 | `deveye-sdk-client` | client HTTP du SDK, partagé par les adapters | MIT |
 | `deveye-server` | binaire orchestrateur : compose les adapters, sert le MCP | AGPL-3.0-or-later |
 | `deveye-conformance` | suite de conformité boîte noire du wire protocol | AGPL-3.0-or-later |
-| `adapter-mcp-server` | expose les 44 outils MCP (rmcp, stdio) | AGPL-3.0-or-later |
+| `adapter-mcp-server` | expose les 45 outils MCP (rmcp, stdio) | AGPL-3.0-or-later |
 | `adapter-cdp-webview` | yeux, mains, DOM et JS par CDP | AGPL-3.0-or-later |
 | `adapter-screencap-kwin` | capture, fenêtres, géométrie et focus par KWin | AGPL-3.0-or-later |
 | `adapter-screencap-xcap` | capture OS (X11, XWayland, Wayland non KDE) | AGPL-3.0-or-later |
