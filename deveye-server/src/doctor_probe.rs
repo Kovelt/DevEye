@@ -182,12 +182,41 @@ async fn tcp_open(url: &str) -> bool {
     )
 }
 
+/// Lit `/devtools/info` **sans** contrôler la version du protocole : c'est à
+/// `doctor` de la juger (`decide_sdk`). `deveye_sdk_client::fetch_info` refuse
+/// une majeure différente avant tout décodage, ce qui ferait passer un SDK
+/// incompatible pour « un autre service sur ce port ».
+async fn fetch_sdk_info(
+    http: &reqwest::Client,
+    base_url: &str,
+) -> Result<deveye_sdk_client::SdkInfo, String> {
+    let url = format!("{}/devtools/info", base_url.trim_end_matches('/'));
+    let response = http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("GET {url} : {e}"))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(format!(
+            "GET {url} : route absente, SDK antérieur au protocole 1.0 ; mettre deveye-sdk à jour"
+        ));
+    }
+    if !status.is_success() {
+        return Err(format!("GET {url} : statut {status}"));
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| format!("décodage JSON de {url} : {e}"))
+}
+
 /// `GET /devtools/info` du SDK.
 async fn probe_sdk(url: &str) -> ServiceProbe<SdkView> {
     let tcp_open = tcp_open(url).await;
     let answer = if tcp_open {
         let http = deveye_sdk_client::client();
-        match tokio::time::timeout(PROBE_TIMEOUT, deveye_sdk_client::fetch_info(&http, url)).await {
+        match tokio::time::timeout(PROBE_TIMEOUT, fetch_sdk_info(&http, url)).await {
             Ok(Ok(info)) => Ok(SdkView {
                 sdk_version: info.sdk_version,
                 protocol_version: info.protocol_version,
@@ -274,5 +303,35 @@ mod tests {
         // Port 1 : jamais ouvert sur une machine de dev ; l'URL invalide aussi.
         assert!(!tcp_open("http://127.0.0.1:1").await);
         assert!(!tcp_open("http://").await);
+    }
+
+    #[tokio::test]
+    async fn an_sdk_announcing_another_major_is_read_not_rejected() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            // La sonde TCP ouvre d'abord une connexion muette : on boucle.
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                if socket.read(&mut buf).await.unwrap_or(0) == 0 {
+                    continue;
+                }
+                let body =
+                    r#"{"sdk_version":"2.0.0","protocol_version":"2.0","capabilities":["state"]}"#;
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nx-deveye-protocol-version: 2.0\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(reply.as_bytes()).await;
+            }
+        });
+        let probe = probe_sdk(&format!("http://127.0.0.1:{port}")).await;
+        let view = probe.answer.expect("la sonde doit lire l'info du SDK");
+        assert_eq!(view.protocol_version, "2.0");
+        assert_eq!(
+            crate::doctor::protocol_compat(&view.protocol_version, "1.0"),
+            crate::doctor::Compat::MajorDiffers
+        );
     }
 }

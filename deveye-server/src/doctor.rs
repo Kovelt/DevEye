@@ -395,8 +395,10 @@ fn decide(item: Item, n: Need, p: &Probes) -> (Level, String, Option<String>) {
                 "interface org.kde.KWin.EIS.RemoteDesktop absente du bus de session",
                 "EIS exige KWin 6 sous Wayland natif ; mettre Plasma à jour",
             ),
+            // Un fait non vérifiable est un avertissement, jamais un échec
+            // (ADR-0032), même quand EIS est exigé par la cible.
             EisProbe::Unknown(why) => problem(
-                n,
+                Need::Useful,
                 format!("non vérifiable ({why}) ; la connexion réelle n'est pas tentée par doctor"),
                 "installer busctl (systemd) ou tester directement avec --target kwin-eis --serve-mcp",
             ),
@@ -715,6 +717,15 @@ mod tests {
         p.sdk = sdk_up("1.3", &["eval"]);
         let r = evaluate(TargetMode::Sdk, &p);
         assert_eq!(level_of(&r, "SDK de l'app cible"), Level::Warn);
+        assert_eq!(r.exit_code(), 0);
+    }
+
+    #[test]
+    fn unverifiable_eis_warns_without_failing_even_when_required() {
+        let mut p = base();
+        p.eis = EisProbe::Unknown("busctl absent".into());
+        let r = evaluate(TargetMode::KwinEis, &p);
+        assert_eq!(level_of(&r, "Accès EIS (entrées OS-level)"), Level::Warn);
         assert_eq!(r.exit_code(), 0);
     }
 
