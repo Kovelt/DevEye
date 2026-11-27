@@ -70,7 +70,15 @@ struct CdpInner {
     /// Pages vues par la découverte de cibles (ordre d'apparition), pour
     /// expliquer à l'appelant pourquoi aucune ne correspond au filtre.
     seen: Mutex<Vec<SeenPage>>,
+    /// Attache en cours (cible, instant de la demande) : `session` n'est posée
+    /// qu'à `attachedToTarget`, donc sans ce témoin une rafale de
+    /// `targetCreated` émettrait une attache par page et la dernière gagnerait.
+    pending_attach: Mutex<Option<(String, Instant)>>,
 }
+
+/// Au-delà, une attache restée sans `attachedToTarget` est considérée perdue
+/// (cible disparue, requête rejetée) et ne bloque plus les suivantes.
+const PENDING_ATTACH_TTL: Duration = Duration::from_secs(5);
 
 /// Page `type=page` observée via `Target.targetCreated` / `targetInfoChanged`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,6 +186,7 @@ impl CdpClient {
             closed: AtomicBool::new(false),
             filter,
             seen: Mutex::new(Vec::new()),
+            pending_attach: Mutex::new(None),
         });
 
         spawn_writer(sink, cmd_rx);
@@ -401,11 +410,11 @@ async fn handle_event(inner: &Arc<CdpInner>, method: &str, params: Value) {
                 return;
             }
             // Filtre ouvert : la cible est la première page rencontrée ; les
-            // suivantes (fenêtres secondaires, popups) ne la détrônent pas.
-            if inner.filter.is_open() && inner.session.lock().await.is_some() {
-                return;
-            }
-            attach_to(inner, &p.target_info.target_id);
+            // suivantes (fenêtres secondaires, popups) ne la détrônent pas, y
+            // compris quand leurs `targetCreated` arrivent en rafale avant
+            // l'`attachedToTarget` de la première.
+            let only_if_free = inner.filter.is_open();
+            request_attach(inner, &p.target_info.target_id, only_if_free).await;
         }
         // Une page `about:blank` à sa création change d'URL en navigant (boot
         // d'une webview) : on la rattrape ici si rien n'est encore attaché.
@@ -414,8 +423,8 @@ async fn handle_event(inner: &Arc<CdpInner>, method: &str, params: Value) {
                 return;
             };
             record_seen(inner, &p.target_info).await;
-            if inner.filter.matches(&p.target_info) && inner.session.lock().await.is_none() {
-                attach_to(inner, &p.target_info.target_id);
+            if inner.filter.matches(&p.target_info) {
+                request_attach(inner, &p.target_info.target_id, true).await;
             }
         }
         "Target.attachedToTarget" => {
@@ -425,10 +434,30 @@ async fn handle_event(inner: &Arc<CdpInner>, method: &str, params: Value) {
             if !inner.filter.matches(&p.target_info) {
                 return;
             }
-            *inner.session.lock().await = Some(SessionInfo {
+            {
+                let mut pending = inner.pending_attach.lock().await;
+                if pending
+                    .as_ref()
+                    .is_some_and(|(target, _)| *target == p.target_info.target_id)
+                {
+                    *pending = None;
+                }
+            }
+            let mut session = inner.session.lock().await;
+            // Filtre ouvert : une session déjà posée sur une autre page n'est
+            // pas écrasée (la première rencontrée reste la cible).
+            if inner.filter.is_open()
+                && session
+                    .as_ref()
+                    .is_some_and(|s| s.target_id != p.target_info.target_id)
+            {
+                return;
+            }
+            *session = Some(SessionInfo {
                 session_id: p.session_id,
                 target_id: p.target_info.target_id,
             });
+            drop(session);
             inner.attached.notify_waiters();
         }
         "Target.detachedFromTarget" => {
@@ -453,6 +482,15 @@ async fn handle_event(inner: &Arc<CdpInner>, method: &str, params: Value) {
                 .lock()
                 .await
                 .retain(|s| s.target_id != p.target_id);
+            {
+                let mut pending = inner.pending_attach.lock().await;
+                if pending
+                    .as_ref()
+                    .is_some_and(|(target, _)| *target == p.target_id)
+                {
+                    *pending = None;
+                }
+            }
             let mut guard = inner.session.lock().await;
             if guard
                 .as_ref()
@@ -528,6 +566,26 @@ fn no_target_message(filter: &TargetFilter, seen: &[SeenPage]) -> String {
         ". Ajuster --cdp-target-filter-url / --cdp-target-filter-title, ou --cdp-accept-blank si la page est encore about:blank",
     );
     msg
+}
+
+/// Demande l'attache à une page, sauf si une attache est déjà en cours pour
+/// cette cible ou, avec `only_if_free`, si une session existe ou si une autre
+/// attache est en cours.
+async fn request_attach(inner: &Arc<CdpInner>, target_id: &str, only_if_free: bool) {
+    let mut pending = inner.pending_attach.lock().await;
+    let live = pending
+        .as_ref()
+        .filter(|(_, since)| since.elapsed() < PENDING_ATTACH_TTL);
+    if let Some((target, _)) = live {
+        if only_if_free || target == target_id {
+            return;
+        }
+    }
+    if only_if_free && inner.session.lock().await.is_some() {
+        return;
+    }
+    *pending = Some((target_id.to_string(), Instant::now()));
+    attach_to(inner, target_id);
 }
 
 fn attach_to(inner: &Arc<CdpInner>, target_id: &str) {
@@ -638,8 +696,12 @@ mod tests {
     // Helper : construit un CdpInner sans WebSocket reel (cmd_rx abandonne).
     // -------------------------------------------------------------------------
     fn make_inner() -> Arc<CdpInner> {
-        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel();
-        Arc::new(CdpInner {
+        make_inner_with_rx().0
+    }
+
+    fn make_inner_with_rx() -> (Arc<CdpInner>, mpsc::UnboundedReceiver<Message>) {
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let inner = Arc::new(CdpInner {
             next_id: AtomicU64::new(1),
             cmd_tx,
             pending: Mutex::new(std::collections::HashMap::new()),
@@ -648,7 +710,9 @@ mod tests {
             closed: AtomicBool::new(false),
             filter: TargetFilter::default(),
             seen: Mutex::new(Vec::new()),
-        })
+            pending_attach: Mutex::new(None),
+        });
+        (inner, cmd_rx)
     }
 
     // -------------------------------------------------------------------------
@@ -957,5 +1021,87 @@ mod tests {
         )
         .await;
         assert_eq!(inner.seen.lock().await.len(), 1);
+    }
+
+    fn created_params(id: &str, url: &str) -> Value {
+        json!({ "targetInfo": { "targetId": id, "type": "page", "title": "T", "url": url } })
+    }
+
+    fn attach_requests(rx: &mut mpsc::UnboundedReceiver<Message>) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(Message::Text(text)) = rx.try_recv() {
+            let v: Value = serde_json::from_str(&text).unwrap();
+            if v["method"] == "Target.attachToTarget" {
+                out.push(v["params"]["targetId"].as_str().unwrap().to_string());
+            }
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn open_filter_burst_of_created_attaches_only_the_first_page() {
+        let (inner, mut rx) = make_inner_with_rx();
+        handle_event(
+            &inner,
+            "Target.targetCreated",
+            created_params("p1", "http://a/"),
+        )
+        .await;
+        handle_event(
+            &inner,
+            "Target.targetCreated",
+            created_params("p2", "http://b/"),
+        )
+        .await;
+        handle_event(
+            &inner,
+            "Target.targetInfoChanged",
+            created_params("p2", "http://b/2"),
+        )
+        .await;
+        assert_eq!(attach_requests(&mut rx), vec!["p1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn open_filter_keeps_first_session_when_a_second_attach_arrives() {
+        let (inner, _rx) = make_inner_with_rx();
+        let attached = |id: &str, session: &str| {
+            json!({ "sessionId": session,
+                    "targetInfo": { "targetId": id, "type": "page", "title": "T", "url": "http://x/" } })
+        };
+        handle_event(&inner, "Target.attachedToTarget", attached("p1", "s1")).await;
+        handle_event(&inner, "Target.attachedToTarget", attached("p2", "s2")).await;
+        let session = inner.session.lock().await.clone().unwrap();
+        assert_eq!(
+            (session.session_id.as_str(), session.target_id.as_str()),
+            ("s1", "p1")
+        );
+    }
+
+    #[tokio::test]
+    async fn destroyed_pending_target_unblocks_the_next_attach() {
+        let (inner, mut rx) = make_inner_with_rx();
+        handle_event(
+            &inner,
+            "Target.targetCreated",
+            created_params("p1", "http://a/"),
+        )
+        .await;
+        handle_event(
+            &inner,
+            "Target.targetDestroyed",
+            json!({ "targetId": "p1" }),
+        )
+        .await;
+        handle_event(
+            &inner,
+            "Target.targetCreated",
+            created_params("p2", "http://b/"),
+        )
+        .await;
+        assert_eq!(
+            attach_requests(&mut rx),
+            vec!["p1".to_string(), "p2".to_string()]
+        );
     }
 }
