@@ -1,6 +1,6 @@
 # ADR-0030 — `assert_visual` : masques, image de différence et mise à jour de la référence
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (surface MCP stable), ADR-0027 (annotations : `assert_visual` destructif), ADR-0029 (coût des captures)
@@ -48,3 +48,5 @@ Option 2.
 ## Notes
 
 Application : `deveye-adapters/adapter-mcp-server/src/imaging.rs` (`visual_diff`, `render_diff_png`), `tools_capture.rs`. Tests : `imaging::tests`, `dispatch_tests::assert_visual_*`.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

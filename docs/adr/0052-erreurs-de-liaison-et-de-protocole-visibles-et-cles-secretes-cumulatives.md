@@ -1,6 +1,6 @@
 # ADR-0052 — Erreurs de liaison et de protocole visibles, clés secrètes cumulatives
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0016 (masquage des secrets par clés), ADR-0017 (version du protocole), ADR-0042 (posture dev-only du SDK)
@@ -47,3 +47,5 @@ Option 2.
 ## Notes
 
 Application : `deveye-sdk/src/lib.rs` (`bind_or_report`, `init`), `deveye-adapters/adapter-composite/src/lib.rs` (`absorb_transient_sdk`), avec tests unitaires.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

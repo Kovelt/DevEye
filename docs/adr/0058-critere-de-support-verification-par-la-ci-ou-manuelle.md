@@ -1,6 +1,6 @@
 # ADR-0058 — Critère de support : vérification par la CI ou par le mainteneur
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0037 (Linux seul supporté), ADR-0039 (tests de bout en bout en CI), ADR-0045 (Wayland via KWin)
@@ -42,3 +42,5 @@ Option 2 : une cible est « Supporté » lorsqu'elle est couverte par un job CI 
 ## Notes
 
 Application : `docs/platforms.md` (légende et colonne « Test ») ; guides `webview-chromium-cdp.md` et `dioxus-desktop-linux.md` corrigés dans le même lot.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

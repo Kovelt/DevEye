@@ -1,6 +1,6 @@
 # ADR-0032 — Sous-commande `doctor` en lecture seule
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (surface stable : une sous-commande s'ajoute à la CLI), ADR-0031 (validation des flags), ADR-0033 (version affichée), ADR-0009 (lints et exception unsafe de KWin EIS)
@@ -55,3 +55,5 @@ Le coût en dépendances : `deveye-server` dépend désormais de `deveye-sdk-cli
 Application : `deveye-server/src/{doctor,doctor_probe,main,cli}.rs`, `deveye-server/tests/cli.rs`, `docs/usage.md` (« Diagnostiquer avant de lancer »).
 
 Limite assumée : le `selftest` envisagé au plan (autodiagnostic qui lance un serveur) n'est pas livré en 1.0 : `doctor` reste en lecture seule et ne lance rien. Voir [ADR-0057](0057-doctor-display-optionnel-et-sondes-limitees-a-la-cible.md) pour les précisions de la revue (`--display`, sondes).
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

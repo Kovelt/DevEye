@@ -1,6 +1,6 @@
 # ADR-0060 — Dépendances d'adapters, cache de CI et verrous empoisonnés du SDK
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0003 (GitHub Actions), ADR-0009 (lints et unsafe), ADR-0024 (sérialisation sans panic), ADR-0039 (CI de bout en bout), ADR-0042 (posture dev-only), ADR-0044 (cible x11), ADR-0045 (KWin)
@@ -59,3 +59,5 @@ Le cache de CI utilise `Swatinem/rust-cache`, épinglé par SHA de commit. Les v
 ## Notes
 
 ADR proposé : il consigne après coup des choix faits pendant la 1.0 ; le mainteneur peut en refuser un, ce qui rouvre le chantier concerné.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

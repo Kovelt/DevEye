@@ -1,6 +1,6 @@
 # ADR-0048 — Documentation vérifiée par des tests
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (surface stable : noms d'outils), ADR-0001 (processus des ADR), ADR-0039 (tests et preuves en CI)
@@ -51,3 +51,5 @@ Option 3, dans `adapter-mcp-server` (module de tests `docs_tests`), sans dépend
 ## Notes
 
 « Proposé » : choix d'outillage fait pour exécuter la tâche de documentation, à valider par le mainteneur.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

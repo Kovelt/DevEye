@@ -1,6 +1,6 @@
 # ADR-0034 — Capacités complètes de `target_info`, repli observable et choix unique du backend OS
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (ajout de champs de réponse : mineure), ADR-0033 (champ `server`), ADR-0031 (validation des flags)
@@ -56,3 +56,5 @@ Option 2.
 ## Notes
 
 Application : `deveye-adapters/adapter-mcp-server/src/lib.rs` et `tools_inspect.rs`, `deveye-server/src/{compose,fallback,cdp}.rs`, `docs/usage.md` et `docs/architecture.md`. Tests : `compose::tests`, `fallback::tests`, `dispatch_tests::target_info_exposes_versions_capabilities_and_live_backend`.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

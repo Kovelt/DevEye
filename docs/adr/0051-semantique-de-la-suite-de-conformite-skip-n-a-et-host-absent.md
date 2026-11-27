@@ -1,6 +1,6 @@
 # ADR-0051 — Sémantique de la suite de conformité : `SKIP`, `N/A`, `Host` absent
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0035 (suite de conformité), ADR-0036 (shim .NET, `--strict`), ADR-0017 (protocole 1.0)
@@ -44,3 +44,5 @@ Option 2 : `Outcome::NotApplicable` est ajouté, le §2.2 de `docs/wire-protocol
 ## Notes
 
 Application : `deveye-conformance/src/{checks,report,client}.rs`, `docs/wire-protocol.md` (§2.2, §3.0, §6, §7). Le SDK Rust passe la suite à chaque `cargo test` en build debug seulement (no-op en release).
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

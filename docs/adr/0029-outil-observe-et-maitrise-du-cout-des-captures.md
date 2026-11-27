@@ -1,6 +1,6 @@
 # ADR-0029 — Outil `observe` et maîtrise du coût des captures
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (surface MCP stable : ajouts compatibles), ADR-0016 (masquage des secrets), ADR-0022 (capture CDP à l'échelle CSS), ADR-0025 (`captured_at`, état vide ou indisponible), ADR-0027 (annotations)
@@ -68,3 +68,5 @@ Chaque section renvoie `available: true` et ses données, ou `available: false` 
 ## Notes
 
 Application : `deveye-adapters/adapter-mcp-server/src/imaging.rs` (options, redimensionnement, encodage), `tools_capture.rs`, `tools_observe.rs`. Tests : `imaging::tests`, `tools_observe::tests`, `dispatch_tests` (ports simulés).
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

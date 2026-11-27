@@ -1,6 +1,6 @@
 # ADR-0020 — `logs_wait` : long-poll des logs et niveau invalide en `invalid_params`
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (surface stable), ADR-0018 (portage depuis l'ancienne lignée)
@@ -46,3 +46,5 @@ Option 3, plus la correction de `level_min` dans `wait_for_log`.
 - deux outils proches (`wait_for_log` et `logs_wait`) : la description de chacun renvoie à l'autre ;
 - `logs_wait` draine le buffer partagé : deux agents ou outils qui drainent en parallèle se partagent les événements ;
 - un statut `Proposé` : le plafond de 30 s et le nom `logs_wait` engagent la surface stable au-delà de la décision D05.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

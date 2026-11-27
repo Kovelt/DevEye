@@ -1,6 +1,6 @@
 # ADR-0023 — Exceptions JS en résultat d'outil en erreur (`PortError::Script`)
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (surface stable : `PortError` est public), ADR-0012 (`PortError` est `#[non_exhaustive]`), ADR-0018 (portage depuis l'ancienne lignée)
@@ -45,3 +45,5 @@ Option 2.
 - une variante de plus dans une énumération publique : un `match` externe sur `PortError` a déjà un bras `_` (ADR-0012), mais une implémentation externe de `JsEvaluator` qui ne produit pas `Script` garde l'ancien comportement (erreur protocolaire) ;
 - la trace du pont SDK est absente (le SDK ne renvoie qu'un texte) : `stack` est alors omis ;
 - `reason: "js_exception"` rejoint `unsupported` parmi les valeurs de `reason` figées.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

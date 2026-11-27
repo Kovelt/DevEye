@@ -1,6 +1,6 @@
 # ADR-0050 — `clipboard_get` en monde ouvert et limites de la classification des outils
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0027 (annotations et classification, précisée ici), ADR-0045 (focus de la cible `kwin-eis`)
@@ -43,3 +43,5 @@ Option 2. La règle d'ADR-0027 devient : `openWorldHint = true` pour les outils 
 ## Notes
 
 Application : `tools_inspect.rs` (annotations et description), table `CLASSIFICATION` dans `lib.rs`, `docs/usage.md`, `SECURITY.md`.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

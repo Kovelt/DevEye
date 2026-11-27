@@ -1,6 +1,6 @@
 # ADR-0022 — Capture CDP à l'échelle CSS
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (surface stable : le PNG de `screenshot` en fait partie), ADR-0021 (validation des coordonnées, même espace), ADR-0018 (portage depuis l'ancienne lignée)
@@ -47,3 +47,5 @@ Conséquence mesurée : le PNG fait exactement la taille du viewport CSS (`Scree
 - le PNG perd de la netteté sur HiDPI (résolution CSS, pas physique) : les baselines d'`assert_visual` prises sur un écran HiDPI changent de taille par rapport à l'ancien comportement ; la comparaison reste cohérente d'un écran à l'autre ;
 - le comportement dépend de la sémantique de `clip.scale` de Chromium (mesurée ici sur Chromium) : il n'a pas été vérifié sur WebView2 réel ;
 - les cibles non CDP (xcap, KWin, X11) gardent des PNG en pixels de la fenêtre capturée.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

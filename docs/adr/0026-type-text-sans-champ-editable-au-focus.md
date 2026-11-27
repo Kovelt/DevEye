@@ -1,6 +1,6 @@
 # ADR-0026 — `type_text` sans champ éditable au focus
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (surface stable), ADR-0023 (résultats `isError` structurés pour les échecs sémantiques), ADR-0025 (contrat de sortie)
@@ -47,3 +47,5 @@ Option 3.
 - `reason: "interaction_failed"` est générique (il couvre tout échec d'interaction de `type_text`, pas seulement l'absence de focus) : le détail est dans `detail`, dont le texte n'est pas un contrat ;
 - un champ éditable personnalisé qui n'expose ni `contenteditable` ni `input` (éditeur sur canvas) est refusé en CDP à tort : contournement par `press_key` ou `key_combo` (événements clavier), qui ne passent pas par cette garde ;
 - en kwin-eis et x11, le faux succès reste possible, par construction.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

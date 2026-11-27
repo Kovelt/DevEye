@@ -1,6 +1,6 @@
 # ADR-0021 — Validation des coordonnées des gestes avant dispatch
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (surface stable), ADR-0018 (portage depuis l'ancienne lignée), ADR-0022 (capture à l'échelle CSS, qui fixe l'espace des coordonnées)
@@ -47,3 +47,5 @@ Option 3, dans `adapter-mcp-server` (la garde est un contrat de l'outil MCP, pas
 - sur les cibles OS-level, un menu ou une bulle système qui déborde de la fenêtre reste hors du viewport mesuré : un clic dessus est refusé. Seule la fenêtre cible est comptée ;
 - en CDP, le viewport mesuré est le viewport de mise en page : un clic sur la barre de défilement (hors de lui) est refusé ;
 - `viewport_size()` est en pixels CSS en CDP et en pixels de la fenêtre ailleurs : la garde suit l'espace dans lequel la cible reçoit ses gestes.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

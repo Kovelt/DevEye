@@ -1,6 +1,6 @@
 # ADR-0054 — Limites documentées issues des revues de la 1.0
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0019 (resize), ADR-0022 (capture à l'échelle CSS), ADR-0023 (exception JS), ADR-0024 (sérialisation sans panic), ADR-0029 (observe et coût des captures), ADR-0030 (assert_visual)
@@ -59,3 +59,5 @@ Option 2.
 ## Notes
 
 La suite de revue contenait aussi un constat sur l'intitulé d'un commit antérieur (`fix(adapter-screencap): ...`, scope absent de la table). Le corriger exigerait de réécrire l'historique ; l'écart est accepté, sans ADR de plus.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

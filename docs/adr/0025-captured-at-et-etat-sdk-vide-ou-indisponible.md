@@ -1,6 +1,6 @@
 # ADR-0025 — Contrat de sortie : `captured_at` et distinction état SDK vide ou indisponible
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (la forme de chaque réponse d'outil MCP est stable), ADR-0023 (même famille de `reason` structurés), ADR-0018 (portage)
@@ -45,3 +45,5 @@ Option 3, avec trois précisions.
 - un client qui concatène tous les blocs texte avant de parser du JSON verra un second document : à lire par bloc ;
 - les clés `signals`, `note`, `viewport` et `captured_at`, ainsi que `reason: "sdk_unavailable"`, entrent dans la surface stable ;
 - `logs_tail`, `logs_wait`, `invoke_command` et `list_commands` dépendent aussi du SDK : leur coupure de liaison reste, en 1.0, une erreur protocolaire (extension possible, additive).
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

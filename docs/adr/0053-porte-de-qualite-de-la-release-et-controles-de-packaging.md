@@ -1,6 +1,6 @@
 # ADR-0053 — Porte de qualité de la release et contrôles de packaging
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0002 (licences par crate), ADR-0003 (CI GitHub Actions), ADR-0004 (crates.io sans publier), ADR-0038 (distribution)
@@ -50,3 +50,5 @@ Option 2.
 ## Notes
 
 Application : `.github/workflows/ci.yml` (jobs `semver`, `packaging`), `.github/workflows/release.yml` (job `quality`), `scripts/verify-license-boundary.sh`, `scripts/verify-packages.sh`, `justfile`.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

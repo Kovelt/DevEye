@@ -1,6 +1,6 @@
 # ADR-0056 — Alignement des versions des crates sur 1.0.0
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (politique de stabilité et de versionnage), ADR-0033 (version affichée), ADR-0004 (publication crates.io préparée), ADR-0053 (porte de qualité de la release)
@@ -43,3 +43,5 @@ Option 1 : tous les crates passent à `1.0.0` dans le dépôt, avec les versions
 ## Notes
 
 Ordre de publication éventuel sur crates.io (jamais lancé par la release, ADR-0004) : `deveye-core`, `deveye-ports`, `deveye-sdk`, puis `deveye-sdk-client`.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

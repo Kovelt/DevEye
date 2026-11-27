@@ -1,6 +1,6 @@
 # ADR-0049 — Confinement des baselines d'`assert_visual`
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0030 (`assert_visual` : masques, image de différence, mise à jour), ADR-0027 (annotations : `assert_visual` destructif), ADR-0042 (posture dev-only)
@@ -43,3 +43,5 @@ Option 2, appliquée dans `adapter-mcp-server` (`confine_baseline`, racine lue �
 ## Notes
 
 Application : `deveye-adapters/adapter-mcp-server/src/tools_capture.rs`. Documenté dans `docs/usage.md` et `SECURITY.md`.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

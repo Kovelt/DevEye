@@ -1,6 +1,6 @@
 # ADR-0055 — Refus des requêtes inter-origine sur le drain des logs
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0042 (posture dev-only du SDK), ADR-0017 (protocole 1.0)
@@ -37,3 +37,5 @@ Option 3, limitée à cette route : les autres routes sont sans effet de bord ou
 
 - un navigateur ancien sans `Sec-Fetch-Site` et sans `Origin` en GET passerait encore (risque résiduel, limité au tampon de logs) ;
 - une implémentation tierce du protocole peut, au choix, reproduire ce refus.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

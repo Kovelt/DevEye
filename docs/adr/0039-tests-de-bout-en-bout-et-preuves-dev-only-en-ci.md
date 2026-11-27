@@ -1,6 +1,6 @@
 # ADR-0039 — Tests de bout en bout et preuves dev-only en CI
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0003 (GitHub Actions), ADR-0010 (toolchain et MSRV), ADR-0011 (surface stable), ADR-0035 (conformité), ADR-0037 (Linux seul), ADR-0038 (distribution)
@@ -51,3 +51,5 @@ Pour la preuve no-op : (a) test seul en release (existant) ; (b) inspection des 
 ## Notes
 
 Choix d'agent qui engage le mainteneur au-delà du lot (plage de displays, politique d'épinglage, forme de la preuve) : statut « Proposé » en attendant validation.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

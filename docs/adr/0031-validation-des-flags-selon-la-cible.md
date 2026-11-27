@@ -1,6 +1,6 @@
 # ADR-0031 — Validation des flags selon la cible
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (les flags de `deveye-server` font partie de la surface stable), ADR-0014 (filtre de cible CDP), ADR-0032 (sous-commande `doctor`)
@@ -60,3 +60,5 @@ Points précis :
 ## Notes
 
 Application : `deveye-server/src/cli.rs` (`Args::validate`, `Args::require_mode`), `deveye-server/src/compose.rs` (accesseurs), `docs/usage.md` (troubleshooting) et `docs/stability.md`.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

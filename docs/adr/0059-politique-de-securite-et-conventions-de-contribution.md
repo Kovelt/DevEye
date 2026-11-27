@@ -1,6 +1,6 @@
 # ADR-0059 — Politique de sécurité et conventions de contribution
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0003 (GitHub Actions), ADR-0011 (versions suivies), ADR-0016 (masquage des secrets), ADR-0042 (posture dev-only), ADR-0047 (code de conduite)
@@ -42,3 +42,5 @@ Option 1 pour la sécurité, et les conventions de `CONTRIBUTING.md` pour les co
 - le signalement privé doit être activé dans les réglages GitHub, sinon le repli par issue s'applique ;
 - les anciennes versions 1.x ne reçoivent pas de correctif ;
 - l'ASCII dans les sujets de commit est une contrainte que seul un relecteur fait respecter.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

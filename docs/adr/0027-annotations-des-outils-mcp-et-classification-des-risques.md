@@ -1,6 +1,6 @@
 # ADR-0027 — Annotations des outils MCP et classification des risques
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (stabilité : noms et schémas des outils MCP couverts par semver), ADR-0028 (version du protocole MCP), ADR-0029 (outil `observe`), ADR-0030 (`assert_visual` enrichi), ADR-0050 (`clipboard_get` en monde ouvert : précise la règle)
@@ -53,3 +53,5 @@ Option 2 : chaque `#[tool]` déclare `annotations(read_only_hint, destructive_hi
 ## Notes
 
 Application : `#[tool(... annotations(...))]` dans `deveye-adapters/adapter-mcp-server/src/tools_*.rs`, test et table dans `lib.rs` (`dispatch_tests::CLASSIFICATION`). API `rmcp` 3.12 (`ToolAnnotations`, attribut `annotations(...)` de `#[tool]`).
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

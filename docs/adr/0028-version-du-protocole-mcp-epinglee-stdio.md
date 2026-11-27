@@ -1,6 +1,6 @@
 # ADR-0028 — Version du protocole MCP épinglée à 2025-11-25, transport stdio seul
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0005 (migration vers rmcp 3.12), ADR-0011 (stabilité), ADR-0027 (annotations d'outils)
@@ -43,3 +43,5 @@ Option 2 : `get_info()` annonce `2025-11-25`, `supported_protocol_versions()` re
 ## Notes
 
 Application : `deveye-adapters/adapter-mcp-server/src/lib.rs` (`MCP_PROTOCOL_VERSION`, `ServerHandler::get_info`, `supported_protocol_versions`). Documentation : `docs/usage.md`.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

@@ -1,6 +1,6 @@
 # ADR-0024 — Sérialisation sans panic et arguments `invoke_command` stringifiés
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (surface stable), ADR-0018 (portage depuis l'ancienne lignée)
@@ -54,3 +54,5 @@ Options 2 et 6.
 - un `js_string` d'une ligne existe en deux exemplaires : à factoriser si un troisième besoin apparaît dans un crate public ;
 - un argument qui est un objet **voulu comme texte** (une chaîne JSON destinée telle quelle au handler) est désormais relu comme objet : cas jugé improbable, à signaler dans la documentation de la commande si elle le prévoit ;
 - les cinq `RwLock::unwrap` du SDK (poison de verrou) ne sont pas traités ici : ils relèvent du SDK.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

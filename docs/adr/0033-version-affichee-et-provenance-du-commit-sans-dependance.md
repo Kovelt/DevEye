@@ -1,6 +1,6 @@
 # ADR-0033 — Version affichée et provenance du commit (sans dépendance)
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (versionnage), ADR-0017 (protocole 1.0), ADR-0028 (version du protocole MCP), ADR-0032 (`doctor`)
@@ -51,3 +51,5 @@ Option 3.
 Application : `deveye-server/build.rs`, `deveye-server/src/version.rs`, `deveye-adapters/adapter-mcp-server/src/lib.rs` (`ServerVersion`, `get_info`).
 
 Précisions (revue de la 1.0) : le commit est lu uniquement si le dépôt git trouvé est celui de DevEye (`deveye-server/Cargo.toml` à sa racine), pour qu'un crate vendorisé dans un autre dépôt n'affiche pas le commit de son hôte ; `build.rs` relit `HEAD` dans le répertoire git du worktree (`--absolute-git-dir`) et la ref ou `packed-refs` dans le répertoire commun. Un suffixe `-dirty` n'est volontairement pas ajouté : un script de build ne peut pas suivre les modifications de l'arbre de travail et l'indicateur serait périmé.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

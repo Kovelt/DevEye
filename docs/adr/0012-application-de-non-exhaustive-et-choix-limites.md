@@ -1,6 +1,6 @@
 # ADR-0012 — Application de `#[non_exhaustive]` et choix limites avant le gel
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (politique de stabilité qui prescrit `#[non_exhaustive]`)
@@ -50,3 +50,5 @@ Option 2, avec ces précisions.
 ## Notes
 
 À valider par le mainteneur. Si la décision sur les variantes est revue, passer l'attribut aux variantes impose des constructeurs et une nouvelle migration.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

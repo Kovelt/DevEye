@@ -1,6 +1,6 @@
 # ADR-0057 — `doctor` : `--display` vérifié après le parsing, sondes limitées à la cible et parallèles
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0031 (validation des flags selon la cible), ADR-0032 (`doctor` en lecture seule), ADR-0044 (cible x11 isolée)
@@ -43,3 +43,5 @@ Option 2. En complément : `doctor` ne sonde le SDK et le CDP que si la table de
 
 - le message d'erreur du serveur n'est plus produit par clap mais par `validate` (même type d'erreur, `MissingRequiredArgument`) ;
 - `auto` sans CDP ni SDK joignable continue de sortir `0` (deux avertissements) : le repli OS-level reste possible, ce n'est pas un échec.
+
+> Validation : accepté par le mainteneur le 2026-11-27, avec les autres ADR proposés pendant la préparation de la 1.0, avant le tag `v1.0.0`.

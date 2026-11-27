@@ -55,3 +55,5 @@ Ne font **pas** partie de la sortie : le tag `v1.0.0`, la publication sur crates
 ## Notes
 
 Les ADR passés de « Proposé » à « Accepté » avant le tag ne changent pas de fond : seul leur statut et l'index sont modifiés (processus de `docs/adr/README.md`).
+
+> Validation : les ADR encore « Proposé » ont été acceptés en bloc par le mainteneur le 2026-11-27, avant le tag `v1.0.0`.
