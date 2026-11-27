@@ -17,6 +17,9 @@ const _: () = assert!(!deveye_sdk::ui::is_observed());
 fn init_opens_no_port_in_release() {
     deveye_sdk::init(deveye_sdk::Config::with_port(PORT));
     deveye_sdk::install_tracing_layer();
+    assert!(deveye_sdk::try_install_tracing_layer().is_ok());
+    deveye_sdk::log(deveye_sdk::LogLevel::Info, "probe", "no-op");
+    let _layer = deveye_sdk::layer();
     deveye_sdk::ui::publish(deveye_sdk::ui::builder(10, 10).build());
     assert!(!deveye_sdk::ui::is_observed());
     // Laisser à un éventuel serveur le temps de démarrer : la connexion doit

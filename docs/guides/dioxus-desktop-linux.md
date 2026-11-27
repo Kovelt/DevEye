@@ -4,7 +4,7 @@ Une app Dioxus desktop affiche son interface dans **WebKitGTK**, qui n'expose pa
 
 ## 1. Intégrer le SDK
 
-Suivre [integration.md](../integration.md) : dépendance optionnelle `deveye-sdk` derrière une feature `deveye`, `init` et `install_tracing_layer` en debug seulement, `set_state`, `expose_route`, et **la pompe d'évaluation** (section 5), qui exécute les requêtes JavaScript dans la webview. Sans pompe, `eval_js`, `dom` et les clics répondent « aucune pompe d'évaluation enregistrée ».
+Suivre [integration.md](../integration.md) : dépendance optionnelle `deveye-sdk` derrière une feature `deveye`, `init` et `install_tracing_layer` (ou `layer()` / `log`, cf. section Logs) en debug seulement, `set_state`, `expose_route`, et **la pompe d'évaluation** (section 5), qui exécute les requêtes JavaScript dans la webview. Sans pompe, `eval_js`, `dom` et les clics répondent « aucune pompe d'évaluation enregistrée ».
 
 ## 2. Lancer l'app
 

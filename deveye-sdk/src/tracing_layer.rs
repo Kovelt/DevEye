@@ -11,93 +11,87 @@ use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
 
 use deveye_core::{LogEvent, LogLevel};
 
-/// Installe un layer DevEye dans le subscriber global tracing.
+/// Échec de [`try_install_tracing_layer`].
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum TracingInstallError {
+    /// Un abonné `tracing` global existe déjà (le process n'en admet qu'un) :
+    /// composer [`layer`] avec cet abonné, ou pousser les logs par
+    /// [`log`](crate::log).
+    #[error("un abonné tracing global est déjà installé : composer deveye_sdk::layer() avec lui")]
+    SubscriberAlreadySet,
+}
+
+/// Installe un abonné `tracing` global qui ne contient que le layer DevEye.
 ///
-/// **À appeler une seule fois**, idéalement juste après `init`. Si un autre
-/// subscriber est déjà installé, cet appel échoue silencieusement (le runtime
-/// global tracing ne supporte qu'un seul subscriber actif) : le canal n'est
-/// alors pas créé et `/devtools/info` n'annonce pas la capacité `logs`. Les appels
-/// ultérieurs sont idempotents : le canal de drain et la tâche de consommation
-/// sont créés uniquement lors du premier appel (gardé par `OnceLock`).
-///
-/// En build **release**, cette fonction est un no-op — cohérent avec le fait
-/// que le SDK est entièrement inactif hors `debug_assertions`.
-pub fn install_tracing_layer() {
+/// Renvoie [`TracingInstallError::SubscriberAlreadySet`] si un autre abonné
+/// global existe : rien n'est alors posé et `/devtools/info` n'annonce pas la
+/// capacité `logs`. Un second appel après un succès est sans effet (`Ok`).
+/// En build **release**, no-op (`Ok`), comme [`init`](crate::init).
+pub fn try_install_tracing_layer() -> Result<(), TracingInstallError> {
     #[cfg(debug_assertions)]
     {
+        use std::sync::atomic::{AtomicBool, Ordering};
         use tracing_subscriber::layer::SubscriberExt;
-        use tracing_subscriber::Registry;
-        let subscriber = Registry::default().with(DeveyeLayer);
-        // Sans layer actif, ni canal de drain ni capacité `logs` : sinon
-        // `/devtools/info` annoncerait une capture qui ne reçoit rien.
-        if tracing::subscriber::set_global_default(subscriber).is_err() {
-            return;
+        static INSTALLED: AtomicBool = AtomicBool::new(false);
+        if INSTALLED.load(Ordering::Acquire) {
+            return Ok(());
         }
-
-        // Canal de drain (N6) : un seul spawn consomme tous les LogEvent dans
-        // l'ordre d'émission, éliminant le coût d'un tokio::spawn par log.
-        // OnceLock garantit l'idempotence si install_tracing_layer est appelé
-        // plusieurs fois : seul le premier appel installe le canal.
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<LogEvent>();
-        // Si le OnceLock est deja peuple (2e appel), set retourne Err(tx) et
-        // tx est dropped ; le drain ci-dessous reoit None immediatement et
-        // se termine proprement.
-        let _ = crate::REGISTRY.log_tx.set(tx);
-        let registry = crate::REGISTRY.clone();
-        crate::runtime().spawn(async move {
-            let mut rx = rx;
-            while let Some(log) = rx.recv().await {
-                let mut guard = registry.logs.lock().await;
-                if guard.len() >= crate::LOG_BUFFER_CAPACITY {
-                    guard.pop_front();
-                }
-                guard.push_back(log);
-            }
-        });
+        let subscriber = tracing_subscriber::Registry::default().with(DeveyeLayer(()));
+        tracing::subscriber::set_global_default(subscriber)
+            .map_err(|_| TracingInstallError::SubscriberAlreadySet)?;
+        INSTALLED.store(true, Ordering::Release);
+        crate::enable_logs();
     }
+    Ok(())
 }
 
-/// Niveau minimal capturé. INFO par défaut : sans filtre, le buffer se noie
-/// dans le TRACE interne de Dioxus (diff de nœuds, signaux — vécu le 11 juin
-/// 2026 : 500+ événements de bruit au boot, zéro log applicatif visible).
-/// Surchargeable par `DEVEYE_LOG_LEVEL` (`trace`…`error`).
-fn min_level() -> Level {
-    static LVL: std::sync::LazyLock<Level> = std::sync::LazyLock::new(|| {
-        std::env::var("DEVEYE_LOG_LEVEL")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(Level::INFO)
-    });
-    *LVL
+/// Variante historique de [`try_install_tracing_layer`] : l'échec (abonné déjà
+/// présent) est ignoré. À préférer : la variante `try_`, qui le signale.
+pub fn install_tracing_layer() {
+    let _ = try_install_tracing_layer();
 }
 
-struct DeveyeLayer;
+/// Layer `tracing` à composer avec l'abonné d'un hôte qui possède déjà le
+/// sien : `registry().with(deveye_sdk::layer())`. Capture les événements au
+/// niveau de `DEVEYE_LOG_LEVEL` (défaut `info`). No-op en build release.
+///
+/// Expose `tracing_subscriber::Layer` 0.3 dans l'API (couplage consigné par
+/// ADR-0066) ; désactivable avec la feature `tracing-layer`.
+pub fn layer() -> DeveyeLayer {
+    #[cfg(debug_assertions)]
+    crate::enable_logs();
+    DeveyeLayer(())
+}
+
+/// Layer DevEye ; se construit uniquement par [`layer`].
+#[derive(Clone, Copy, Debug)]
+pub struct DeveyeLayer(());
 
 impl<S> Layer<S> for DeveyeLayer
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        // Dans `tracing`, TRACE > DEBUG > INFO > WARN > ERROR : on garde les
-        // événements au plus aussi verbeux que le seuil.
-        if *event.metadata().level() > min_level() {
-            return;
-        }
-        let mut visitor = MessageVisitor::default();
-        event.record(&mut visitor);
+        #[cfg(not(debug_assertions))]
+        let _ = event;
 
-        let log = LogEvent::new(
-            map_level(*event.metadata().level()),
-            event.metadata().target(),
-            visitor.message.unwrap_or_default(),
-        )
-        .with_fields(visitor.fields.unwrap_or(serde_json::Value::Null));
-
-        // Envoi synchrone non bloquant vers la tâche de drain unique.
-        // Si le canal n'est pas encore initialise (install_tracing_layer
-        // n'a pas encore ete appele), on abandonne silencieusement.
-        if let Some(tx) = crate::REGISTRY.log_tx.get() {
-            let _ = tx.send(log);
+        #[cfg(debug_assertions)]
+        {
+            let level = map_level(*event.metadata().level());
+            if level < crate::min_level() {
+                return;
+            }
+            let mut visitor = MessageVisitor::default();
+            event.record(&mut visitor);
+            crate::push_log(
+                LogEvent::new(
+                    level,
+                    event.metadata().target(),
+                    visitor.message.unwrap_or_default(),
+                )
+                .with_fields(visitor.fields.unwrap_or(serde_json::Value::Null)),
+            );
         }
     }
 }
@@ -180,22 +174,5 @@ mod tests {
         assert_eq!(map_level(Level::INFO), LogLevel::Info);
         assert_eq!(map_level(Level::WARN), LogLevel::Warn);
         assert_eq!(map_level(Level::ERROR), LogLevel::Error);
-    }
-
-    /// Verifie que le canal unbounded preserve l'ordre FIFO des LogEvent,
-    /// propriete sur laquelle la tache de drain de N6 s'appuie.
-    /// Test purement synchrone : try_recv ne necessite pas de runtime tokio.
-    #[test]
-    fn log_drain_channel_preserves_fifo_order() {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<LogEvent>();
-        let e1 = LogEvent::new(LogLevel::Info, "app", "first");
-        let e2 = LogEvent::new(LogLevel::Warn, "app", "second");
-        let e3 = LogEvent::new(LogLevel::Error, "app", "third");
-        tx.send(e1).unwrap();
-        tx.send(e2).unwrap();
-        tx.send(e3).unwrap();
-        assert_eq!(rx.try_recv().unwrap().message, "first");
-        assert_eq!(rx.try_recv().unwrap().message, "second");
-        assert_eq!(rx.try_recv().unwrap().message, "third");
     }
 }

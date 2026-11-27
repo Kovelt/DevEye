@@ -133,3 +133,4 @@ Les ADR rédigés pendant la préparation de la 1.0 avec le statut « Proposé �
 | [0063](0063-dependance-optionnelle-schemars-dans-deveye-core.md) | Dépendance optionnelle `schemars` dans `deveye-core` | Accepté |
 | [0064](0064-masquage-des-secrets-transversal-et-vecteurs-partages.md) | Masquage des secrets transversal et vecteurs partagés | Accepté |
 | [0065](0065-helper-sdk-ui-lecture-serveur-et-controles.md) | Helper SDK `ui`, lecture serveur de `ui.widgets` et contrôles | Accepté |
+| [0066](0066-push-de-logs-et-layer-du-sdk.md) | Push de logs et `layer()` du SDK | Accepté |

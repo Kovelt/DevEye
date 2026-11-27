@@ -19,6 +19,13 @@ documentation = "https://docs.rs/deveye-sdk"
 [lints]
 workspace = true
 
+[features]
+default = ["tracing-layer"]
+# `install_tracing_layer`, `try_install_tracing_layer`, `layer()` : expose
+# `tracing_subscriber::Layer` 0.3 dans l'API (ADR-0066). Sans elle, seuls
+# `log` et `log_with` restent, sans dépendance à `tracing-subscriber`.
+tracing-layer = ["dep:tracing-subscriber"]
+
 [dependencies]
 deveye-core = { path = "../deveye-core", version = "1.0.0" }
 serde = { workspace = true }
@@ -32,7 +39,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 tower-http = { version = "0.7", default-features = false, features = ["cors"] }
 chrono = { workspace = true }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

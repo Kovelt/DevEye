@@ -295,14 +295,12 @@ Le poll est **destructif**. L'appel `GET /devtools/logs/poll` vide atomiquement 
 Ref. code : `deveye-sdk/src/lib.rs` — handler `logs_poll_handler` : `guard.drain(..)` vide le `VecDeque` en une seule opération sous le verrou :
 
 ```rust
-async fn logs_poll_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
-    let events: Vec<_> = registry
-        .logs
-        .lock()
-        .map(|mut guard| guard.drain(..).collect())
-        .unwrap_or_default();
-    (StatusCode::OK, Json(LogsPayload { events }))
-}
+let events: Vec<_> = registry
+    .logs
+    .lock()
+    .unwrap_or_else(std::sync::PoisonError::into_inner)
+    .drain(..)
+    .collect();
 ```
 
 **Comportement en cas de crash ou de déconnexion du client** :
@@ -526,7 +524,7 @@ Ref. code : `deveye-sdk/src/lib.rs` — handler `commands_handler` (tri par `a.n
 |---|---|---|
 | `sdk_version` | string | Version du SDK (crate `deveye-sdk` ou implémentation tierce) |
 | `protocol_version` | string | Version du protocole, `MAJEURE.MINEURE`, identique au header |
-| `capabilities` | tableau de string | Capacités **actives** : `state`, `commands` et `info` toujours ; `redaction` quand le masquage des secrets (§2.4) est actif ; `logs` quand la collecte des logs est installée ; `ui.widgets/1` quand l'app publie un arbre de widgets (§3.7) ; `eval` quand une pompe d'évaluation est enregistrée. `eval` est cohérente avec `POST /devtools/eval` : annoncée, la route répond `200` ; non annoncée, `503`. De nouvelles valeurs peuvent apparaître en `1.x` : les ignorer si inconnues |
+| `capabilities` | tableau de string | Capacités **actives** : `state`, `commands` et `info` toujours ; `redaction` quand le masquage des secrets (§2.4) est actif ; `logs` quand une source de logs est armée (abonné ou `layer()` installé, ou premier appel de `log`) ; `ui.widgets/1` quand l'app publie un arbre de widgets (§3.7) ; `eval` quand une pompe d'évaluation est enregistrée. `eval` est cohérente avec `POST /devtools/eval` : annoncée, la route répond `200` ; non annoncée, `503`. De nouvelles valeurs peuvent apparaître en `1.x` : les ignorer si inconnues |
 
 **Codes HTTP** : 200 ; 403 (Host invalide).
 
@@ -570,7 +568,7 @@ Ref. code : `deveye-sdk/src/ui.rs` (`publish`, `is_observed`, route `ui.widgets`
 | Route `ui.widgets` et capacité `ui.widgets/1` (`deveye_sdk::ui`, §3.7) | oui |
 | `504` sur dépassement de l'évaluation, traduit en `PortError::Timeout` côté `adapter-dioxus-signals` | oui |
 
-Un runtime tokio dédié (`std::sync::LazyLock`, un thread) isole le SDK du runtime de l'app hôte. Les verrous sont **mixtes** : `state` et `routes` sont des `std::sync::RwLock`, afin que `set_state` et `expose_route` écrivent immédiatement, sans runtime, depuis n'importe quel thread ; le buffer de logs (`logs`, `tokio::sync::Mutex`) et l'émetteur de la pompe d'évaluation (`eval_tx`, `tokio::sync::RwLock`) sont des verrous `tokio::sync`, car les handlers les attendent. Une implémentation tierce n'a pas à reproduire ce choix : seul le comportement observable est normatif.
+Un runtime tokio dédié (`std::sync::LazyLock`, un thread) isole le SDK du runtime de l'app hôte. Les verrous sont **mixtes** : `state` et `routes` sont des `std::sync::RwLock`, afin que `set_state` et `expose_route` écrivent immédiatement, sans runtime, depuis n'importe quel thread ; le buffer de logs (`logs`) est un `std::sync::Mutex` dont les sections critiques sont minuscules et jamais tenues à travers un `.await` : un push de log doit marcher de n'importe quel fil, y compris hors de tout runtime, où `blocking_lock` d'un verrou tokio paniquerait ([ADR-0066](adr/0066-push-de-logs-et-layer-du-sdk.md)) ; l'émetteur de la pompe d'évaluation (`eval_tx`, `tokio::sync::RwLock`) est un verrou `tokio::sync`, car les handlers l'attendent. Une implémentation tierce n'a pas à reproduire ce choix : seul le comportement observable est normatif.
 
 `deveye-sdk` est l'**implémentation de référence** : en cas de divergence entre ce document et le code de `deveye-sdk`, c'est un défaut à corriger d'un côté ou de l'autre, et la suite de conformité (section 7) départage en exécutant le SDK Rust à chaque modification.
 

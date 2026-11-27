@@ -7,6 +7,9 @@
 fn main() {
     deveye_sdk::init(deveye_sdk::Config::with_port(31598));
     deveye_sdk::install_tracing_layer();
+    // Push de logs : no-op en release comme le reste (ADR-0066).
+    deveye_sdk::log(deveye_sdk::LogLevel::Info, "probe", "sonde");
+    let _layer = deveye_sdk::layer();
     deveye_sdk::set_state("probe", serde_json::json!({ "ok": true }));
     // Helper ui : doit disparaître avec le reste en release (route `ui.widgets`).
     deveye_sdk::ui::publish(deveye_sdk::ui::builder(10, 10).build());
