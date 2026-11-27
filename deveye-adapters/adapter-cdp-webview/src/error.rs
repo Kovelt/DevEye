@@ -42,3 +42,41 @@ impl From<CdpError> for PortError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transport_errors_map_to_network() {
+        for err in [
+            CdpError::Connect("x".into()),
+            CdpError::Send("x".into()),
+            CdpError::Receive("x".into()),
+        ] {
+            assert!(matches!(PortError::from(err), PortError::Network(_)));
+        }
+    }
+
+    #[test]
+    fn protocol_errors_map_to_protocol() {
+        // Le repli CDP -> SDK se déclenche sur `Protocol`, pas sur `Render`.
+        let remote = CdpError::Remote {
+            code: -32000,
+            message: "boom".into(),
+        };
+        assert!(matches!(PortError::from(remote), PortError::Protocol(_)));
+        assert!(matches!(
+            PortError::from(CdpError::Decode("x".into())),
+            PortError::Protocol(_)
+        ));
+    }
+
+    #[test]
+    fn base64_error_maps_to_render() {
+        assert!(matches!(
+            PortError::from(CdpError::Base64("x".into())),
+            PortError::Render(_)
+        ));
+    }
+}

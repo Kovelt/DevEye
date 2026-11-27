@@ -21,3 +21,22 @@ impl From<ScreencapError> for PortError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_not_found_maps_to_unsupported() {
+        let err = ScreencapError::WindowNotFound("MonApp".into());
+        assert!(matches!(PortError::from(err), PortError::Unsupported(_)));
+    }
+
+    #[test]
+    fn encoding_and_xcap_errors_map_to_render() {
+        let encoding = ScreencapError::Encoding("png".into());
+        assert!(matches!(PortError::from(encoding), PortError::Render(_)));
+        let xcap = ScreencapError::Xcap("backend".into());
+        assert!(matches!(PortError::from(xcap), PortError::Render(_)));
+    }
+}
