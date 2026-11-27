@@ -16,6 +16,8 @@
 
 use std::time::Duration;
 
+use deveye_core::Modifier;
+
 use crate::error::X11Error;
 
 /// Longueur maximale (en caracteres) d'un `Type`.
@@ -365,6 +367,42 @@ fn key_candidates(key: &str) -> Result<Vec<u32>, X11Error> {
         .ok_or_else(|| X11Error::Invalid(format!("touche inconnue : « {key} »")))
 }
 
+/// Plan des modificateurs d'un geste de pointeur : `(appuis, relachements)`.
+/// Les appuis suivent l'ordre demande (doublons ecartes), les relachements
+/// l'ordre inverse. Un modificateur absent du clavier du serveur echoue ici,
+/// avant la moindre emission.
+pub fn plan_modifiers(
+    keymap: &Keymap,
+    modifiers: &[Modifier],
+) -> Result<(Vec<KeyAction>, Vec<KeyAction>), X11Error> {
+    let mut codes: Vec<u8> = Vec::new();
+    for modifier in modifiers {
+        let name = modifier.as_str();
+        let sym = modifier_keysym(name)
+            .ok_or_else(|| X11Error::Invalid(format!("modificateur inconnu : « {name} »")))?;
+        let code = modifier_keycode(keymap, sym, name)?;
+        if !codes.contains(&code) {
+            codes.push(code);
+        }
+    }
+    let presses = codes.iter().map(|&c| KeyAction::Press(c)).collect();
+    let releases = codes.iter().rev().map(|&c| KeyAction::Release(c)).collect();
+    Ok((presses, releases))
+}
+
+/// Plan d'un appui maintenu : la frappe de `plan_key` avec `hold` insere entre
+/// l'appui de la touche et son relachement. Les modificateurs de niveau (Shift
+/// pour une majuscule) restent donc enfonces pendant toute la duree.
+pub fn plan_hold(keymap: &Keymap, key: &str, hold: Duration) -> Result<Vec<KeyAction>, X11Error> {
+    let mut actions = plan_key(keymap, key)?;
+    let first_release = actions
+        .iter()
+        .position(|a| matches!(a, KeyAction::Release(_)))
+        .ok_or_else(|| X11Error::Invalid(format!("touche « {key} » sans relâchement planifié")))?;
+    actions.insert(first_release, KeyAction::Pause(hold));
+    Ok(actions)
+}
+
 /// Plan d'une combinaison : tout est resolu AVANT d'emettre ; un modificateur ou
 /// une touche inconnus ne produisent aucune action.
 pub fn plan_combo(
@@ -668,5 +706,40 @@ mod tests {
         assert_eq!(char_candidates('€'), vec![0x20ac, 0x0100_20ac]);
         assert_eq!(char_candidates('a'), vec![0x61]);
         assert_eq!(keysym_for_char('\u{1F600}'), 0x0101_F600);
+    }
+
+    #[test]
+    fn modifiers_plan_presses_in_order_and_releases_in_reverse() {
+        let km = swiss();
+        let (down, up) =
+            plan_modifiers(&km, &[Modifier::Ctrl, Modifier::Shift, Modifier::Ctrl]).unwrap();
+        // 37 = Control_L, 50 = Shift_L ; le doublon est ecarte.
+        assert_eq!(down, vec![KeyAction::Press(37), KeyAction::Press(50)]);
+        assert_eq!(up, vec![KeyAction::Release(50), KeyAction::Release(37)]);
+        let (d, u) = plan_modifiers(&km, &[]).unwrap();
+        assert!(d.is_empty() && u.is_empty());
+    }
+
+    #[test]
+    fn modifier_missing_from_the_keyboard_is_refused() {
+        // Keymap vide : aucun modificateur n'existe.
+        let empty = Keymap::new(8, 4, vec![0; 4 * 10]);
+        assert!(plan_modifiers(&empty, &[Modifier::Shift]).is_err());
+    }
+
+    #[test]
+    fn hold_inserts_the_pause_between_press_and_release() {
+        let km = swiss();
+        let hold = Duration::from_millis(300);
+        let plan = plan_hold(&km, "Shift_L", hold).unwrap();
+        assert_eq!(
+            plan,
+            vec![
+                KeyAction::Press(50),
+                KeyAction::Pause(hold),
+                KeyAction::Release(50)
+            ]
+        );
+        assert!(plan_hold(&km, "touche_inconnue", hold).is_err());
     }
 }
