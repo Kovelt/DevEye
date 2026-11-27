@@ -38,6 +38,8 @@ La garde refuse, sans option pour la lever : un display non local, un numéro < 
 
 Pas de JavaScript : `eval_js`, `find_element`, `click_selector`, `click_text` répondent `unsupported`. `wait_for_selector` et `wait_for_text` n'ont pas de réponse `unsupported` immédiate : sans DOM, ils attendent le `timeout_ms` complet puis répondent `found: false` (ne pas en conclure que l'élément est absent) ; utiliser `wait_condition` avec un prédicat sans DOM (`state-key`, `screenshot-stable`, `screenshot-region-stable`, `log-message`, `target-alive`). Le « DOM » est la **réponse de la route `ui.widgets`** de l'app, renvoyée sans interprétation par l'outil `dom` :
 
+Pour une app Rust, le helper `deveye_sdk::ui` publie l'arbre `deveye.ui/1` : à chaque frame, `if deveye_sdk::ui::is_observed() { deveye_sdk::ui::publish(tree) }`, où `tree` vient de `deveye_sdk::ui::builder(largeur, hauteur)` (rects en pixels de capture, c'est-à-dire points logiques × `pixels_per_point` sous egui). Pas de widget secret : sa valeur n'est jamais publiée. Une app non Rust, ou qui préfère un handler maison, expose la route à la main :
+
 ```rust
 #[cfg(all(debug_assertions, feature = "deveye"))]
 deveye_sdk::expose_route("ui.widgets", "Arbre des widgets", |_payload| {

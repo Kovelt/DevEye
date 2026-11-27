@@ -150,7 +150,7 @@ Clés masquées par défaut, comparées sans casse ni séparateurs (`api_key` = 
 **Ce qui n'est PAS filtré** :
 
 - le résultat de `POST /devtools/eval` ;
-- les valeurs de retour de `POST /devtools/command`, dont la route `ui.widgets` ;
+- les valeurs de retour de `POST /devtools/command` (la route `ui.widgets` fait exception : la valeur d'un widget secret n'y est jamais publiée, §3.7) ;
 - le texte libre des messages de log (`message`) ;
 - les champs de log formatés par `Debug` (`info!(user = ?user)`) : la valeur arrive en chaîne et seul le **nom** du champ est examiné, pas le contenu (`"User { password: … }"` passe tel quel) ; préférer des champs structurés scalaires ;
 - tout secret stocké sous un nom de clé neutre non déclaré.
@@ -526,11 +526,31 @@ Ref. code : `deveye-sdk/src/lib.rs` — handler `commands_handler` (tri par `a.n
 |---|---|---|
 | `sdk_version` | string | Version du SDK (crate `deveye-sdk` ou implémentation tierce) |
 | `protocol_version` | string | Version du protocole, `MAJEURE.MINEURE`, identique au header |
-| `capabilities` | tableau de string | Capacités **actives** : `state`, `commands` et `info` toujours ; `redaction` quand le masquage des secrets (§2.4) est actif ; `logs` quand la collecte des logs est installée ; `eval` quand une pompe d'évaluation est enregistrée. `eval` est cohérente avec `POST /devtools/eval` : annoncée, la route répond `200` ; non annoncée, `503`. De nouvelles valeurs peuvent apparaître en `1.x` : les ignorer si inconnues |
+| `capabilities` | tableau de string | Capacités **actives** : `state`, `commands` et `info` toujours ; `redaction` quand le masquage des secrets (§2.4) est actif ; `logs` quand la collecte des logs est installée ; `ui.widgets/1` quand l'app publie un arbre de widgets (§3.7) ; `eval` quand une pompe d'évaluation est enregistrée. `eval` est cohérente avec `POST /devtools/eval` : annoncée, la route répond `200` ; non annoncée, `503`. De nouvelles valeurs peuvent apparaître en `1.x` : les ignorer si inconnues |
 
 **Codes HTTP** : 200 ; 403 (Host invalide).
 
 Ref. code : `deveye-sdk/src/lib.rs` (`info_handler`). Côté client : `deveye_sdk_client::fetch_info` (`SdkInfo`) ; un `404` y est traduit en `PortError::Protocol` (SDK antérieur à la 1.0).
+
+---
+
+### 3.7 Route de commande `ui.widgets` (`deveye.ui/1`)
+
+**Objectif** : servir l'arbre de widgets d'une app sans DOM (egui, imgui, Skia, Godot, Uno…). C'est une **route de commande** (§3.4), pas un endpoint : `POST /devtools/command { "route": "ui.widgets", "payload": {} }`. Ajoutée en `1.1`, additive ; une implémentation qui ne la sert pas n'annonce pas la capacité.
+
+**Capacité** : `ui.widgets/1`, annoncée par `GET /devtools/info` (§3.6) dès que l'app a recours au helper. Une capacité nouvelle est un ajout additif : `protocol_version` reste `1.0`.
+
+**Requête** : `payload` vaut `{}`. Un handler ignore son payload ; la négociation (`accept_schema`, `max_nodes`) n'est pas engagée tant que `/devtools/info` n'en annonce pas la prise en charge ([ADR-0065](adr/0065-helper-sdk-ui-lecture-serveur-et-controles.md)).
+
+**Réponse 200** : un arbre au schéma `deveye.ui/1` ([`docs/schemas/ui-widgets-1.json`](schemas/ui-widgets-1.json), forme et exemple dans [usage.md](usage.md)). Une app sans arbre publié répond `200 { "error": "..." }` : l'écart est dit, pas masqué.
+
+**Exigences** (vérifiées par `UI-01` et `UI-02`, §7) :
+
+- `schema` vaut `deveye.ui/1` ; les `id` sont uniques et non vides ; chaque `parent` et le `focus` désignent un widget de l'arbre ; aucun cycle ;
+- un widget `state.secret` (ou de rôle `password`) ne porte **aucune valeur** : `value` est absent. Le serveur masque en seconde ligne (`"<secret>"`) la valeur d'un tel widget reçue d'une app tierce, ainsi que les clés sensibles (§2.4) des valeurs structurées, y compris dans la sortie brute de l'outil MCP `dom` ([ADR-0064](adr/0064-masquage-des-secrets-transversal-et-vecteurs-partages.md)) ;
+- `published_at_ms` (ms depuis l'epoch Unix) date l'arbre : le serveur signale un arbre vieux de plus de 2 s.
+
+Ref. code : `deveye-sdk/src/ui.rs` (`publish`, `is_observed`, route `ui.widgets` enregistrée au premier usage) ; lecture : `adapter-composite` (`RouteDomInspector`). Types : `deveye-core::ui`.
 
 ---
 
@@ -547,6 +567,7 @@ Ref. code : `deveye-sdk/src/lib.rs` (`info_handler`). Côté client : `deveye_sd
 | Masquage des secrets par clés (§2.4) | oui |
 | Limite de corps 1 Mio, `413` (§2.5) | oui |
 | `expose_route` (enregistrement de commandes) | oui |
+| Route `ui.widgets` et capacité `ui.widgets/1` (`deveye_sdk::ui`, §3.7) | oui |
 | `504` sur dépassement de l'évaluation, traduit en `PortError::Timeout` côté `adapter-dioxus-signals` | oui |
 
 Un runtime tokio dédié (`std::sync::LazyLock`, un thread) isole le SDK du runtime de l'app hôte. Les verrous sont **mixtes** : `state` et `routes` sont des `std::sync::RwLock`, afin que `set_state` et `expose_route` écrivent immédiatement, sans runtime, depuis n'importe quel thread ; le buffer de logs (`logs`, `tokio::sync::Mutex`) et l'émetteur de la pompe d'évaluation (`eval_tx`, `tokio::sync::RwLock`) sont des verrous `tokio::sync`, car les handlers les attendent. Une implémentation tierce n'a pas à reproduire ce choix : seul le comportement observable est normatif.
@@ -633,6 +654,11 @@ Cette liste est le guide opérationnel pour tout SDK dans un langage tiers (par 
 - [ ] Exécuter le handler correspondant, retourner son résultat JSON avec 200.
 - [ ] Retourner `{ "error": "inconnue" }` avec 404 si la route est inconnue.
 
+### Route `ui.widgets` (facultative)
+
+- [ ] Si l'app a une interface sans DOM : servir l'arbre `deveye.ui/1` (§3.7) sur la route de commande `ui.widgets`, ignorer le payload, annoncer `ui.widgets/1` dans `capabilities` **seulement** alors.
+- [ ] Ne jamais publier la valeur d'un widget secret.
+
 ### `GET /devtools/info`
 
 - [ ] Retourner `{ "sdk_version", "protocol_version": "1.0", "capabilities": [...] }` avec 200.
@@ -688,7 +714,7 @@ Exemple pour un shim .NET (processus indépendant, démarré avant) : la suite n
 
 ### Ce que la suite vérifie
 
-Une vérification est `SKIP`, jamais `OK` par défaut, quand l'état de l'implémentation ne permet pas de l'observer (aucun log émis, moins de deux commandes, pas de clé sensible, option absente, connexion coupée avant le `413`). Elle est `N/A` quand l'exigence ne s'applique pas à l'implémentation (capacité `eval` ou `redaction` non annoncée) : rien n'est à observer et `--strict` ne l'exige pas. Pour tout observer : poser `set_state("password", ...)`, enregistrer au moins deux commandes, émettre au moins deux logs avant de lancer la suite, et fournir les options ci-dessus.
+Une vérification est `SKIP`, jamais `OK` par défaut, quand l'état de l'implémentation ne permet pas de l'observer (aucun log émis, moins de deux commandes, pas de clé sensible, option absente, connexion coupée avant le `413`). Elle est `N/A` quand l'exigence ne s'applique pas à l'implémentation (capacité `eval`, `redaction` ou `ui.widgets/1` non annoncée) : rien n'est à observer et `--strict` ne l'exige pas. Pour tout observer : poser `set_state("password", ...)`, enregistrer au moins deux commandes, publier un arbre `ui.widgets` avec un champ de rôle `password`, émettre au moins deux logs avant de lancer la suite, et fournir les options ci-dessus.
 
 | Identifiant | Section | Exigence |
 |---|---|---|
@@ -702,6 +728,7 @@ Une vérification est `SKIP`, jamais `OK` par défaut, quand l'état de l'implé
 | `LOGS-01` à `LOGS-03` | §3.0, §3.2 | horodatages RFC 3339 UTC, ordre d'émission, poll destructif |
 | `EVAL-01` à `EVAL-03` | §3.3 | `503`/`200` selon la capacité `eval`, `504`, `500` |
 | `SEC-01` | §2.4 | masquage des clés sensibles, si la capacité `redaction` est annoncée (sinon `N/A`) |
+| `UI-01`, `UI-02` | §3.7 | si la capacité `ui.widgets/1` est annoncée (sinon `N/A`) : arbre `deveye.ui/1` valide (schéma, ids uniques, parents connus), aucune valeur publiée pour un widget secret (`SKIP` sans widget secret) |
 
 Les en-têtes de version sur `200`, `403`, `404`, `405`, `413`, `500` et les erreurs de décodage sont contrôlés dans chacune de ces vérifications. Ce qui n'est **pas** vérifié : le comportement interne des handlers de commande, le contenu des résultats d'évaluation, la sécurité compile-time du §2.1 (`#if DEBUG`), le comportement en cas de bind raté et le masquage par clés ajoutées par l'app (`Config::secret_keys`).
 

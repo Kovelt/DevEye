@@ -12,7 +12,7 @@ Tant que la version majeure ne change pas, ces éléments ne cassent pas.
 |---|---|
 | `deveye-core` | types publics du domaine (commandes, prédicats, snapshots, niveaux de log, descripteurs) ; module `ui` (arbre `deveye.ui/1`, depuis 1.1) et feature optionnelle `schema` (dérive `schemars::JsonSchema`, désactivée par défaut) |
 | `deveye-ports` | traits des ports, `PortError`, `PortResult` |
-| `deveye-sdk` | API publique embarquée dans l'app cible (`init`, `Config`, `set_state`, `expose_route`, `take_eval_requests`, constantes publiques) |
+| `deveye-sdk` | API publique embarquée dans l'app cible (`init`, `Config`, `set_state`, `expose_route`, `take_eval_requests`, constantes publiques) ; module `ui` depuis 1.1 (`publish`, `is_observed`, `builder`, constantes `ROUTE` et `CAPABILITY`, réexport des types `deveye.ui/1`) |
 | `deveye-sdk-client` | client HTTP et constantes partagés avec les adapters |
 | **Schéma `deveye.ui/1`** (depuis 1.1) | forme de la réponse de la route `ui.widgets` ([usage.md](usage.md), `docs/schemas/ui-widgets-1.json`, [ADR-0062](adr/0062-schema-deveye-ui-1-de-la-route-ui-widgets.md)) : champs et sémantique actuels figés ; une évolution mineure n'ajoute que des champs optionnels, une rupture publie `deveye.ui/2` lu en plus de `/1` ; le rôle d'un widget est une chaîne ouverte, son vocabulaire recommandé n'est pas une énumération fermée |
 | **Wire protocol v1** | endpoints, formes JSON et en-têtes décrits dans [wire-protocol.md](wire-protocol.md), dont `X-DevEye-Protocol-Version: 1.0` (la mineure augmente à chaque ajout, la majeure à chaque rupture) |

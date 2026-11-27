@@ -52,6 +52,6 @@ Le serveur se branche sur l'implémentation comme sur un SDK Rust ; la cible dé
 
 - **Dev-only.** Ne compiler et n'activer l'implémentation que dans les builds de développement ; la garde `Host` et le bind loopback sont obligatoires ([ADR-0042](../adr/0042-posture-dev-only-du-sdk.md)). Un SDK qui ne les respecte pas n'est pas conforme.
 - **Pompe d'évaluation.** Si l'app a une webview, `POST /devtools/eval` doit exécuter l'expression dans le moteur de la page et répondre `{ value }` ou `{ error }` ; sans pompe, répondre `503`. Une pompe qui ne répond pas dans les 10 s donne `504`.
-- **Route `ui.widgets`.** Pour une app sans webview, l'exposer comme commande : c'est le « DOM » de l'outil `dom` en cible `x11`.
+- **Route `ui.widgets`.** Pour une app sans webview, l'exposer comme commande au schéma `deveye.ui/1` ([wire-protocol.md](../wire-protocol.md) §3.7) : c'est le « DOM » de l'outil `dom` en cible `x11`. N'annoncer la capacité `ui.widgets/1` que si la route est servie ; ne jamais publier la valeur d'un widget secret (la suite de conformité le vérifie : `UI-01`, `UI-02`).
 - **Secrets.** Ne pas publier de secret dans l'état ; le masquage par clés n'est qu'un filet et ne couvre ni `eval`, ni les retours de commandes.
 - **Statut de l'implémentation .NET existante.** Une implémentation .NET tierce est maintenue **hors de ce dépôt** et validée par cette suite ([ADR-0036](../adr/0036-statut-du-shim-dotnet-implementation-tierce.md)).

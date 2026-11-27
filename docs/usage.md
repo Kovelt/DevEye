@@ -149,7 +149,7 @@ deveye-server doctor --target kwin-eis
 deveye-server doctor --target x11 --display :250
 ```
 
-Diagnostic **en lecture seule** : il n'ouvre aucun serveur MCP, ne compose aucun adapter, n'injecte aucun événement. Il accepte les options de ciblage du serveur (`--target`, `--sdk-url`, `--cdp-url`, `--display`, `--screencap-window`…) ; les filtres de cible CDP (`--cdp-target-filter-*`, `--cdp-accept-blank`) ne servent qu’au serveur. Avec `--target x11` sans `--display`, il ne refuse pas la ligne de commande : il le diagnostique. Il ne sonde que ce que la cible utilise (CDP seulement pour `auto` et `cdp`), en parallèle. Huit vérifications, chacune avec un statut et, si besoin, un conseil :
+Diagnostic **en lecture seule** : il n'ouvre aucun serveur MCP, ne compose aucun adapter, n'injecte aucun événement. Il accepte les options de ciblage du serveur (`--target`, `--sdk-url`, `--cdp-url`, `--display`, `--screencap-window`…) ; les filtres de cible CDP (`--cdp-target-filter-*`, `--cdp-accept-blank`) ne servent qu’au serveur. Avec `--target x11` sans `--display`, il ne refuse pas la ligne de commande : il le diagnostique. Il ne sonde que ce que la cible utilise (CDP seulement pour `auto` et `cdp`), en parallèle. Neuf vérifications, chacune avec un statut et, si besoin, un conseil :
 
 | Vérification | Rôle |
 |---|---|
@@ -161,6 +161,7 @@ Diagnostic **en lecture seule** : il n'ouvre aucun serveur MCP, ne compose aucun
 | Display X privé | le display passe la garde d'isolation et son socket existe |
 | SDK de l'app cible | `GET /devtools/info` répond, version du protocole compatible avec celle du serveur |
 | CDP (navigateur) | le point d'accès CDP répond |
+| Arbre `ui.widgets` (facultatif) | seulement si le SDK annonce `ui.widgets/1` : lit la route (`POST /devtools/command`, sans effet sur l'app) et vérifie le schéma, les ids uniques et non vides, les parents et le focus connus ; un arbre invalide est un **échec**, une route illisible ou sans arbre publié un avertissement ([ADR-0065](adr/0065-helper-sdk-ui-lecture-serveur-et-controles.md)) |
 
 Statuts : `[OK]`, `[ATTENTION]` (utile mais non bloquant : capacité réduite), `[ÉCHEC]` (prérequis bloquant de la cible demandée), `[SANS OBJET]`. Code de sortie : **0** (prêt, ou avertissements seulement), **1** (au moins un prérequis bloquant manque), **2** (erreur d'usage). Le texte du diagnostic n'est pas couvert par la promesse de stabilité, ses codes de sortie le sont.
 
@@ -328,7 +329,7 @@ Place `text` dans le presse-papiers (`wl-copy`) ; avec `key_combo` Ctrl+V, saisi
 
 #### `dom`
 
-DOM courant (JSON), puis `{ captured_at }`. Au-delà de ~100 Ko sérialisés, `isError` explicite : préférer `find_element`, `assert_selector` ou `eval_js`. En `x11`, le « DOM » est la réponse de la route `ui.widgets` de l'app, sans interprétation ; absente, erreur d'inspection explicite.
+DOM courant (JSON), puis `{ captured_at }`. Au-delà de ~100 Ko sérialisés, `isError` explicite : préférer `find_element`, `assert_selector` ou `eval_js`. En `x11`, le « DOM » est la réponse de la route `ui.widgets` de l'app, sans conversion (format legacy conservé) mais **secrets masqués** : la valeur d'un widget secret est remplacée par `<secret>` ; absente, erreur d'inspection explicite.
 
 ##### Route `ui.widgets` : schéma `deveye.ui/1`
 
@@ -352,7 +353,8 @@ Pour une app sans DOM, la route `ui.widgets` publie une liste **plate** de widge
 
 - `rect` = `[x, y, largeur, hauteur]` en pixels entiers, **dans le repère des gestes** de la cible (origine en haut à gauche de la fenêtre) : cliquer au centre du rect vise le widget. Une app en points logiques (egui) multiplie par son facteur d'échelle avant de publier ; les coordonnées fractionnaires sont arrondies vers la plus petite boîte entière qui contient le rectangle (`x`, `y` au plancher, bords droit et bas au plafond).
 - `role` est une chaîne ouverte (vocabulaire recommandé : `window`, `panel`, `button`, `checkbox`, `radio`, `textbox`, `password`, `slider`, `knob`, `list`, `listitem`, `tab`, `menu`, `menuitem`, `label`, `image`, `scrollarea`) ; une valeur inconnue est conservée.
-- Un widget `secret` (ou de rôle `password`) ne publie pas sa valeur ; le serveur masque en plus toute valeur reçue pour un tel widget.
+- Un widget `secret` (ou de rôle `password`) ne publie pas sa valeur ; le serveur masque en plus toute valeur reçue pour un tel widget, **y compris dans la sortie de `dom`** (changement de la 1.1 : avant, `dom` renvoyait la valeur brute de la route), et applique le masquage par clés (§2.4 du wire protocol) aux valeurs structurées.
+- Côté app Rust, `deveye_sdk::ui` publie l'arbre : `ui::builder(w, h)` construit, `ui::publish(tree)` remplace l'arbre courant, `ui::is_observed()` dit si un agent a lu la route dans les 2 dernières secondes (l'app ne construit son arbre que dans ce cas, coût nul sinon). La route est enregistrée au premier appel de `publish` ou de `is_observed` et annonce la capacité `ui.widgets/1` ; en release, tout est un no-op. Une lecture qui arrive quand personne n'observait attend jusqu'à 500 ms la publication suivante.
 - Les lecteurs ignorent les champs inconnus : une évolution mineure ajoute des champs optionnels, une rupture publie `deveye.ui/2`, lu en plus de `/1`.
 
 Format d'avant le schéma (sans champ `schema`), lu et converti par le lecteur tolérant : une liste ou `{ window?, widgets }`, où `kind` tient lieu de `role`, `text` de `label`, `rect` est un tableau ou un objet `{ x, y, width, height }`, et un widget sans `id` reçoit un `id` éphémère `role[index]` (marqué `id_ephemeral`, à ne pas réutiliser d'un arbre à l'autre).
@@ -514,7 +516,7 @@ La capture est un `GetImage` de la **racine** du serveur X, rognée au rectangle
 - **Conteneur scrollable** : `scroll` ancré en (`x`, `y`) vise le conteneur sous le point ; pour une liste interne, ancrer **dans** la liste, pas au centre de la fenêtre.
 - **Coûts** : préférer `observe`, `screenshot_region`, `max_width` et `format: "jpeg"` à des captures pleines ; `find_element` et `assert_selector` à `dom`.
 - **Attendre, ne pas dormir** : `wait_for_selector`, `wait_for_text`, `wait_ready`, `wait_target_alive` plutôt qu'un délai fixe.
-- **Secrets** : `eval_js`, les valeurs de retour de `invoke_command` et la route `ui.widgets` ne sont pas masqués ([wire-protocol.md](wire-protocol.md) §2.4).
+- **Secrets** : `eval_js` et les valeurs de retour de `invoke_command` ne sont pas masqués ; la route `ui.widgets` ne publie pas la valeur des widgets secrets et `dom` la masque en seconde ligne ([wire-protocol.md](wire-protocol.md) §2.4 et §3.7).
 
 ---
 

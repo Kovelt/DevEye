@@ -48,7 +48,7 @@ DevEye n'est **pas un produit** : c'est un accélérateur de dev. Projet **open 
 2. **Bind loopback uniquement** — le mini-serveur SDK écoute sur `127.0.0.1`, jamais `0.0.0.0`.
 3. **Port configurable** — par défaut `31337`, surchargeable par `DEVEYE_PORT`.
 4. **Garde Host anti DNS-rebinding + CORS deny-all** sur toutes les routes du SDK.
-5. **Pas de secret exposé** — l'état et les logs exposés par le SDK passent par le masquage des clés sensibles ; ne jamais ajouter de route qui le contourne. `eval_js`, résultats de commandes et `ui.widgets` ne sont pas filtrés (ADR-0016).
+5. **Pas de secret exposé** — l'état et les logs exposés par le SDK passent par le masquage des clés sensibles ; ne jamais ajouter de route qui le contourne. `eval_js` et les résultats de commandes ne sont pas filtrés (ADR-0016) ; `ui.widgets` ne publie pas la valeur des widgets secrets et `dom` la masque (ADR-0064).
 6. **Cible `x11` isolée par construction** — `--display` obligatoire, refus de la session vivante, d'XWayland et des displays < 100 ; aucune option ne lève ces refus.
 
 ---

@@ -109,7 +109,7 @@ Le SDK remplace par `<secret>` la valeur des clés JSON sensibles dans l'état e
 deveye_sdk::init(deveye_sdk::Config::default().with_secret_keys(["iban", "numero_carte"]));
 ```
 
-**Ce filet n'est pas une garantie.** Il n'agit pas sur : le résultat d'`eval_js`, les valeurs de retour de `invoke_command` (dont la route `ui.widgets`), le texte libre des messages de log, ni un secret rangé sous un nom de clé neutre non déclaré. Ne pas publier de secret dans l'état ; ne pas supposer qu'une valeur est masquée parce qu'elle « ressemble » à un secret. Détail : [wire-protocol.md](wire-protocol.md) §2.4, [ADR-0016](adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md), [SECURITY.md](../SECURITY.md).
+**Ce filet n'est pas une garantie.** Il n'agit pas sur : le résultat d'`eval_js`, les valeurs de retour de `invoke_command`, le texte libre des messages de log, ni un secret rangé sous un nom de clé neutre non déclaré. Ne pas publier de secret dans l'état ; ne pas supposer qu'une valeur est masquée parce qu'elle « ressemble » à un secret. La route `ui.widgets` est traitée à part : le helper `deveye_sdk::ui` ne publie jamais la valeur d'un widget secret et `dom` la masque en seconde ligne ([ADR-0064](adr/0064-masquage-des-secrets-transversal-et-vecteurs-partages.md)). Détail : [wire-protocol.md](wire-protocol.md) §2.4, [ADR-0016](adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md), [SECURITY.md](../SECURITY.md).
 
 Corps de requête limités à 1 Mio. Aucun jeton d'authentification : tout processus de la machine peut parler au SDK ; le SDK est conçu pour un poste de développement de confiance.
 

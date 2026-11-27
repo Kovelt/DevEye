@@ -6,7 +6,7 @@ Fait partie de [DevEye](https://github.com/Morgan-Voltz/DevEye), outillage dev-o
 
 ## Secrets et limites
 
-Les valeurs des clés sensibles (`password`, `token`, `api_key`, `authorization`, `cookie`…) sont masquées dans l'état et les champs de logs servis ; `Config::with_secret_keys` ajoute les clés propres à l'app. Les résultats d'`eval`, de commandes et de `ui.widgets` ne sont pas filtrés. Les corps de requête sont limités à 1 Mio. Le contrat complet (version de protocole `1.0`, route `/devtools/info`) est dans `docs/wire-protocol.md` du dépôt.
+Les valeurs des clés sensibles (`password`, `token`, `api_key`, `authorization`, `cookie`…) sont masquées dans l'état et les champs de logs servis ; `Config::with_secret_keys` ajoute les clés propres à l'app. Les résultats d'`eval` et de commandes ne sont pas filtrés ; l'arbre `ui.widgets` publié par `deveye_sdk::ui::publish` n'a jamais la valeur d'un widget secret. Les corps de requête sont limités à 1 Mio. Le contrat complet (version de protocole `1.0`, route `/devtools/info`) est dans `docs/wire-protocol.md` du dépôt.
 
 ## Licence
 
