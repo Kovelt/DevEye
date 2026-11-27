@@ -82,8 +82,18 @@ impl JsEvaluator for SdkEvaluator {
                     "SDK eval (pompe abandonnee) : {error}"
                 )));
             }
-            // Le reste (statut 200 + `error`) : le JS évalué a levé une
-            // exception — la liaison, elle, fonctionne.
+            // Tout autre statut d'erreur (403 de la garde Host, 4xx…) : le SDK a
+            // refusé la requête, le JS n'a pas été évalué — une panne de
+            // protocole, que l'agent ne doit pas tenter de « corriger » comme
+            // une exception de script (ADR-0023).
+            if status != reqwest::StatusCode::OK {
+                return Err(PortError::Protocol(format!(
+                    "SDK eval : statut HTTP {} inattendu : {error}",
+                    status.as_u16()
+                )));
+            }
+            // Statut 200 + `error` : le JS évalué a levé une exception — la
+            // liaison, elle, fonctionne.
             return Err(PortError::Script {
                 message: error,
                 stack: None,
@@ -466,6 +476,52 @@ mod tests {
         assert!(
             matches!(err, PortError::Network(_)),
             "attendu PortError::Network, obtenu {err:?}"
+        );
+    }
+
+    /// POST /devtools/eval 200 avec `error` => PortError::Script (le JS a levé).
+    #[tokio::test]
+    async fn evaluate_200_avec_error_renvoie_script() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/devtools/eval"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "error": "ReferenceError: x" })),
+            )
+            .mount(&server)
+            .await;
+
+        let err = SdkEvaluator::new(server.uri())
+            .evaluate("x")
+            .await
+            .expect_err("200 + error doit echouer");
+        assert!(
+            matches!(err, PortError::Script { ref message, .. } if message == "ReferenceError: x"),
+            "attendu PortError::Script, obtenu {err:?}"
+        );
+    }
+
+    /// POST /devtools/eval 403 (garde Host) => PortError::Protocol, jamais Script.
+    #[tokio::test]
+    async fn evaluate_403_garde_host_renvoie_protocol() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/devtools/eval"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_json(serde_json::json!({ "error": "Host non local" })),
+            )
+            .mount(&server)
+            .await;
+
+        let err = SdkEvaluator::new(server.uri())
+            .evaluate("1")
+            .await
+            .expect_err("403 doit echouer");
+        assert!(
+            matches!(err, PortError::Protocol(ref m) if m.contains("403") && m.contains("Host non local")),
+            "attendu PortError::Protocol, obtenu {err:?}"
         );
     }
 
