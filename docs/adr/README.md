@@ -112,3 +112,7 @@ Option retenue, en une phrase.
 | [0046](0046-repli-appel-par-appel-du-mode-auto.md) | Repli appel par appel du mode auto | Accepté |
 | [0047](0047-adopter-le-contributor-covenant-2-1-comme-code-de-conduite.md) | Adopter le Contributor Covenant 2.1 comme code de conduite | Accepté |
 | [0048](0048-documentation-verifiee-par-des-tests.md) | Documentation vérifiée par des tests | Proposé |
+| [0049](0049-confinement-des-baselines-d-assert-visual.md) | Confinement des baselines d'`assert_visual` | Proposé |
+| [0050](0050-clipboard-get-monde-ouvert-et-limites-de-la-classification.md) | `clipboard_get` en monde ouvert et limites de la classification des outils | Proposé |
+| [0051](0051-semantique-de-la-suite-de-conformite-skip-n-a-et-host-absent.md) | Sémantique de la suite de conformité : `SKIP`, `N/A`, `Host` absent | Proposé |
+| [0052](0052-erreurs-de-liaison-et-de-protocole-visibles-et-cles-secretes-cumulatives.md) | Erreurs de liaison et de protocole visibles, clés secrètes cumulatives | Proposé |

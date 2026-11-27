@@ -3,7 +3,7 @@
 - **Statut** : Proposé
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
-- **ADR liés** : ADR-0011 (stabilité : noms et schémas des outils MCP couverts par semver), ADR-0028 (version du protocole MCP), ADR-0029 (outil `observe`), ADR-0030 (`assert_visual` enrichi)
+- **ADR liés** : ADR-0011 (stabilité : noms et schémas des outils MCP couverts par semver), ADR-0028 (version du protocole MCP), ADR-0029 (outil `observe`), ADR-0030 (`assert_visual` enrichi), ADR-0050 (`clipboard_get` en monde ouvert : précise la règle)
 
 ## Contexte et problème
 
@@ -40,7 +40,7 @@ Option 2 : chaque `#[tool]` déclare `annotations(read_only_hint, destructive_hi
 
 **Positives**
 
-- les clients peuvent auto-approuver 17 outils d'observation pure et 6 de lecture avec drain ;
+- les clients peuvent auto-approuver 16 outils d'observation pure (`clipboard_get`, monde ouvert, en est exclu : ADR-0050) et 6 de lecture avec drain ;
 - ajouter un outil sans le classer casse la CI ;
 - la règle est écrite : un désaccord se tranche en changeant l'ADR, pas en relisant le code.
 
