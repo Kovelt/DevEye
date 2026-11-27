@@ -11,13 +11,16 @@
 mod cdp;
 mod cli;
 mod compose;
+mod doctor;
+mod doctor_probe;
 mod fallback;
 mod stubs;
+mod version;
 
 use anyhow::{Context, Result};
 use tracing_subscriber::EnvFilter;
 
-use cli::Args;
+use cli::{Args, Command};
 
 /// Sortie des traces sur STDERR exclusivement : stdout est le canal MCP
 /// (stdio), une seule ligne de log dessus corromprait le protocole cote
@@ -36,17 +39,24 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let args = Args::parse_checked();
+    if let Some(Command::Doctor) = args.command {
+        // Lecture seule : ni composition des adapters, ni serveur lancé.
+        let probes = doctor_probe::gather(&args).await;
+        let report = doctor::evaluate(args.target, &probes);
+        println!("{}", report.render(cli_version()));
+        std::process::exit(report.exit_code());
+    }
+
     let mcp = compose::build_mcp(&args)
         .await
         .context("composition des adapters echouee au demarrage")?;
-    if args.serve_mcp {
-        mcp.serve_stdio()
-            .await
-            .context("le serveur MCP stdio s'est arrete sur erreur")?;
-    } else {
-        eprintln!(
-            "deveye-server : ni --serve-mcp ni autre mode actif. Composition validee, sortie."
-        );
-    }
+    mcp.serve_stdio()
+        .await
+        .context("le serveur MCP stdio s'est arrete sur erreur")?;
     Ok(())
+}
+
+/// Version courte (`0.2.0 (commit abc1234)`) pour l'en-tête de `doctor`.
+fn cli_version() -> &'static str {
+    version::clap_short()
 }

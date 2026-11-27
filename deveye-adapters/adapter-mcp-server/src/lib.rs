@@ -57,8 +57,9 @@
 //! - `collect_console_errors` : draine les messages console de la page, tous
 //!   niveaux confondus (onerror, unhandledrejection, console.*) ; `levels`
 //!   filtre optionnellement par sévérité
-//! - `list_windows` : liste les fenêtres/onglets de la cible (CDP et kwin-eis
-//!   via KWin Scripting ; vide en SDK)
+//! - `list_windows` : liste les fenêtres/onglets de la cible (CDP ; kwin-eis
+//!   via KWin Scripting, sous KDE/Wayland seulement ; x11 via QueryTree ; vide
+//!   en SDK)
 //! - `window_geometry` : géométrie écran `{x, y, width, height}` d'une fenêtre
 //!   (KWin Scripting ; `Unsupported` hors KDE/Wayland)
 //! - `wait_condition` : attend un prédicat (dom-selector / state-key /
@@ -174,15 +175,51 @@ const WAIT_TIMEOUT_MAX_MS: u64 = 60_000;
 /// `DOM.describeNode(depth=N)`) pour ne demander que le sous-arbre utile.
 const DOM_MAX_BYTES: usize = 100_000;
 
-/// Description statique de la cible active et de ses capacites, renvoyee par
-/// l'outil `target_info`. Construite par `deveye-server` (compose) selon le
-/// `--target` choisi : permet a l'agent de savoir d'avance quels outils
-/// repondront (ex. `eval_js`/`dom` absents en kwin-eis) sans tenter un appel
-/// pour le decouvrir.
+/// Identité du serveur : version du crate, commit de build et versions des deux
+/// protocoles parlés (wire protocol du SDK, MCP). Exposée par `target_info` et
+/// par le `serverInfo` de l'handshake MCP (ADR-0033).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ServerVersion {
+    /// Version du binaire `deveye-server`.
+    pub version: String,
+    /// Commit court de la compilation ; `None` hors dépôt git (archive, crate publié).
+    pub commit: Option<String>,
+    /// Version `MAJEURE.MINEURE` du wire protocol du SDK que ce serveur implémente.
+    pub sdk_protocol: String,
+    /// Révision du protocole MCP annoncée à l'handshake.
+    pub mcp_protocol: String,
+}
+
+impl ServerVersion {
+    /// Identité par défaut (crate `adapter-mcp-server`, sans commit) ; le
+    /// binaire la remplace par la sienne.
+    pub fn new(version: impl Into<String>, commit: Option<String>, sdk_protocol: &str) -> Self {
+        Self {
+            version: version.into(),
+            commit,
+            sdk_protocol: sdk_protocol.to_string(),
+            mcp_protocol: MCP_PROTOCOL_VERSION.to_string(),
+        }
+    }
+}
+
+/// Sonde du backend réellement utilisé, relue à chaque appel de `target_info`
+/// (en mode `auto`, il change quand le CDP tombe puis revient).
+pub type EffectiveBackendProbe = Arc<dyn Fn() -> String + Send + Sync>;
+
+/// Description de la cible active et de ses capacites, renvoyee par l'outil
+/// `target_info`. Construite par `deveye-server` (compose) selon le `--target`
+/// choisi et la session detectee : permet a l'agent de savoir d'avance quels
+/// outils repondront (ex. `eval_js`/`dom` absents en kwin-eis) sans tenter un
+/// appel pour le decouvrir. Seul `effective_backend` varie en cours de session.
 #[derive(Clone, Debug, Serialize)]
 pub struct TargetInfo {
     /// Mode actif : "auto" | "cdp" | "sdk" | "kwin-eis" | "x11".
     pub target: String,
+    /// Backend qui sert reellement les yeux et les mains a cet instant :
+    /// "cdp", "sdk" (repli du mode `auto`), "kwin-eis", "x11", ou
+    /// "indetermine" tant qu'aucun appel n'a tranche (mode `auto`).
+    pub effective_backend: Option<String>,
     /// Comment les yeux (screenshot) sont obtenus.
     pub eyes: String,
     /// Comment les mains (clic/saisie) agissent.
@@ -196,8 +233,24 @@ pub struct TargetInfo {
     pub state: bool,
     /// Les erreurs console JS sont collectables (`collect_console_errors`) ?
     pub console_errors: bool,
-    /// `list_windows` renvoie des fenetres (CDP uniquement) ?
+    /// `list_windows` peut renvoyer des fenetres ? CDP : onglets ; kwin-eis :
+    /// fenetres du workspace, **seulement sous KDE/Wayland** ; x11 : fenetres
+    /// du serveur prive ; faux en `sdk` (pas de visibilite inter-fenetres).
     pub list_windows: bool,
+    /// `window_geometry` repond-il (KWin Scripting sous KDE/Wayland, ou serveur X prive) ?
+    pub window_geometry: bool,
+    /// `focus_window` repond-il (KWin avec `--screencap-window`, ou serveur X prive) ?
+    pub focus_window: bool,
+    /// Gestionnaire de fenetres derriere `list_windows`/`window_geometry`/
+    /// `focus_window` : "kwin", "x11" ou "aucun".
+    pub window_manager: String,
+    /// `clipboard_get`/`clipboard_set` disponibles (Wayland ; jamais en x11) ?
+    pub clipboard: bool,
+    /// Outils qui exigent un moteur JS (webview CDP ou pompe SDK) et repondent
+    /// `Unsupported` quand `eval_js` est faux.
+    pub js_dependent_tools: Vec<String>,
+    /// Identite et versions du serveur.
+    pub server: ServerVersion,
     /// Notes libres : pieges, prerequis, capacites indisponibles.
     pub notes: String,
 }
@@ -218,6 +271,8 @@ pub struct DeveyePorts {
     pub window_geometry: Arc<dyn WindowGeometry>,
     pub clipboard: Arc<dyn Clipboard>,
     pub target_info: TargetInfo,
+    /// Sonde du backend effectif (mode `auto`) ; `None` : celui de `target_info` fait foi.
+    pub effective_backend: Option<EffectiveBackendProbe>,
 }
 
 /// Serveur MCP DevEye.
@@ -239,6 +294,7 @@ pub struct DeveyeMcpServer {
     window_geometry: Arc<dyn WindowGeometry>,
     clipboard: Arc<dyn Clipboard>,
     target_info: TargetInfo,
+    effective_backend: Option<EffectiveBackendProbe>,
     /// Sérialise les appels d'outils : rmcp les traite en concurrence, mais
     /// deux interactions entrelacées pendant un re-render visent le mauvais
     /// nœud. Un seul outil à la fois, dans l'ordre d'arrivée.
@@ -714,6 +770,7 @@ impl DeveyeMcpServer {
             window_geometry: ports.window_geometry,
             clipboard: ports.clipboard,
             target_info: ports.target_info,
+            effective_backend: ports.effective_backend,
             gate: Arc::new(tokio::sync::Mutex::new(())),
             tool_router: Self::tool_router(),
         }
@@ -825,6 +882,12 @@ impl ServerHandler for DeveyeMcpServer {
         let mut info = ServerConfig::default();
         info.protocol_version = ProtocolVersion::V_2025_11_25;
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        // Identite annoncee a l'handshake : sans elle, le client voit celle de la
+        // bibliotheque rmcp et non celle de deveye-server (ADR-0033).
+        info.server_info = rmcp::model::Implementation::new(
+            "deveye-server",
+            self.target_info.server.version.clone(),
+        );
         info.instructions = Some(
             "DevEye MCP — observe et pilote une app vivante en dev. \
              Outils : screenshot, screenshot_region, screenshot_element, \
@@ -1619,8 +1682,16 @@ mod dispatch_tests {
                 state: true,
                 console_errors: true,
                 list_windows: true,
+                window_geometry: true,
+                focus_window: true,
+                window_manager: "test".to_string(),
+                clipboard: true,
+                js_dependent_tools: vec!["eval_js".to_string()],
+                effective_backend: Some("test".to_string()),
+                server: ServerVersion::new("9.9.9", Some("abc1234".to_string()), "1.0"),
                 notes: String::new(),
             },
+            effective_backend: None,
         }
     }
 
@@ -2851,6 +2922,48 @@ mod dispatch_tests {
                 assert!(props.contains_key(opt), "{name} sans `{opt}` : {props:?}");
             }
         }
+    }
+
+    /// ADR-0033 : l'handshake annonce deveye-server et sa version, pas rmcp.
+    #[test]
+    fn server_info_announces_the_server_identity() {
+        let info = server_with(|_| {}).get_info();
+        assert_eq!(info.server_info.name, "deveye-server");
+        assert_eq!(info.server_info.version, "9.9.9");
+    }
+
+    /// `target_info` porte les capacites completes, les versions et relit le
+    /// backend effectif a chaque appel (repli du mode auto, ADR-0034).
+    #[tokio::test]
+    async fn target_info_exposes_versions_capabilities_and_live_backend() {
+        let state = Arc::new(std::sync::Mutex::new("cdp".to_string()));
+        let probe_state = state.clone();
+        let server = server_with(move |p| {
+            p.effective_backend = Some(Arc::new(move || {
+                probe_state
+                    .lock()
+                    .map(|g| g.clone())
+                    .unwrap_or_else(|e| e.into_inner().clone())
+            }));
+        });
+        let first = body_json(&server.target_info().await.expect("target_info"));
+        assert_eq!(first["effective_backend"], "cdp");
+        assert_eq!(first["server"]["version"], "9.9.9");
+        assert_eq!(first["server"]["commit"], "abc1234");
+        assert_eq!(first["server"]["sdk_protocol"], "1.0");
+        assert_eq!(first["server"]["mcp_protocol"], MCP_PROTOCOL_VERSION);
+        for key in [
+            "window_geometry",
+            "focus_window",
+            "window_manager",
+            "clipboard",
+            "js_dependent_tools",
+        ] {
+            assert!(first.get(key).is_some(), "champ `{key}` absent : {first}");
+        }
+        *state.lock().expect("verrou") = "sdk".to_string();
+        let second = body_json(&server.target_info().await.expect("target_info"));
+        assert_eq!(second["effective_backend"], "sdk");
     }
 
     fn init_request(version: ProtocolVersion) -> rmcp::model::InitializeRequestParams {

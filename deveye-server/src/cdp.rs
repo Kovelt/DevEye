@@ -39,9 +39,9 @@ pub(crate) async fn try_initial_cdp(
     match CdpClient::connect(url, filter).await {
         Ok(client) => Some(Arc::new(client)),
         Err(e) => {
-            eprintln!(
-                "deveye-server : CDP injoignable au demarrage ({e}) — \
-                 reconnexion automatique au premier appel d'outil."
+            warn!(
+                erreur = %e,
+                "CDP injoignable au démarrage — reconnexion automatique au premier appel d'outil"
             );
             None
         }

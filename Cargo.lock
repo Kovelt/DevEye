@@ -914,6 +914,8 @@ dependencies = [
  "clap",
  "deveye-core",
  "deveye-ports",
+ "deveye-sdk-client",
+ "reqwest",
  "serde_json",
  "tokio",
  "tracing",

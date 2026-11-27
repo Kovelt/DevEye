@@ -7,9 +7,11 @@
 //! Isole de `orchestration.rs` (T5 audit post-M7) pour reduire la duplication
 //! et faciliter les tests unitaires du repli sans I/O.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tracing::{info, warn};
 
 use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump};
 use deveye_ports::{AppInspector, InteractionSink, JsEvaluator, PortError, PortResult, Renderer};
@@ -21,6 +23,58 @@ use deveye_ports::{AppInspector, InteractionSink, JsEvaluator, PortError, PortRe
 /// `auto` bascule sur le pont natif.
 pub(crate) fn is_liaison_error(e: &PortError) -> bool {
     matches!(e, PortError::Network(_))
+}
+
+// ── Etat observable du repli ──────────────────────────────────────────────────
+
+const UNDETERMINED: u8 = 0;
+const PRIMARY: u8 = 1;
+const FALLBACK: u8 = 2;
+
+/// Backend qui sert reellement les appels du mode `auto`, partage par toutes
+/// les facades de repli et lu par `target_info` (ADR-0034). Chaque **bascule**
+/// est journalisee (pas chaque appel) : un repli silencieux faisait croire a
+/// l'agent qu'il pilotait le webview alors que les gestes passaient par le pont
+/// natif.
+pub(crate) struct FallbackState {
+    current: AtomicU8,
+}
+
+impl FallbackState {
+    /// `primary_up` : le primaire etait joignable au demarrage (sinon l'etat
+    /// reste indetermine jusqu'au premier appel).
+    pub(crate) fn new(primary_up: bool) -> Self {
+        Self {
+            current: AtomicU8::new(if primary_up { PRIMARY } else { UNDETERMINED }),
+        }
+    }
+
+    /// Le primaire a repondu (succes ou erreur d'une autre nature que la liaison).
+    pub(crate) fn mark_primary(&self) {
+        if self.current.swap(PRIMARY, Ordering::Relaxed) == FALLBACK {
+            info!("CDP de nouveau joignable : les appels repassent par le primaire");
+        }
+    }
+
+    /// Le primaire est injoignable : l'appel part sur le pont natif.
+    pub(crate) fn mark_fallback(&self, cause: &PortError) {
+        if self.current.swap(FALLBACK, Ordering::Relaxed) != FALLBACK {
+            warn!(
+                %cause,
+                "repli sur le pont natif (SDK + OS) : le CDP est injoignable ; `target_info` \
+                 indique le backend effectif"
+            );
+        }
+    }
+
+    /// Libelle expose par `target_info` : "cdp", "sdk" ou "indetermine".
+    pub(crate) fn label(&self) -> &'static str {
+        match self.current.load(Ordering::Relaxed) {
+            PRIMARY => "cdp",
+            FALLBACK => "sdk",
+            _ => "indetermine",
+        }
+    }
 }
 
 // ── Macro de generation ───────────────────────────────────────────────────────
@@ -62,6 +116,7 @@ macro_rules! fallback_port {
         pub(crate) struct $name {
             pub(crate) primary: Arc<dyn $trait>,
             pub(crate) fallback: Arc<dyn $trait>,
+            pub(crate) state: Arc<FallbackState>,
         }
 
         #[async_trait]
@@ -70,9 +125,13 @@ macro_rules! fallback_port {
                 async fn $method(&self $(, $arg: $arg_ty)*) -> $ret {
                     match self.primary.$method($($pexpr)*).await {
                         Err(e) if is_liaison_error(&e) => {
+                            self.state.mark_fallback(&e);
                             self.fallback.$method($($arg),*).await
                         }
-                        other => other,
+                        other => {
+                            self.state.mark_primary();
+                            other
+                        }
                     }
                 }
             )*
@@ -173,12 +232,17 @@ mod tests {
             }
         }
 
+        let state = Arc::new(FallbackState::new(false));
+        assert_eq!(state.label(), "indetermine");
         let fe = FallbackEvaluator {
             primary: Arc::new(NetworkFailEval),
             fallback: Arc::new(OkEval),
+            state: state.clone(),
         };
         let result = fe.evaluate("x").await.expect("le repli doit reussir");
         assert_eq!(result, serde_json::json!(42));
+        // Le repli est observable : target_info dira "sdk".
+        assert_eq!(state.label(), "sdk");
     }
 
     /// Un `FallbackEvaluator` dont le primaire echoue avec `Timeout` ne doit PAS
@@ -204,9 +268,11 @@ mod tests {
         }
 
         let called = Arc::new(AtomicBool::new(false));
+        let state = Arc::new(FallbackState::new(false));
         let fe = FallbackEvaluator {
             primary: Arc::new(TimeoutEval),
             fallback: Arc::new(TrackingEval(called.clone())),
+            state: state.clone(),
         };
         let err = fe
             .evaluate("x")
@@ -220,5 +286,20 @@ mod tests {
             !called.load(Ordering::SeqCst),
             "le repli ne doit pas etre invoque sur Timeout"
         );
+        // Une erreur non liee a la liaison prouve que le primaire repond.
+        assert_eq!(state.label(), "cdp");
+    }
+
+    /// Le repli puis le retour du primaire se refletent dans le libelle.
+    #[test]
+    fn state_follows_fallback_and_recovery() {
+        let state = FallbackState::new(true);
+        assert_eq!(state.label(), "cdp");
+        state.mark_fallback(&PortError::Network("down".to_string()));
+        assert_eq!(state.label(), "sdk");
+        state.mark_fallback(&PortError::Network("down".to_string()));
+        assert_eq!(state.label(), "sdk");
+        state.mark_primary();
+        assert_eq!(state.label(), "cdp");
     }
 }

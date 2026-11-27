@@ -9,6 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 description = "Binaire DevEye : compose les adapters et expose un serveur MCP a Claude."
 publish = false  # interne, non publie
+build = "build.rs"
 
 [lints]
 workspace = true
@@ -20,6 +21,7 @@ path = "src/main.rs"
 [dependencies]
 deveye-core = { path = "../deveye-core" }
 deveye-ports = { path = "../deveye-ports" }
+deveye-sdk-client = { path = "../deveye-sdk-client" }
 adapter-cdp-webview = { path = "../deveye-adapters/adapter-cdp-webview" }
 adapter-screencap-xcap = { path = "../deveye-adapters/adapter-screencap-xcap" }
 adapter-dioxus-signals = { path = "../deveye-adapters/adapter-dioxus-signals" }
@@ -33,7 +35,8 @@ adapter-clipboard-wayland = { path = "../deveye-adapters/adapter-clipboard-wayla
 adapter-x11 = { path = "../deveye-adapters/adapter-x11" }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "net", "process", "time"] }
+reqwest = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 tracing = "0.1"

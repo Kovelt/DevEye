@@ -383,7 +383,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Décrit la cible active et ses capacités : `{ target, eyes, hands, eval_js, dom, state, console_errors, list_windows, notes }`. Permet de savoir d'avance quels outils répondront (ex. eval_js/dom = false en kwin-eis) sans tenter un appel pour le découvrir.",
+        description = "Décrit la cible active et ses capacités : `{ target, effective_backend, eyes, hands, eval_js, dom, state, console_errors, list_windows, window_geometry, focus_window, window_manager, clipboard, js_dependent_tools, server, notes }`. Permet de savoir d'avance quels outils répondront (ex. eval_js/dom = false en kwin-eis) sans tenter un appel pour le découvrir ; `effective_backend` dit si le repli du mode auto est actif ; `server` donne version, commit et versions des protocoles.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -392,8 +392,13 @@ impl DeveyeMcpServer {
         )
     )]
     pub(crate) async fn target_info(&self) -> Result<CallToolResult, McpError> {
-        // Description statique resolue au demarrage : pas de gate, pas d'I/O.
-        Ok(json_success(&self.target_info))
+        // Description resolue au demarrage, sauf le backend effectif relu a
+        // chaque appel (repli du mode auto) : pas de gate, pas d'I/O.
+        let mut info = self.target_info.clone();
+        if let Some(probe) = &self.effective_backend {
+            info.effective_backend = Some(probe());
+        }
+        Ok(json_success(&info))
     }
 
     #[tool(
