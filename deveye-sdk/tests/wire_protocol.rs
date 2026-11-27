@@ -2,6 +2,9 @@
 //! et vérifie le contrat (`docs/wire-protocol.md`) bout en bout — garde Host,
 //! header de version, eval sans pompe, et le cycle expose_route / command(s).
 //!
+//! Le masquage des secrets (valeur sous `password`, `token` ou une clé ajoutée
+//! par `Config::secret_keys`) est vérifié sur l'état et sur les logs.
+//!
 //! Le SDK tourne sur son runtime dédié ; le test parle au serveur en vrai TCP
 //! loopback via reqwest (dev-dependency). Port dédié pour ne pas heurter une
 //! instance de dev sur le port par défaut 31337.
@@ -25,7 +28,7 @@ async fn wire_protocol_contract_end_to_end() {
         return;
     }
     std::env::set_var("DEVEYE_PORT", PORT.to_string());
-    deveye_sdk::init(deveye_sdk::Config::default());
+    deveye_sdk::init(deveye_sdk::Config::default().with_secret_keys(["iban"]));
     // Laisser le runtime dédié binder le port avant de cogner dessus.
     tokio::time::sleep(Duration::from_millis(400)).await;
 
@@ -45,7 +48,7 @@ async fn wire_protocol_contract_end_to_end() {
         resp.headers()
             .get("x-deveye-protocol-version")
             .and_then(|v| v.to_str().ok()),
-        Some("1"),
+        Some("1.0"),
         "header de version absent du 503"
     );
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -64,7 +67,7 @@ async fn wire_protocol_contract_end_to_end() {
         resp.headers()
             .get("x-deveye-protocol-version")
             .and_then(|v| v.to_str().ok()),
-        Some("1"),
+        Some("1.0"),
         "header de version absent du 403 de la garde"
     );
 
@@ -78,6 +81,54 @@ async fn wire_protocol_contract_end_to_end() {
     assert_eq!(resp.status(), StatusCode::OK);
     let list: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(list, serde_json::json!([]), "aucune commande au depart");
+
+    // 3 bis. GET /devtools/info : version du SDK, version du protocole,
+    //    capacités. Ni pompe d'eval ni couche tracing à ce stade.
+    let resp = http
+        .get(url("/devtools/info"))
+        .header(HOST, "localhost")
+        .send()
+        .await
+        .expect("GET /devtools/info");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("x-deveye-protocol-version")
+            .and_then(|v| v.to_str().ok()),
+        Some("1.0"),
+    );
+    let info: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(info["protocol_version"], serde_json::json!("1.0"));
+    assert_eq!(
+        info["sdk_version"],
+        serde_json::json!(env!("CARGO_PKG_VERSION"))
+    );
+    let caps = info["capabilities"].as_array().unwrap();
+    assert!(caps.contains(&serde_json::json!("state")));
+    assert!(caps.contains(&serde_json::json!("commands")));
+    assert!(
+        !caps.contains(&serde_json::json!("eval")),
+        "pas de pompe encore"
+    );
+
+    // Corps au-dessus de la limite => 413 (et header de version présent).
+    let oversized = vec![b'x'; deveye_sdk::MAX_REQUEST_BODY_BYTES + 1];
+    let resp = http
+        .post(url("/devtools/command"))
+        .header(HOST, "localhost")
+        .header("content-type", "application/json")
+        .body(oversized)
+        .send()
+        .await
+        .expect("POST corps trop gros");
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        resp.headers()
+            .get("x-deveye-protocol-version")
+            .and_then(|v| v.to_str().ok()),
+        Some("1.0"),
+        "header de version absent du 413"
+    );
 
     // 4. expose_route puis découverte + invocation.
     deveye_sdk::expose_route(
@@ -144,6 +195,47 @@ async fn wire_protocol_contract_end_to_end() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["entries"]["compteur"], serde_json::json!(42));
 
+    // 5 bis. Masquage : clés par défaut, clé ajoutée par Config, imbrication.
+    deveye_sdk::set_state("password", serde_json::json!("hunter2-top"));
+    deveye_sdk::set_state(
+        "session",
+        serde_json::json!({
+            "user": "alice",
+            "accessToken": "tok-secret-123",
+            "iban": "FR76-SECRET-IBAN",
+            "items": [{ "name": "x", "api_key": "key-secret-456" }]
+        }),
+    );
+    let resp = http
+        .get(url("/devtools/state"))
+        .header(HOST, "localhost")
+        .send()
+        .await
+        .unwrap();
+    let raw = resp.text().await.unwrap();
+    for leaked in [
+        "hunter2-top",
+        "tok-secret-123",
+        "FR76-SECRET-IBAN",
+        "key-secret-456",
+    ] {
+        assert!(!raw.contains(leaked), "{leaked} fuit dans /devtools/state");
+    }
+    let body: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        body["entries"]["password"],
+        serde_json::json!(deveye_sdk::REDACTED)
+    );
+    assert_eq!(
+        body["entries"]["session"]["user"],
+        serde_json::json!("alice")
+    );
+    assert_eq!(
+        body["entries"]["session"]["iban"],
+        serde_json::json!(deveye_sdk::REDACTED)
+    );
+    assert_eq!(body["entries"]["compteur"], serde_json::json!(42));
+
     // 6. Chemin NOMINAL de /devtools/eval : brancher une pompe qui repond,
     //    puis verifier que le corps porte bien { value }.
     let mut requests = deveye_sdk::take_eval_requests();
@@ -172,7 +264,13 @@ async fn wire_protocol_contract_end_to_end() {
 
     // 7. logs/poll : injecter un log via la couche tracing puis le draîner.
     deveye_sdk::install_tracing_layer();
-    tracing::info!("ping depuis le test d'integration");
+    tracing::info!(
+        password = "log-secret-pw",
+        token = "log-secret-tok",
+        iban = "log-secret-iban",
+        user = "alice",
+        "ping depuis le test d'integration"
+    );
     tokio::time::sleep(Duration::from_millis(120)).await;
     let resp = http
         .get(url("/devtools/logs/poll"))
@@ -181,7 +279,28 @@ async fn wire_protocol_contract_end_to_end() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body: serde_json::Value = resp.json().await.unwrap();
+    let raw = resp.text().await.unwrap();
+    for leaked in ["log-secret-pw", "log-secret-tok", "log-secret-iban"] {
+        assert!(
+            !raw.contains(leaked),
+            "{leaked} fuit dans /devtools/logs/poll"
+        );
+    }
+    let body: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let events = body["events"].as_array().cloned().unwrap_or_default();
+    let ours = events
+        .iter()
+        .find(|e| e["message"] == "ping depuis le test d'integration")
+        .expect("le log du test doit etre draine");
+    assert_eq!(
+        ours["fields"]["password"],
+        serde_json::json!(deveye_sdk::REDACTED)
+    );
+    assert_eq!(
+        ours["fields"]["iban"],
+        serde_json::json!(deveye_sdk::REDACTED)
+    );
+    assert_eq!(ours["fields"]["user"], serde_json::json!("alice"));
     assert!(
         body["events"]
             .as_array()
@@ -189,4 +308,16 @@ async fn wire_protocol_contract_end_to_end() {
             .unwrap_or(false),
         "au moins un log doit etre draine apres l'info!"
     );
+
+    // 8. /devtools/info reflète désormais la pompe d'eval et la couche logs.
+    let resp = http
+        .get(url("/devtools/info"))
+        .header(HOST, "localhost")
+        .send()
+        .await
+        .unwrap();
+    let info: serde_json::Value = resp.json().await.unwrap();
+    let caps = info["capabilities"].as_array().unwrap();
+    assert!(caps.contains(&serde_json::json!("eval")));
+    assert!(caps.contains(&serde_json::json!("logs")));
 }

@@ -32,11 +32,11 @@
 // release ; en debug, `dead_code`/`unused_imports` restent pleinement actifs.
 #![cfg_attr(not(debug_assertions), allow(dead_code, unused_imports))]
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use axum::{
-    extract::{Request, State},
+    extract::{DefaultBodyLimit, Request, State},
     http::{header, HeaderName, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Json, Response},
@@ -48,6 +48,7 @@ use tokio::sync::Mutex;
 
 use deveye_core::CommandDescriptor;
 
+mod redact;
 mod tracing_layer;
 
 pub use tracing_layer::install_tracing_layer;
@@ -65,11 +66,22 @@ pub const LOG_BUFFER_CAPACITY: usize = 1024;
 /// libère le client au lieu de laisser la mémoire croître indéfiniment.
 pub const EVAL_QUEUE_CAPACITY: usize = 32;
 
-/// Version du wire protocol DevEye, émise dans le header
-/// `X-DevEye-Protocol-Version` de **chaque** réponse. Incrémentée à chaque
-/// changement cassant du contrat HTTP (cf. `docs/wire-protocol.md`). Le client
-/// peut s'en servir pour détecter une incompatibilité de version.
-pub const PROTOCOL_VERSION: &str = "1";
+/// Valeur substituée aux données masquées (cf. [`Config::secret_keys`]).
+pub use redact::REDACTED;
+
+/// Version du wire protocol DevEye (`MAJEURE.MINEURE`), émise dans le header
+/// `X-DevEye-Protocol-Version` de **chaque** réponse. La majeure augmente à
+/// chaque changement cassant du contrat HTTP, la mineure à chaque ajout
+/// rétrocompatible (cf. `docs/wire-protocol.md` §2.3). Le client s'en sert pour
+/// détecter une incompatibilité de version.
+pub const PROTOCOL_VERSION: &str = "1.0";
+
+/// Taille maximale du corps d'une requête (octets) : 1 Mio. Au-delà, le SDK
+/// répond `413` sans lire le reste. Les corps légitimes (expression JS,
+/// `payload` de commande) sont de quelques Kio ; la borne protège l'app hôte
+/// d'une allocation démesurée sur un port local ouvert à tout processus de la
+/// machine.
+pub const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 
 /// Configuration du SDK. Le `Default` lit `DEVEYE_PORT` si présent, sinon
 /// utilise [`DEFAULT_PORT`].
@@ -77,12 +89,32 @@ pub const PROTOCOL_VERSION: &str = "1";
 #[non_exhaustive]
 pub struct Config {
     pub port: u16,
+    /// Clés JSON **en plus** de celles masquées par défaut (`password`,
+    /// `token`, `api_key`, `authorization`, `cookie`…) : la valeur de toute clé
+    /// de cette liste est remplacée par [`REDACTED`] dans l'état et les champs
+    /// de logs servis. Comparaison sans casse ni séparateurs (`API-KEY` =
+    /// `api_key`), correspondance exacte sur la clé entière.
+    pub secret_keys: Vec<String>,
 }
 
 impl Config {
     /// Configuration écoutant sur `port` (127.0.0.1 uniquement).
     pub fn with_port(port: u16) -> Self {
-        Self { port }
+        Self {
+            port,
+            secret_keys: Vec::new(),
+        }
+    }
+
+    /// Ajoute des clés à masquer (cf. [`Config::secret_keys`]). Cumulable.
+    #[must_use]
+    pub fn with_secret_keys<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.secret_keys.extend(keys.into_iter().map(Into::into));
+        self
     }
 }
 
@@ -92,7 +124,7 @@ impl Default for Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_PORT);
-        Self { port }
+        Self::with_port(port)
     }
 }
 
@@ -164,6 +196,9 @@ pub(crate) struct Registry {
     /// Commandes logiques exposées par l'app via [`expose_route`], servies
     /// par `POST /devtools/command` et `GET /devtools/commands`.
     pub(crate) routes: std::sync::RwLock<HashMap<String, Route>>,
+    /// Clés sensibles propres à l'app (normalisées), posées par [`init`] ;
+    /// s'ajoutent aux clés par défaut au moment de servir state et logs.
+    pub(crate) secret_keys: std::sync::RwLock<HashSet<String>>,
 }
 
 impl Default for Registry {
@@ -174,6 +209,7 @@ impl Default for Registry {
             eval_tx: tokio::sync::RwLock::new(None),
             log_tx: std::sync::OnceLock::new(),
             routes: std::sync::RwLock::new(HashMap::new()),
+            secret_keys: std::sync::RwLock::new(HashSet::new()),
         }
     }
 }
@@ -187,6 +223,12 @@ pub(crate) static REGISTRY: std::sync::LazyLock<Arc<Registry>> =
 /// documenté appelle `init` **avant** `dioxus::launch`, donc hors de tout
 /// contexte tokio — un `tokio::spawn` nu y paniquerait. Idem pour la couche
 /// tracing, dont les événements arrivent de threads arbitraires.
+///
+/// L'`expect` est un échec d'initialisation (plus de thread ou de descripteur
+/// disponible) : sans runtime le SDK ne peut rien faire, et le code n'existe
+/// qu'en build de développement. Un panic explicite y est préférable à un SDK
+/// muet.
+#[allow(clippy::expect_used)]
 pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
     static RT: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
@@ -202,8 +244,9 @@ pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
 /// Démarre le mini-serveur axum sur le runtime dédié du SDK.
 ///
 /// Appelable de n'importe où (avant `dioxus::launch` compris). Idempotent au
-/// sens où un second appel re-spawn une tâche mais échouera silencieusement
-/// à bind le même port — ce qui est sans conséquence pour l'app.
+/// sens où un second appel re-spawn une tâche mais échouera à lier le même
+/// port (avertissement `tracing`) — ce qui est sans conséquence pour l'app. Un
+/// port déjà pris est signalé de la même façon, sans interrompre l'app.
 ///
 /// **Filet de sécurité (défense en profondeur)** : en build **release**, cette
 /// fonction est un **no-op** — le SDK n'ouvre *jamais* de port HTTP hors
@@ -220,8 +263,17 @@ pub fn init(config: Config) {
     #[cfg(debug_assertions)]
     {
         let registry = REGISTRY.clone();
+        *registry
+            .secret_keys
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = config
+            .secret_keys
+            .iter()
+            .map(|key| redact::normalize_key(key))
+            .collect();
         runtime().spawn(async move {
             let app = Router::new()
+                .route("/devtools/info", get(info_handler))
                 .route("/devtools/state", get(state_handler))
                 .route("/devtools/logs/poll", get(logs_poll_handler))
                 .route("/devtools/eval", post(eval_handler))
@@ -234,6 +286,9 @@ pub fn init(config: Config) {
                 // trafic serveur (clients reqwest des adapters) ignore CORS — non
                 // concerné.
                 .layer(tower_http::cors::CorsLayer::new())
+                // Limite de taille des corps (413 au-delà) ; couche interne, donc
+                // le 413 reçoit lui aussi le header de version.
+                .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
                 // Chaque `.layer()` enveloppe le routeur courant par l'EXTERIEUR :
                 // le DERNIER appelé est donc la couche la plus EXTERNE. Ici
                 // `add_protocol_version` (dernier) est EXTERNE, puis `guard_local_host`,
@@ -252,9 +307,17 @@ pub fn init(config: Config) {
                         );
                     }
                 }
-                Err(_e) => {
-                    // En dev on choisit de rester silencieux : un port déjà pris
-                    // signifie souvent qu'une autre instance écoute déjà.
+                Err(e) => {
+                    // Non fatal pour l'app hôte, mais jamais silencieux : sans
+                    // ce message, un port pris (autre instance, autre app)
+                    // laissait l'agent parler à la mauvaise app sans le savoir.
+                    tracing::warn!(
+                        port = config.port,
+                        error = %e,
+                        "deveye-sdk: impossible de lier 127.0.0.1:{} ; le SDK reste inactif \
+                         (choisir un autre port via DEVEYE_PORT)",
+                        config.port
+                    );
                 }
             }
         });
@@ -267,22 +330,41 @@ pub fn init(config: Config) {
 /// L'écriture est **synchrone** (verrou std) : une lecture immédiatement
 /// après le retour de cette fonction verra la nouvelle valeur.
 pub fn set_state(name: impl Into<String>, value: serde_json::Value) {
-    REGISTRY.state.write().unwrap().insert(name.into(), value);
+    REGISTRY
+        .state
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(name.into(), value);
 }
 
 async fn state_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
-    let payload = {
-        let guard = registry.state.read().unwrap();
-        StatePayload {
-            entries: guard.clone(),
-        }
-    };
-    (StatusCode::OK, Json(payload))
+    let mut entries = registry
+        .state
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    // Masquage au service (et non à l'écriture) : les clés de `Config`
+    // s'appliquent quel que soit l'ordre `init` / `set_state`.
+    let extra = registry
+        .secret_keys
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    redact::redact_entries(&mut entries, &extra);
+    (StatusCode::OK, Json(StatePayload { entries }))
 }
 
 async fn logs_poll_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
     let mut guard = registry.logs.lock().await;
-    let events: Vec<_> = guard.drain(..).collect();
+    let mut events: Vec<_> = guard.drain(..).collect();
+    drop(guard);
+    let extra = registry
+        .secret_keys
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Seuls les champs structurés sont filtrés ; le texte du message ne l'est pas.
+    for event in &mut events {
+        redact::redact(&mut event.fields, &extra);
+    }
     (StatusCode::OK, Json(LogsPayload { events }))
 }
 
@@ -401,13 +483,17 @@ where
     let name = name.into();
     let description = description.into();
     let handler: CommandHandler = Arc::new(handler);
-    REGISTRY.routes.write().unwrap().insert(
-        name,
-        Route {
-            description,
-            handler,
-        },
-    );
+    REGISTRY
+        .routes
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(
+            name,
+            Route {
+                description,
+                handler,
+            },
+        );
 }
 
 /// Corps de `POST /devtools/command`.
@@ -428,7 +514,7 @@ async fn command_handler(
     let handler = registry
         .routes
         .read()
-        .unwrap()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(&body.route)
         .map(|route| route.handler.clone());
     match handler {
@@ -455,9 +541,38 @@ async fn command_handler(
     }
 }
 
+/// Corps de `GET /devtools/info` : identité du SDK et capacités actives.
+#[derive(Serialize)]
+struct InfoPayload {
+    sdk_version: &'static str,
+    protocol_version: &'static str,
+    capabilities: Vec<&'static str>,
+}
+
+async fn info_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
+    let mut capabilities = vec!["state", "commands", "info"];
+    if registry.log_tx.get().is_some() {
+        capabilities.push("logs");
+    }
+    if registry.eval_tx.read().await.is_some() {
+        capabilities.push("eval");
+    }
+    (
+        StatusCode::OK,
+        Json(InfoPayload {
+            sdk_version: env!("CARGO_PKG_VERSION"),
+            protocol_version: PROTOCOL_VERSION,
+            capabilities,
+        }),
+    )
+}
+
 async fn commands_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
     let mut descriptors: Vec<CommandDescriptor> = {
-        let guard = registry.routes.read().unwrap();
+        let guard = registry
+            .routes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard
             .iter()
             .map(|(name, route)| CommandDescriptor::new(name.clone(), route.description.clone()))
@@ -543,7 +658,7 @@ mod tests {
 
     #[test]
     fn default_config_uses_31337_without_env() {
-        let config = Config { port: DEFAULT_PORT };
+        let config = Config::with_port(DEFAULT_PORT);
         assert_eq!(config.port, 31337);
     }
 
