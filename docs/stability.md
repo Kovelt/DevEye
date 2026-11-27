@@ -68,7 +68,18 @@ Le wire protocol HTTP du SDK porte sa propre version, émise dans l'en-tête `X-
 
 ## Dépendances exposées
 
-Certains types de dépendances apparaissent dans l'API stable, par exemple `tokio` (`Receiver<EvalRequest>`, `oneshot::Sender`) dans `deveye-sdk`, ou `serde_json::Value`. Un changement de version majeure de ces dépendances est donc un changement majeur pour le crate qui les expose.
+Certains types de dépendances apparaissent dans l'API stable. Un changement de version **majeure** de l'une d'elles est donc un changement majeur pour le crate qui l'expose.
+
+| Dépendance | Où elle apparaît |
+|---|---|
+| `serde` / `serde_json` | `serde_json::Value` dans `deveye-core`, `deveye-ports` et `deveye-sdk` ; `Serialize` / `Deserialize` sur les types publics |
+| `chrono` | `chrono::DateTime<Utc>` dans `deveye-core` (`Snapshot::captured_at`, horodatage des erreurs console) |
+| `tokio` | `Receiver<EvalRequest>` et `oneshot::Sender` dans `deveye-sdk` |
+| `reqwest` | `reqwest::Client` et `reqwest::Response` dans les signatures de `deveye-sdk-client` (`fetch_info`, `check_protocol_version`) |
+| `async-trait` | les traits de `deveye-ports` ; un adapter les implémente avec `#[async_trait]` |
+| `thiserror` | implémentation de `std::error::Error` sur `PortError` (le trait seul est exposé, pas la macro) |
+
+`EvalRequest` (`deveye-sdk`) est un message produit par le SDK et lu par la pompe de l'app : ses champs publics se lisent et se déstructurent avec `..`, mais il n'a volontairement pas de constructeur, un consommateur n'ayant jamais à en fabriquer. `SdkInfo` (`deveye-sdk-client`) se construit par `SdkInfo::new`.
 
 ## Ce que la 1.0 ne promet pas
 

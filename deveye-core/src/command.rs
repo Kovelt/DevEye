@@ -177,6 +177,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn command_descriptor_new_keeps_name_and_description() {
+        let descriptor = CommandDescriptor::new("ping", "répond pong");
+        assert_eq!(descriptor.name, "ping");
+        assert_eq!(descriptor.description, "répond pong");
+    }
+
+    #[test]
     fn click_constructor_defaults_to_left_button() {
         let cmd = InteractionCommand::click(Position::new(10, 20));
         assert_eq!(

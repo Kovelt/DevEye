@@ -106,6 +106,14 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn wait_outcome_new_fills_every_field() {
+        let outcome = WaitOutcome::new(true, 42, "ok");
+        assert!(outcome.satisfied);
+        assert_eq!(outcome.elapsed_ms, 42);
+        assert_eq!(outcome.detail, "ok");
+    }
+
+    #[test]
     fn dom_selector_serializes_with_kind_tag() {
         let p = WaitPredicate::DomSelector {
             selector: ".error-banner".to_string(),

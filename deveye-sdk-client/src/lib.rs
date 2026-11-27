@@ -150,6 +150,23 @@ pub struct SdkInfo {
     pub capabilities: Vec<String>,
 }
 
+impl SdkInfo {
+    /// Construit une identité de SDK ; `SdkInfo` étant `#[non_exhaustive]`, un
+    /// consommateur externe (test d'adapter, double de SDK) ne peut pas la
+    /// construire par littéral.
+    pub fn new(
+        sdk_version: impl Into<String>,
+        protocol_version: impl Into<String>,
+        capabilities: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            sdk_version: sdk_version.into(),
+            protocol_version: protocol_version.into(),
+            capabilities: capabilities.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 /// Lit `GET /devtools/info` sur le SDK à `base_url`.
 ///
 /// Erreurs : [`PortError::Network`] si le SDK est injoignable ou répond en
@@ -181,6 +198,18 @@ pub async fn fetch_info(http: &reqwest::Client, base_url: &str) -> PortResult<Sd
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sdk_info_new_builds_the_same_value_as_deserialization() {
+        let built = SdkInfo::new("1.0.0", "1.0", ["state", "commands"]);
+        let parsed: SdkInfo = serde_json::from_value(serde_json::json!({
+            "sdk_version": "1.0.0",
+            "protocol_version": "1.0",
+            "capabilities": ["state", "commands"],
+        }))
+        .expect("identité valide");
+        assert_eq!(built, parsed);
+    }
 
     #[test]
     fn same_version_is_compatible() {
