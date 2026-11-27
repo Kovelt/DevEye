@@ -104,3 +104,9 @@ Option retenue, en une phrase.
 | [0038](0038-distribution-archives-github-et-cargo-install.md) | Distribution du binaire : archives de release GitHub et cargo install | Accepté |
 | [0039](0039-tests-de-bout-en-bout-et-preuves-dev-only-en-ci.md) | Tests de bout en bout et preuves dev-only en CI | Proposé |
 | [0040](0040-fin-du-vendoring-script-de-synchronisation-de-transition.md) | Fin du vendoring : dépendance versionnée, script de synchronisation de transition | Accepté |
+| [0041](0041-architecture-hexagonale-ports-et-adapters.md) | Architecture hexagonale : ports et adapters | Accepté |
+| [0042](0042-posture-dev-only-du-sdk.md) | Posture dev-only du SDK : debug seulement, loopback, garde Host, CORS | Accepté |
+| [0043](0043-pont-natif-via-le-sdk-sans-cdp.md) | Pont natif via le SDK quand CDP est indisponible | Accepté |
+| [0044](0044-cible-x11-isolee-par-construction.md) | Cible x11 isolée par construction : display privé obligatoire | Accepté |
+| [0045](0045-yeux-et-mains-wayland-via-kwin.md) | Yeux et mains Wayland via KWin : ScreenShot2 et EIS | Accepté |
+| [0046](0046-repli-appel-par-appel-du-mode-auto.md) | Repli appel par appel du mode auto | Accepté |
