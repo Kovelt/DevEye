@@ -111,7 +111,6 @@ async fn push_logs_without_global_subscriber() {
     assert_eq!(events[LOG_BUFFER_CAPACITY - 1]["message"], "m1499");
 
     // 5. layer() composé avec un abonné local (pas le global).
-    #[cfg(feature = "tracing-layer")]
     {
         use tracing_subscriber::layer::SubscriberExt;
         let subscriber = tracing_subscriber::registry().with(deveye_sdk::layer());

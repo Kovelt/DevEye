@@ -18,7 +18,7 @@ Version mineure « Perception structurée » : contrat des widgets natifs figé,
 - `deveye-server doctor` contrôle l'arbre `ui.widgets` quand le SDK l'annonce (échec sur ids dupliqués, parent ou schéma invalide).
 - Scénarios UI-01 et UI-02 de la suite `deveye-conformance` pour la route `ui.widgets`.
 - `RouteDomInspector::ui_tree()` et avertissement d'arbre périmé (> 2 s).
-- `deveye-sdk` : `log()` et `log_with()` poussent des logs vers `logs_tail` sans abonné `tracing`, `LogLevel` réexporté ; `layer()` / `DeveyeLayer` composent la capture avec le subscriber de l'hôte, et `try_install_tracing_layer()` signale un abonné global déjà installé (feature `tracing-layer`, par défaut) ([ADR-0066](docs/adr/0066-push-de-logs-et-layer-du-sdk.md)).
+- `deveye-sdk` : `log()` et `log_with()` poussent des logs vers `logs_tail` sans abonné `tracing`, `LogLevel` réexporté ; `layer()` / `DeveyeLayer` composent la capture avec le subscriber de l'hôte, et `try_install_tracing_layer()` signale un abonné global déjà installé ([ADR-0066](docs/adr/0066-push-de-logs-et-layer-du-sdk.md)).
 - Sorties structurées MCP : les 28 outils à petite sortie (`target_info`, `wait_*`, `assert_selector`, `assert_state`, `window_geometry`, `focus_window`, `click_selector`, `click_text` et les acquittements) déclarent un `outputSchema` dans `tools/list` et renvoient un `structuredContent` égal à leur texte ; le texte reste identique à celui de la 1.0 ([ADR-0067](docs/adr/0067-sorties-structurees-mcp-palier-a.md)).
 - Erreurs MCP typées `ToolError { ok, reason, detail, hint?, candidates? }` pour `unsupported`, `sdk_unavailable` et `interaction_failed`, avec `structuredContent` identique au texte ; `reason` est une liste ouverte.
 - L'outil `state` porte `_meta` (`io.deveye/captured_at`, `io.deveye/entry_count`, `io.deveye/state_source`) sans changer son texte.
@@ -30,7 +30,6 @@ Version mineure « Perception structurée » : contrat des widgets natifs figé,
 - Le buffer de logs du SDK est un `std::sync::Mutex` sans canal de drain ; la capacité `logs` est annoncée dès qu'une source de logs est armée.
 - Le numéro de version du protocole reste 1.0 pour tout ajout additif (route de commande, capacité, champ), découvert par `capabilities` ; `docs/stability.md` gagne une section « Surface expérimentale » (features `unstable-*`).
 - `deveye_sdk::ui::OBSERVE_WINDOW` existe aussi en release ; `cargo test -p deveye-sdk --no-default-features` est vérifié en CI.
-- `deveye-sdk` avec `default-features = false` n'expose plus `install_tracing_layer`, `try_install_tracing_layer` ni `layer()` (sans effet en 1.0 ; consommateur 1.0 concerné à signaler).
 
 ### Fixed
 

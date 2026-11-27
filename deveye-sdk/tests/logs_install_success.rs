@@ -2,7 +2,7 @@
 //! effet (`Ok`), capacité `logs` annoncée, événement capté. Fichier dédié : l'abonné
 //! global est propre au processus (ADR-0066).
 
-#![cfg(all(debug_assertions, feature = "tracing-layer"))]
+#![cfg(debug_assertions)]
 
 #[test]
 fn try_install_succeeds_then_is_idempotent_across_threads() {

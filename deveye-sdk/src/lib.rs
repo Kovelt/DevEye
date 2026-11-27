@@ -51,11 +51,9 @@ pub use deveye_core::LogLevel;
 use serde::{Deserialize, Serialize};
 
 mod redact;
-#[cfg(feature = "tracing-layer")]
 mod tracing_layer;
 pub mod ui;
 
-#[cfg(feature = "tracing-layer")]
 pub use tracing_layer::{
     install_tracing_layer, layer, try_install_tracing_layer, DeveyeLayer, TracingInstallError,
 };

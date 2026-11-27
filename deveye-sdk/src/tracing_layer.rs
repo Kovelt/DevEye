@@ -65,7 +65,7 @@ pub fn install_tracing_layer() {
 /// laisse `logs_tail` vide.
 ///
 /// Expose `tracing_subscriber::Layer` 0.3 dans l'API (couplage consigné par
-/// ADR-0066) ; désactivable avec la feature `tracing-layer`.
+/// ADR-0066, ADR-0070).
 pub fn layer() -> DeveyeLayer {
     #[cfg(debug_assertions)]
     crate::enable_logs();

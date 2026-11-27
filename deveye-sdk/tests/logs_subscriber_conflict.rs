@@ -1,7 +1,7 @@
 //! `try_install_tracing_layer` signale l'abonné global déjà présent au lieu de
 //! l'ignorer (ADR-0066). Fichier dédié : l'abonné global est propre au processus.
 
-#![cfg(all(debug_assertions, feature = "tracing-layer"))]
+#![cfg(debug_assertions)]
 
 #[test]
 fn try_install_reports_existing_global_subscriber() {

@@ -3,7 +3,7 @@
 - **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
-- **ADR liés** : ADR-0012 (types `tokio` exposés), ADR-0016 (masquage par clés), ADR-0042 (posture dev-only), ADR-0060 (verrous empoisonnés du SDK), ADR-0065 (helper `ui`, capacité annoncée à l'usage)
+- **ADR liés** : ADR-0070 (remplace le point « feature `tracing-layer` »), ADR-0012 (types `tokio` exposés), ADR-0016 (masquage par clés), ADR-0042 (posture dev-only), ADR-0060 (verrous empoisonnés du SDK), ADR-0065 (helper `ui`, capacité annoncée à l'usage)
 
 ## Contexte et problème
 
@@ -43,3 +43,5 @@ Option 3 et `std::sync::Mutex` pour le buffer.
 ## Notes
 
 Tests : `deveye-sdk/tests/logs_push.rs` (fil nu, tâche tokio, 1 500 pushs pour 1 024 gardés, `layer()` local, masquage), `logs_subscriber_conflict.rs`, `release_noop.rs` et la sonde `release_probe`.
+
+Note de forme (2026-11-27) : le point « feature `tracing-layer` » de cette décision est remplacé par l'ADR-0070. La feature n'a jamais été publiée ; `layer()`, `install_tracing_layer` et `try_install_tracing_layer` sont toujours disponibles, car la déplacer derrière une feature rompait `default-features = false` pour un consommateur 1.0. Le reste de l'ADR (push `log()`, tampon borné, capacité `logs`) est inchangé.

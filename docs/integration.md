@@ -49,7 +49,7 @@ fn main() {
 - **Port.** `Config::default()` lit `DEVEYE_PORT` (entier de 1 à 65535) sinon écoute `31337`, **toujours sur `127.0.0.1`**. Plusieurs apps en même temps : un `DEVEYE_PORT` par app et le `--sdk-url` correspondant. Un port déjà pris est signalé par un `warn` `tracing` et laisse l'app tourner.
 - **Logs.** Trois voies, au choix ([ADR-0066](adr/0066-push-de-logs-et-layer-du-sdk.md)) :
   - `deveye_sdk::try_install_tracing_layer()` pose le subscriber `tracing` **global** (un seul par process) et renvoie une erreur si un autre existe déjà ; `install_tracing_layer()` est la variante qui ignore cet échec ;
-  - si l'app possède déjà son subscriber : `tracing_subscriber::registry().with(deveye_sdk::layer())` (couplage à `tracing-subscriber` 0.3, feature `tracing-layer`, active par défaut ; `default-features = false` l'écarte) ;
+  - si l'app possède déjà son subscriber : `tracing_subscriber::registry().with(deveye_sdk::layer())` (couplage à `tracing-subscriber` 0.3, toujours disponible, sans feature : ADR-0070) ;
   - sans `tracing` du tout : `deveye_sdk::log(LogLevel::Info, "cible", "message")` ou `log_with(…, champs_json)`, appelables de n'importe quel fil, avec ou sans runtime.
 
   Niveau minimal capturé : `info`, surchargeable par `DEVEYE_LOG_LEVEL` (`trace` à `error`) ; tampon de 1 024 événements, les plus anciens étant abandonnés. Les champs structurés sont masqués par clés sensibles, pas le texte du message. Les trois voies sont des no-op en build release.
