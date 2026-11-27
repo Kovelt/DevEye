@@ -59,7 +59,7 @@
           "type": "boolean"
         },
         "secret": {
-          "description": "Valeur sensible : jamais publiée par le builder, masquée à la lecture.",
+          "description": "Valeur sensible : jamais publiée par le builder. Les lecteurs\n([`UiTree::from_value`], [`UiTree::from_legacy`]) conservent la valeur reçue :\nle masquage à la lecture est à la charge de l'appelant\n([`UiTree::mask_secret_values`]) ; le serveur DevEye l'applique en amont.",
           "type": "boolean"
         },
         "selected": {

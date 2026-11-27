@@ -159,7 +159,10 @@ pub struct UiState {
     pub expanded: Option<bool>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub readonly: bool,
-    /// Valeur sensible : jamais publiée par le builder, masquée à la lecture.
+    /// Valeur sensible : jamais publiée par le builder. Les lecteurs
+    /// ([`UiTree::from_value`], [`UiTree::from_legacy`]) conservent la valeur reçue :
+    /// le masquage à la lecture est à la charge de l'appelant
+    /// ([`UiTree::mask_secret_values`]) ; le serveur DevEye l'applique en amont.
     #[serde(default, skip_serializing_if = "is_false")]
     pub secret: bool,
 }
@@ -698,7 +701,15 @@ fn legacy_widget(index: usize, item: &Value) -> Result<UiWidget, UiReadError> {
 
 fn legacy_rect(raw: &Value) -> Option<[i32; 4]> {
     let numbers: Vec<f64> = match raw {
-        Value::Array(items) if items.len() == 4 => items.iter().filter_map(Value::as_f64).collect(),
+        // Un `null` isolé vaut 0 : une app legacy en cours de mise en page ne doit pas
+        // rendre tout l'arbre illisible.
+        Value::Array(items) if items.len() == 4 => items
+            .iter()
+            .map(|item| match item {
+                Value::Null => Some(0.0),
+                other => other.as_f64(),
+            })
+            .collect::<Option<_>>()?,
         Value::Object(map) => {
             let get = |keys: &[&str]| {
                 keys.iter()
@@ -713,10 +724,16 @@ fn legacy_rect(raw: &Value) -> Option<[i32; 4]> {
         }
         _ => return None,
     };
-    if numbers.len() != 4 {
-        return None;
+    let [x, y, width, height] = [numbers[0], numbers[1], numbers[2], numbers[3]];
+    if width < 0.0 || height < 0.0 {
+        // Taille négative conservée telle quelle : `validate` la relève (`NegativeSize`)
+        // au lieu de faire échouer la lecture.
+        if ![x, y, width, height].iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        return Some([x as i32, y as i32, width as i32, height as i32]);
     }
-    rect_from_f64(numbers[0], numbers[1], numbers[2], numbers[3])
+    rect_from_f64(x, y, width, height)
 }
 
 /// Construit un [`UiTree`] ; `build` omet la valeur des widgets secrets.
@@ -929,6 +946,21 @@ mod tests {
             UiTree::from_value(&value),
             Err(UiReadError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn legacy_negative_or_null_rect_is_kept_and_flagged_by_validate() {
+        let value = json!([
+            { "id": "a", "kind": "button", "rect": [0, 0, 10, -1] },
+            { "id": "b", "kind": "button", "rect": [1, null, 10, 10] }
+        ]);
+        let tree = UiTree::from_value(&value).expect("lecture tolérante");
+        assert_eq!(tree.widgets[0].rect, [0, 0, 10, -1]);
+        assert_eq!(tree.widgets[1].rect, [1, 0, 10, 10]);
+        assert!(tree
+            .validate()
+            .iter()
+            .any(|i| i.kind == UiIssueKind::NegativeSize));
     }
 
     #[test]
