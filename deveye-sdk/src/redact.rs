@@ -6,7 +6,9 @@
 //! données, pas à l'écriture : les clés déclarées via `Config::secret_keys`
 //! valent ainsi quel que soit l'ordre des appels `init` / `set_state`, et aucun
 //! parcours n'est payé sur le thread UI ni dans le chemin chaud de `tracing`.
-//! Le texte libre des messages de log n'est pas analysé.
+//! Le texte libre des messages de log n'est pas analysé, pas plus que les
+//! champs formatés par `Debug` (`?valeur`) : ils arrivent en chaîne et seul le
+//! nom de leur champ est examiné.
 //!
 //! Périmètre exact et limites : `docs/wire-protocol.md` §2.4 et ADR-0016.
 
@@ -27,6 +29,14 @@ const CONTAINS: &[&str] = &[
     "privatekey",
     "credential",
     "authorization",
+    "accesskey",
+    "signingkey",
+    "encryptionkey",
+    "databaseurl",
+    "connectionstring",
+    "motdepasse",
+    "mdp",
+    "jeton",
 ];
 
 /// Termes sensibles uniquement en fin de clé : `accessToken` ou `set-cookie`
@@ -34,7 +44,9 @@ const CONTAINS: &[&str] = &[
 const SUFFIXES: &[&str] = &["token", "cookie", "sessionid"];
 
 /// Clés trop courtes ou ambiguës pour une recherche de sous-chaîne.
-const EXACT: &[&str] = &["pwd", "auth", "jwt", "bearer", "otp"];
+/// Les pluriels `tokens` et `cookies` sont exacts, pas en suffixe : `max_tokens`
+/// (plafond de génération) ne doit pas être masqué.
+const EXACT: &[&str] = &["pwd", "auth", "jwt", "bearer", "otp", "tokens", "cookies"];
 
 /// Forme canonique d'une clé : minuscules ASCII, sans séparateurs, pour que
 /// `api_key`, `apiKey`, `API-KEY` et `api.key` se comparent tous à `apikey`.
@@ -109,6 +121,14 @@ mod tests {
             "set-cookie",
             "sessionId",
             "jwt",
+            "tokens",
+            "cookies",
+            "access_key",
+            "signing_key",
+            "database_url",
+            "mdp",
+            "mot_de_passe",
+            "jeton",
         ] {
             assert!(
                 is_secret_key(key, &no_extra()),

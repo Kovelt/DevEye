@@ -268,6 +268,7 @@ async fn wire_protocol_contract_end_to_end() {
         password = "log-secret-pw",
         token = "log-secret-tok",
         iban = "log-secret-iban",
+        tokens = "log-secret-toks",
         user = "alice",
         "ping depuis le test d'integration"
     );
@@ -280,7 +281,12 @@ async fn wire_protocol_contract_end_to_end() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let raw = resp.text().await.unwrap();
-    for leaked in ["log-secret-pw", "log-secret-tok", "log-secret-iban"] {
+    for leaked in [
+        "log-secret-pw",
+        "log-secret-tok",
+        "log-secret-iban",
+        "log-secret-toks",
+    ] {
         assert!(
             !raw.contains(leaked),
             "{leaked} fuit dans /devtools/logs/poll"

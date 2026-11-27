@@ -15,7 +15,8 @@ use deveye_core::{LogEvent, LogLevel};
 ///
 /// **À appeler une seule fois**, idéalement juste après `init`. Si un autre
 /// subscriber est déjà installé, cet appel échoue silencieusement (le runtime
-/// global tracing ne supporte qu'un seul subscriber actif). Les appels
+/// global tracing ne supporte qu'un seul subscriber actif) : le canal n'est
+/// alors pas créé et `/devtools/info` n'annonce pas la capacité `logs`. Les appels
 /// ultérieurs sont idempotents : le canal de drain et la tâche de consommation
 /// sont créés uniquement lors du premier appel (gardé par `OnceLock`).
 ///
@@ -27,7 +28,11 @@ pub fn install_tracing_layer() {
         use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::Registry;
         let subscriber = Registry::default().with(DeveyeLayer);
-        let _ = tracing::subscriber::set_global_default(subscriber);
+        // Sans layer actif, ni canal de drain ni capacité `logs` : sinon
+        // `/devtools/info` annoncerait une capture qui ne reçoit rien.
+        if tracing::subscriber::set_global_default(subscriber).is_err() {
+            return;
+        }
 
         // Canal de drain (N6) : un seul spawn consomme tous les LogEvent dans
         // l'ordre d'émission, éliminant le coût d'un tokio::spawn par log.

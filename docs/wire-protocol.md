@@ -145,13 +145,14 @@ Le SDK remplace par `"<secret>"` (constante `deveye_sdk::REDACTED`) la valeur de
 - `GET /devtools/state` : les entrées de premier niveau (le nom passé à `set_state`) et leurs sous-objets ;
 - `GET /devtools/logs/poll` : les champs structurés (`fields`) de chaque événement.
 
-Clés masquées par défaut, comparées sans casse ni séparateurs (`api_key` = `apiKey` = `API-KEY`) : toute clé **contenant** `password`, `passwd`, `secret`, `apikey`, `privatekey`, `credential` ou `authorization` ; toute clé **finissant** par `token`, `cookie` ou `sessionid` ; les clés exactes `pwd`, `auth`, `jwt`, `bearer`, `otp`. `token_count`, `max_tokens` ou `cookie_banner` ne sont pas masquées. L'app ajoute ses propres clés par `Config::secret_keys` (correspondance exacte sur la clé entière). Une clé sensible remplace son sous-arbre entier.
+Clés masquées par défaut, comparées sans casse ni séparateurs (`api_key` = `apiKey` = `API-KEY`) : toute clé **contenant** `password`, `passwd`, `secret`, `apikey`, `privatekey`, `credential`, `authorization`, `accesskey`, `signingkey`, `encryptionkey`, `databaseurl`, `connectionstring`, `motdepasse`, `mdp` ou `jeton` ; toute clé **finissant** par `token`, `cookie` ou `sessionid` ; les clés exactes `pwd`, `auth`, `jwt`, `bearer`, `otp`, `tokens`, `cookies`. `token_count`, `max_tokens` ou `cookie_banner` ne sont pas masquées. L'app ajoute ses propres clés par `Config::secret_keys` (correspondance exacte sur la clé entière). Une clé sensible remplace son sous-arbre entier.
 
 **Ce qui n'est PAS filtré** :
 
 - le résultat de `POST /devtools/eval` ;
 - les valeurs de retour de `POST /devtools/command`, dont la route `ui.widgets` ;
 - le texte libre des messages de log (`message`) ;
+- les champs de log formatés par `Debug` (`info!(user = ?user)`) : la valeur arrive en chaîne et seul le **nom** du champ est examiné, pas le contenu (`"User { password: … }"` passe tel quel) ; préférer des champs structurés scalaires ;
 - tout secret stocké sous un nom de clé neutre non déclaré.
 
 Le masquage est un filet par noms de clés, pas une garantie : une app qui manipule des secrets ne doit pas les passer à `set_state` ni les journaliser. Décision : [ADR-0016](adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md). Un SDK tiers n'est pas tenu d'implémenter le masquage, mais doit alors documenter la limite. Il n'annonce la capacité `redaction` (§3.6) **que** s'il masque réellement selon les règles ci-dessus : la suite de conformité contrôle alors l'état et les logs servis (une clé sensible dont la valeur n'est pas `"<secret>"` est un écart).
