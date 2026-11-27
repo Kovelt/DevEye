@@ -16,7 +16,7 @@ Tant que la version majeure ne change pas, ces éléments ne cassent pas.
 | `deveye-sdk-client` | client HTTP et constantes partagés avec les adapters |
 | **Schéma `deveye.ui/1`** (depuis 1.1) | forme de la réponse de la route `ui.widgets` ([usage.md](usage.md), `docs/schemas/ui-widgets-1.json`, [ADR-0062](adr/0062-schema-deveye-ui-1-de-la-route-ui-widgets.md)) : champs et sémantique actuels figés ; une évolution mineure n'ajoute que des champs optionnels, une rupture publie `deveye.ui/2` lu en plus de `/1` ; le rôle d'un widget est une chaîne ouverte, son vocabulaire recommandé n'est pas une énumération fermée |
 | **Wire protocol v1** | endpoints, formes JSON et en-têtes décrits dans [wire-protocol.md](wire-protocol.md), dont `X-DevEye-Protocol-Version: 1.0` (la mineure augmente à chaque ajout, la majeure à chaque rupture) |
-| **Outils MCP** | le nom de chaque outil, le nom et le type de chaque paramètre, la forme de chaque réponse |
+| **Outils MCP** | le nom de chaque outil, le nom et le type de chaque paramètre, la forme de chaque réponse ; depuis 1.1, le **texte** des réponses reste celui de la 1.0 et les champs `structuredContent`, `outputSchema` et `_meta` s'y ajoutent (28 outils à petite sortie déclarent un `outputSchema`, la liste exacte est dans l'ADR-0067) ; le champ `reason` d'une erreur est une liste ouverte ([ADR-0067](adr/0067-sorties-structurees-mcp-palier-a.md)) |
 | **`deveye-server`** | les options (`--target`, `--display`, `--cdp-url`, `--sdk-url`, `--screencap-window`, etc.), leurs valeurs possibles, leurs valeurs par défaut et les combinaisons refusées ([ADR-0031](adr/0031-validation-des-flags-selon-la-cible.md)) ; `--version` ; la sous-commande `doctor` et ses codes de sortie (0 : prêt ou avertissements, 1 : prérequis bloquant manquant, 2 : erreur d'usage) — le texte du diagnostic n'est pas couvert |
 
 Les crates MIT (`deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`) sont les seuls destinés à être consommés comme bibliothèques ; ils ne dépendent jamais d'un crate AGPL ([ADR-0002](adr/0002-licences-agpl-outil-mit-bibliotheques.md)).
@@ -39,6 +39,8 @@ Aucune promesse de compatibilité sur :
 | Ajouter un outil MCP | mineure |
 | Ajouter un paramètre **optionnel** à un outil, à une option de CLI ou à un endpoint | mineure |
 | Ajouter un champ à une réponse JSON (les clients ignorent les champs inconnus) | mineure |
+| Ajouter `structuredContent`, `outputSchema` ou `_meta` à un outil sans changer son texte | mineure |
+| Ajouter une valeur au champ `reason` d'une erreur d'outil MCP | mineure |
 | Ajouter une variante à un enum `#[non_exhaustive]` (`InteractionCommand`, `WaitPredicate`, `PortError`, `MouseButton`, `LogLevel`, `ConsoleLevel`) | mineure |
 | Ajouter un champ à un struct `#[non_exhaustive]` | mineure |
 | Ajouter un champ optionnel au schéma `deveye.ui/1` (lecteurs tolérants) | mineure |

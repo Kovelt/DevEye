@@ -307,6 +307,10 @@ Lit la géométrie écran (position + taille) d'une fenêtre de l'app cible. Mot
 
 ---
 
+## Sorties structurées des outils MCP
+
+`adapter-mcp-server` publie, pour 28 outils à petite sortie (`target_info`, `wait_*`, `assert_selector`, `assert_state`, `window_geometry`, `focus_window`, les acquittements), un `outputSchema` dans `tools/list` et un `structuredContent` dans le résultat, **à côté** d'un texte inchangé depuis la 1.0. Un même type (`responses.rs`, ou `deveye-core` avec la feature `schema` pour `WaitOutcome` et `WindowRect`) produit le texte, le `structuredContent` et le schéma : la dérive est impossible par construction. Les erreurs sémantiques `unsupported`, `sdk_unavailable` et `interaction_failed` passent par un type unique, `ToolError { ok, reason, detail, hint?, candidates? }`. Les sorties à racine tableau ou arbitraire (`logs_tail`, `list_windows`, `find_element`, `eval_js`, `dom`, `state`, `invoke_command`) et les captures restent en texte seul. Le texte est protégé par des golden files (`adapter-mcp-server/tests/golden/`) capturés avant le changement, et un test de contrat vérifie chaque branche des outils qui déclarent un schéma. `state` porte sa fraîcheur et sa provenance dans `_meta`. Décision, mesure sur Claude Code et risques : [ADR-0067](adr/0067-sorties-structurees-mcp-palier-a.md).
+
 ## Disponibilité du CDP selon la webview
 
 Le protocole CDP n'existe que sur les webviews Chromium. Une app Dioxus desktop l'active par un argument de lancement de sa webview (côté app, par exemple `--remote-debugging-port=9222`) ; sur un navigateur Chromium, par `--remote-debugging-port`.
