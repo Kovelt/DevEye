@@ -74,6 +74,11 @@
 //! - `observe` : outil composite — capture bornée, résumé de l'arbre, état,
 //!   erreurs console et logs récents en un appel (ADR-0029)
 //!
+//! **Sorties structurées (ADR-0067)** : 28 outils à petite sortie déclarent un
+//! `outputSchema` et renvoient `structuredContent` en plus d'un texte inchangé
+//! (voir [`responses`]) ; les autres restent en texte seul. `state` porte sa
+//! fraîcheur et sa provenance dans `_meta`.
+//!
 //! **Annotations (ADR-0027)** : chaque outil porte les quatre indices MCP
 //! (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) ; un
 //! test échoue si un outil n'est pas classé. **Protocole (ADR-0028)** : version
@@ -117,6 +122,11 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use imaging::{CaptureOptions, Region};
+use responses::{
+    outcome_result, output_schema, structured_failure, structured_ok, Ack, ClickAck, ErrorReason,
+    FocusAck, FoundOutcome, ReadyOutcome, SelectorAssertion, StateAssertion, StateMismatch,
+    ToolError,
+};
 
 use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, StateDump, WaitPredicate};
 use deveye_ports::{
@@ -130,6 +140,7 @@ use deveye_ports::{
 // parametres et les helpers ci-dessous) — lib.rs ne garde que la definition
 // du serveur, les helpers communs et l'assemblage des routeurs (`new`).
 mod imaging;
+mod responses;
 mod tools_capture;
 mod tools_inspect;
 mod tools_interaction;
@@ -190,7 +201,7 @@ const DOM_MAX_BYTES: usize = 100_000;
 /// Identité du serveur : version du crate, commit de build et versions des deux
 /// protocoles parlés (wire protocol du SDK, MCP). Exposée par `target_info` et
 /// par le `serverInfo` de l'handshake MCP (ADR-0033).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ServerVersion {
     /// Version du binaire `deveye-server`.
     pub version: String,
@@ -224,7 +235,7 @@ pub type EffectiveBackendProbe = Arc<dyn Fn() -> String + Send + Sync>;
 /// choisi et la session détectée : permet a l'agent de savoir d'avance quels
 /// outils répondront (ex. `eval_js`/`dom` absents en kwin-eis) sans tenter un
 /// appel pour le découvrir. Seul `effective_backend` varie en cours de session.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct TargetInfo {
     /// Mode actif : "auto" | "cdp" | "sdk" | "kwin-eis" | "x11".
     pub target: String,
@@ -975,7 +986,7 @@ fn json_error<T: Serialize>(value: &T) -> CallToolResult {
 /// texte libre `"ok"` d'avant ce sprint, incoherent avec le reste de la
 /// surface (assert_*, find_element, wait_*...) qui renvoie deja du JSON.
 fn ok_result() -> CallToolResult {
-    json_success(&serde_json::json!({ "ok": true }))
+    structured_ok(&Ack::done())
 }
 
 /// E1 : payload `isError` structure pour `PortError::Unsupported` — une
@@ -985,11 +996,7 @@ fn ok_result() -> CallToolResult {
 /// applique par les `assert_*`/`wait_*` — plutot que l'erreur JSON-RPC
 /// opaque (-32603 `internal_error`) qu'aplatissait `port_to_mcp` jusqu'ici.
 fn unsupported_error(detail: impl Into<String>) -> CallToolResult {
-    json_error(&serde_json::json!({
-        "ok": false,
-        "reason": "unsupported",
-        "detail": detail.into(),
-    }))
+    ToolError::new(ErrorReason::Unsupported, detail).into_result()
 }
 
 /// Payload `isError` d'une exception levée par le JS evalue dans la cible
@@ -1019,11 +1026,7 @@ fn meta_block(meta: &serde_json::Value) -> ContentBlock {
 /// sur le state) : distinct d'un SDK joignable qui n'a publié aucun signal
 /// (succès avec `signals: 0`) — ADR-0025.
 fn sdk_unavailable_error(detail: String) -> CallToolResult {
-    json_error(&serde_json::json!({
-        "ok": false,
-        "reason": "sdk_unavailable",
-        "detail": detail,
-    }))
+    ToolError::new(ErrorReason::SdkUnavailable, detail).into_result()
 }
 
 /// Comme [`unsupported_aware`], pour un `state_snapshot` : une coupure de

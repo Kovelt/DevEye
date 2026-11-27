@@ -621,3 +621,389 @@ async fn golden_text_of_small_output_tools_is_unchanged() {
         .collect();
     assert_eq!(on_disk, expected_files, "golden orphelins ou manquants");
 }
+
+// ----------------------------------------------------------------------
+// Contrat des sorties structurées (ADR-0067).
+// ----------------------------------------------------------------------
+
+/// Outils du palier A : les seuls à déclarer un `outputSchema` et à renvoyer
+/// `structuredContent`. Tout autre outil (palier B et exclus) reste en texte
+/// seul : `logs_tail`, `logs_wait`, `list_windows`, `find_element`,
+/// `list_commands`, `collect_console_errors`, `eval_js`, `dom`, `state`,
+/// `invoke_command`, `observe`, les captures, `clipboard_get`, `assert_visual`.
+const TIER_A: &[&str] = &[
+    "assert_selector",
+    "assert_state",
+    "click",
+    "click_selector",
+    "click_text",
+    "clipboard_set",
+    "double_click",
+    "drag_drop",
+    "focus_window",
+    "handle_dialog",
+    "hover",
+    "key_combo",
+    "navigate",
+    "press_key",
+    "resize",
+    "right_click",
+    "scroll",
+    "target_info",
+    "type_text",
+    "upload_file",
+    "wait_condition",
+    "wait_for_log",
+    "wait_for_selector",
+    "wait_for_text",
+    "wait_ready",
+    "wait_screenshot_region",
+    "wait_target_alive",
+    "window_geometry",
+];
+
+/// Plafond (octets) de la taille cumulée des `outputSchema` dans `tools/list` :
+/// ils s'ajoutent au contexte de l'agent à chaque session.
+const OUTPUT_SCHEMAS_MAX_BYTES: usize = 12_000;
+
+fn declared_schemas() -> BTreeMap<String, Value> {
+    DeveyeMcpServer::tool_router()
+        .list_all()
+        .iter()
+        .filter_map(|t| {
+            t.output_schema
+                .as_ref()
+                .map(|s| (t.name.to_string(), Value::Object(s.as_ref().clone())))
+        })
+        .collect()
+}
+
+#[test]
+fn exactly_the_tier_a_tools_declare_an_output_schema() {
+    let declared: Vec<String> = declared_schemas().into_keys().collect();
+    let expected: Vec<String> = TIER_A.iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        declared, expected,
+        "outputSchema déclaré hors palier A ou manquant"
+    );
+}
+
+#[test]
+fn output_schemas_stay_small_and_describe_objects() {
+    let schemas = declared_schemas();
+    let size: usize = schemas.values().map(|s| s.to_string().len()).sum();
+    assert!(
+        size <= OUTPUT_SCHEMAS_MAX_BYTES,
+        "outputSchema cumulés : {size} octets (plafond {OUTPUT_SCHEMAS_MAX_BYTES})"
+    );
+    for (tool, schema) in &schemas {
+        assert_eq!(
+            schema["type"], "object",
+            "`{tool}` : la racine d'un outputSchema doit être un objet (spec MCP)"
+        );
+    }
+}
+
+/// Validation minimale d'une valeur contre un sous-ensemble de JSON Schema
+/// (`type`, `properties`, `required`, `items`, `$ref` local, `anyOf`/`oneOf`),
+/// suffisant pour les schémas générés ici sans dépendance de validation.
+fn conforms(root: &Value, schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    let Some(object) = schema.as_object() else {
+        return Ok(()); // `true` : tout est accepté
+    };
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+        let target = reference
+            .strip_prefix("#/")
+            .and_then(|p| p.split('/').try_fold(root, |node, key| node.get(key)))
+            .ok_or_else(|| format!("{path} : $ref `{reference}` introuvable"))?;
+        return conforms(root, target, value, path);
+    }
+    for key in ["anyOf", "oneOf"] {
+        if let Some(options) = object.get(key).and_then(Value::as_array) {
+            return if options
+                .iter()
+                .any(|o| conforms(root, o, value, path).is_ok())
+            {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{path} : aucune alternative de `{key}` ne convient ({value})"
+                ))
+            };
+        }
+    }
+    if let Some(declared) = object.get("type") {
+        let names: Vec<&str> = match declared {
+            Value::String(s) => vec![s.as_str()],
+            Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
+            _ => vec![],
+        };
+        let fits = |name: &str| match name {
+            "object" => value.is_object(),
+            "array" => value.is_array(),
+            "string" => value.is_string(),
+            "boolean" => value.is_boolean(),
+            "null" => value.is_null(),
+            "integer" => value.is_i64() || value.is_u64(),
+            "number" => value.is_number(),
+            _ => true,
+        };
+        if !names.is_empty() && !names.iter().any(|n| fits(n)) {
+            return Err(format!("{path} : type {names:?} attendu, valeur {value}"));
+        }
+    }
+    if let Some(map) = value.as_object() {
+        for required in object
+            .get("required")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            if !map.contains_key(required) {
+                return Err(format!("{path} : champ requis `{required}` absent"));
+            }
+        }
+        if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+            for (name, sub) in properties {
+                if let Some(v) = map.get(name) {
+                    conforms(root, sub, v, &format!("{path}.{name}"))?;
+                }
+            }
+        }
+    }
+    if let (Some(items), Some(list)) = (object.get("items"), value.as_array()) {
+        for (i, v) in list.iter().enumerate() {
+            conforms(root, items, v, &format!("{path}[{i}]"))?;
+        }
+    }
+    Ok(())
+}
+
+fn text_json(result: &CallToolResult) -> Value {
+    let text = &result.content[0]
+        .as_text()
+        .expect("premier bloc texte")
+        .text;
+    serde_json::from_str(text).unwrap_or_else(|e| panic!("texte non JSON ({e}) : {text}"))
+}
+
+/// Toutes les branches de succès des outils qui déclarent un `outputSchema`
+/// renvoient `structuredContent`, égal au texte parsé et conforme au schéma ;
+/// les échecs dont la charge est du type de succès (attente expirée, assertion
+/// fausse) font de même ; les erreurs typées (`ToolError`) portent un
+/// `structuredContent` égal à leur texte.
+#[tokio::test]
+async fn every_tier_a_branch_carries_structured_content_equal_to_its_text() {
+    let schemas = declared_schemas();
+    let mut covered_ok = std::collections::BTreeSet::new();
+    for scenario in scenarios().await {
+        let Some(schema) = schemas.get(scenario.tool) else {
+            continue;
+        };
+        let result = &scenario.result;
+        let name = scenario.name;
+        let is_error = result.is_error == Some(true);
+        let text = text_json(result);
+        let is_tool_error = is_error && text.get("reason").is_some_and(Value::is_string);
+        // Erreurs héritées non typées (ex. `click_selector` introuvable,
+        // `expected` mal formé) : texte seul, documentées dans l'ADR.
+        let legacy = matches!(
+            name,
+            "click_selector_not_found" | "assert_state_expected_not_an_object"
+        );
+        if legacy {
+            assert!(
+                result.structured_content.is_none(),
+                "{name} : erreur héritée structurée"
+            );
+            continue;
+        }
+        let structured = result
+            .structured_content
+            .as_ref()
+            .unwrap_or_else(|| panic!("{name} : structuredContent absent"));
+        assert_eq!(
+            structured, &text,
+            "{name} : structuredContent diverge du texte"
+        );
+        if is_tool_error {
+            assert_eq!(structured["ok"], false, "{name}");
+            continue;
+        }
+        conforms(schema, schema, structured, "$")
+            .unwrap_or_else(|e| panic!("{name} : non conforme à l'outputSchema : {e}"));
+        if !is_error {
+            covered_ok.insert(scenario.tool);
+        }
+    }
+    let uncovered: Vec<&&str> = TIER_A
+        .iter()
+        .filter(|t| !covered_ok.contains(**t))
+        .collect();
+    assert!(
+        uncovered.is_empty(),
+        "outils du palier A sans scénario de succès : {uncovered:?}"
+    );
+}
+
+#[tokio::test]
+async fn state_carries_freshness_and_source_in_meta_without_touching_its_text() {
+    let with_sdk = server(|p| p.inspector = Arc::new(state_with(&[("page", json!("A"))])));
+    let result = ok(with_sdk.state(Parameters(StateParams { keys: None })).await);
+    let meta = result.meta.as_ref().expect("_meta attendu").0.clone();
+    assert_eq!(meta["io.deveye/state_source"], "sdk");
+    assert_eq!(meta["io.deveye/entry_count"], 1);
+    assert!(meta["io.deveye/captured_at"].is_string());
+    assert!(
+        result.structured_content.is_none(),
+        "state est hors palier A"
+    );
+    assert_eq!(result.content.len(), 2, "les deux blocs texte historiques");
+    assert_eq!(text_json(&result), json!({ "page": "A" }));
+
+    let cdp_only = server(|p| {
+        p.target_info.state = false;
+        p.inspector = Arc::new(state_with(&[]));
+    });
+    let result = ok(cdp_only.state(Parameters(StateParams { keys: None })).await);
+    let meta = result.meta.as_ref().expect("_meta attendu").0.clone();
+    assert_eq!(meta["io.deveye/state_source"], "aucun");
+    assert_eq!(meta["io.deveye/entry_count"], 0);
+}
+
+// ----------------------------------------------------------------------
+// Client JSON-RPC forçant la révision 2024-11-05 du protocole.
+// ----------------------------------------------------------------------
+
+/// Un client MCP minimal (JSON-RPC par lignes) branché sur le serveur par un
+/// tube mémoire. Un client rmcp aurait exigé la feature `client`, qui tire
+/// `tokio-stream` : dépendance non prévue (ADR-0067).
+struct Wire {
+    reader: tokio::io::BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+    writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    next_id: u64,
+}
+
+impl Wire {
+    async fn send(&mut self, message: Value) {
+        use tokio::io::AsyncWriteExt;
+        let mut line = message.to_string();
+        line.push('\n');
+        self.writer
+            .write_all(line.as_bytes())
+            .await
+            .expect("écriture");
+    }
+
+    async fn request(&mut self, method: &str, params: Value) -> Value {
+        use tokio::io::AsyncBufReadExt;
+        let id = self.next_id;
+        self.next_id += 1;
+        self.send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+            .await;
+        loop {
+            let mut line = String::new();
+            let read =
+                tokio::time::timeout(Duration::from_secs(10), self.reader.read_line(&mut line))
+                    .await
+                    .expect("réponse dans les 10 s")
+                    .expect("lecture");
+            assert!(read > 0, "flux fermé avant la réponse à `{method}`");
+            let message: Value = serde_json::from_str(&line).expect("JSON-RPC");
+            if message.get("id") == Some(&json!(id)) {
+                assert!(
+                    message.get("error").is_none(),
+                    "`{method}` en erreur : {message}"
+                );
+                return message["result"].clone();
+            }
+        }
+    }
+}
+
+async fn connect(version: &str) -> (Wire, Value) {
+    let (client_io, server_io) = tokio::io::duplex(1 << 20);
+    let server = server(|_| {});
+    tokio::spawn(async move {
+        if let Ok(running) = ServiceExt::serve(server, server_io).await {
+            let _ = running.waiting().await;
+        }
+    });
+    let (read, write) = tokio::io::split(client_io);
+    let mut wire = Wire {
+        reader: tokio::io::BufReader::new(read),
+        writer: write,
+        next_id: 1,
+    };
+    let init = wire
+        .request(
+            "initialize",
+            json!({
+                "protocolVersion": version,
+                "capabilities": {},
+                "clientInfo": { "name": "contract-test", "version": "0" }
+            }),
+        )
+        .await;
+    wire.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+        .await;
+    (wire, init)
+}
+
+/// Un client resté sur 2024-11-05 (antérieur à `structuredContent`) négocie sa
+/// révision, appelle `target_info` et lit le texte historique : les champs
+/// structurés qu'il ne connaît pas sont additifs et ignorés.
+#[tokio::test]
+async fn a_2024_11_05_client_still_reads_the_unchanged_text() {
+    let (mut wire, init) = connect("2024-11-05").await;
+    assert_eq!(init["protocolVersion"], "2024-11-05", "{init}");
+
+    let listed = wire.request("tools/list", json!({})).await;
+    let tools = listed["tools"].as_array().expect("tableau d'outils");
+    let with_schema = |name: &str| {
+        tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("outil `{name}` absent"))["outputSchema"]
+            .is_object()
+    };
+    assert!(with_schema("target_info") && with_schema("click"));
+    assert!(!with_schema("eval_js") && !with_schema("dom") && !with_schema("logs_tail"));
+
+    let result = wire
+        .request(
+            "tools/call",
+            json!({ "name": "target_info", "arguments": {} }),
+        )
+        .await;
+    assert_ne!(result["isError"], json!(true), "{result}");
+    let text: Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().expect("texte")).expect("JSON");
+    assert_eq!(text["target"], "test");
+    assert_eq!(
+        result["structuredContent"], text,
+        "texte et structuré identiques"
+    );
+
+    let click = wire
+        .request(
+            "tools/call",
+            json!({ "name": "click", "arguments": { "x": 1, "y": 1 } }),
+        )
+        .await;
+    assert_eq!(click["content"][0]["text"], r#"{"ok":true}"#);
+}
+
+#[tokio::test]
+async fn a_current_client_gets_the_same_structured_results() {
+    let (mut wire, init) = connect(MCP_PROTOCOL_VERSION).await;
+    assert_eq!(init["protocolVersion"], MCP_PROTOCOL_VERSION);
+    let result = wire
+        .request(
+            "tools/call",
+            json!({ "name": "target_info", "arguments": {} }),
+        )
+        .await;
+    assert!(result["structuredContent"].is_object(), "{result}");
+}

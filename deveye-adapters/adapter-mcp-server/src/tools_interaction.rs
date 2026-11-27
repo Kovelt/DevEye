@@ -11,6 +11,7 @@ use super::*;
 impl DeveyeMcpServer {
     #[tool(
         description = "Effectue un clic sur le viewport de l'app cible aux coordonnées absolues fournies. `button` optionnel (E6) : \"left\" (défaut), \"right\", \"middle\". Les coordonnées sont validées avant le dispatch : négatives, ou hors du viewport quand sa taille est connue, elles donnent une erreur `invalid_params` (même garde pour right_click, double_click, hover, drag_drop et l'ancrage de scroll).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -34,6 +35,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Effectue un clic DROIT (menu contextuel) sur le viewport de l'app cible aux coordonnées absolues fournies. Déclenche button=right (contextmenu) — ouvre les menus contextuels des UI qui les écoutent. Conservé pour compatibilité ; équivalent à click(button: \"right\").",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -54,6 +56,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Double-clic gauche aux coordonnées (x, y) : édition inline, sélection de mot, ouverture d'item de liste. Émet un vrai `dblclick` (clickCount=2 en CDP). Plus fiable que deux `click` MCP successifs (intervalle imprévisible).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -74,6 +77,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Saisit du texte au focus courant de l'app cible. Sans champ éditable au focus, sur les cibles WebView (cdp, sdk), la saisie est refusée en résultat isError structuré `{ ok: false, reason: \"interaction_failed\", detail }` (cliquer d'abord sur le champ avec click_selector ou click) : jamais un faux succès. Sur kwin-eis et x11 (événements clavier OS-level), le texte est envoyé à la fenêtre qui a le focus sans pouvoir savoir si un champ le reçoit : `{ ok: true }` y signifie « événements envoyés », pas « texte saisi » ; vérifier par une capture.",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -94,17 +98,16 @@ impl DeveyeMcpServer {
             // Échec sémantique de la saisie (typiquement : aucun champ éditable
             // au focus) : un résultat que l'agent corrige, pas une faute
             // d'appel (ADR-0026).
-            Err(PortError::Interaction(detail)) => Ok(json_error(&serde_json::json!({
-                "ok": false,
-                "reason": "interaction_failed",
-                "detail": detail,
-            }))),
+            Err(PortError::Interaction(detail)) => {
+                Ok(ToolError::new(ErrorReason::InteractionFailed, detail).into_result())
+            }
             other => ok_or_unsupported(other),
         }
     }
 
     #[tool(
         description = "Presse une touche unique (keydown + keyup) au focus courant : Enter, Tab, Escape, ArrowDown, F5… Marche sur toutes les cibles, y compris kwin-eis (où eval_js est indisponible). Noms W3C en CDP et sdk (Enter, ArrowDown) ; noms XKB en kwin-eis (Return, Down) ; les noms communs (Tab, Escape, F5) passent partout (E7). En kwin-eis, la touche part vers la fenêtre ACTIVE sans garde de focus : appeler `focus_window` avant (ADR-0045).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -121,6 +124,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Combinaison de touches : maintient les modificateurs (ctrl/shift/alt/meta) pendant la frappe de `key`, puis les relâche. Ctrl+S, Ctrl+Z, Ctrl+Shift+P, Alt+F4… Marche sur toutes les cibles, y compris kwin-eis (events OS-level : les raccourcis du toolkit se déclenchent). `press_key` seul ne porte aucun modificateur. Noms de touche W3C en CDP et sdk, XKB en kwin-eis (E7, cf. KeyComboParams).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -138,6 +142,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Navigue vers une route logique exposée par l'app cible (routeur du SDK opt-in). Interface découvrable, à préférer à un eval_js sur le hook interne `window.__deveye_router__`. Indisponible en kwin-eis (pas de routeur applicatif OS-level) : renvoie un résultat isError structuré `{ reason: \"unsupported\" }` plutôt qu'une erreur protocolaire (E1).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -155,6 +160,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Déplace le pointeur à (x, y) sans presser — déclenche mouseover/mouseenter (utile pour révéler des éléments au hover).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -175,6 +181,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Clique sur le premier élément matchant un sélecteur CSS, par vrais événements souris CDP (hover + press au centre de l'élément — le focus clavier suit). Robuste aux déplacements de coordonnées et aux animations.",
+        output_schema = output_schema::<ClickAck>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -196,6 +203,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Clique sur le premier élément interactif (button, a, label, summary, role=button/tab/menuitem/option/switch/checkbox) dont le texte (après trim) correspond exactement — par vrais événements souris CDP (le focus clavier suit).",
+        output_schema = output_schema::<ClickAck>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -239,15 +247,14 @@ impl DeveyeMcpServer {
                 .dispatch(InteractionCommand::click(Position::new(x, y)))
                 .await,
         ) {
-            Ok(()) => Ok(json_success(
-                &serde_json::json!({ "ok": true, "x": x, "y": y }),
-            )),
+            Ok(()) => Ok(structured_ok(&ClickAck { ok: true, x, y })),
             Err(issue) => issue,
         }
     }
 
     #[tool(
         description = "Glisse-dépose de (from_x, from_y) vers (to_x, to_y). En CDP : séquence souris native (press/déplacements/release) ; via le pont SDK : PointerEvent JS (support selon le framework de l'app).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -269,6 +276,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Répond à une boîte de dialogue JS (`alert`/`confirm`/`prompt`) : `accept` (OK/Cancel), `prompt_text` = texte pour un `prompt`. CDP-only — pendant un dialog le moteur JS est suspendu, donc `eval_js` est impossible : c'est la seule issue. En sdk/kwin-eis, résultat isError structuré `{ reason: \"unsupported\" }` plutôt qu'une erreur protocolaire (E1).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -286,6 +294,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Renseigne les fichiers d'un `input[type=file]` (sélecteur CSS + chemins absolus). CDP-only (`DOM.setFileInputFiles`) : la sécurité navigateur interdit de le faire en JS, donc non contournable par eval_js. En sdk/kwin-eis, résultat isError structuré `{ reason: \"unsupported\" }` plutôt qu'une erreur protocolaire (E1).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -303,6 +312,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Redimensionne le viewport à `width` x `height` pixels CSS (1 à 16384), pour tester un rendu responsive. ÉMULATION du moteur de rendu (`Emulation.setDeviceMetricsOverride`) : la fenêtre de l'OS garde sa taille, le facteur d'échelle de l'écran est conservé, et l'émulation persiste jusqu'à un nouveau `resize` ; `width` et `height` à 0 ensemble retirent l'émulation. Les captures et `click`/`hover` suivent le nouveau viewport. CDP-only : sur les autres cibles (sdk, kwin-eis, x11), résultat isError structuré `{ reason: \"unsupported\" }` (E1).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -321,6 +331,7 @@ impl DeveyeMcpServer {
 
     #[tool(
         description = "Défile de (dx, dy) pixels — `dy > 0` vers le bas. Ancré en (x, y) ou, par défaut, au centre du viewport. En CDP, l'ancrage cible le bon conteneur scrollable (mouseWheel) ; via le pont SDK, le conteneur scrollable sous le point est privilégié (sinon window) ; en kwin-eis, le défilement va à la fenêtre focus. Indispensable pour les listes/grilles en kwin-eis (eval_js indisponible).",
+        output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
             destructive_hint = false,
