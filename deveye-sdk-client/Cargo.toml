@@ -17,4 +17,14 @@ documentation = "https://docs.rs/deveye-sdk-client"
 workspace = true
 
 [dependencies]
+# Dépendances internes MIT -> MIT (invariant ADR-0002) : PortError pour les
+# erreurs de protocole ; `tracing` pour l'avertissement de version.
+deveye-ports = { path = "../deveye-ports", version = "0.2.0" }
 reqwest = { workspace = true }
+serde = { workspace = true }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+serde_json = { workspace = true }
+wiremock = "0.6"

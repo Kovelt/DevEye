@@ -885,7 +885,13 @@ dependencies = [
 name = "deveye-sdk-client"
 version = "0.2.0"
 dependencies = [
+ "deveye-ports",
  "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]

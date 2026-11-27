@@ -43,6 +43,7 @@ impl CommandRouter for SdkCommandRouter {
             .send()
             .await
             .map_err(|e| PortError::Network(format!("POST {url} : {e}")))?;
+        deveye_sdk_client::check_protocol_version(&resp)?;
         let status = resp.status();
         // Lire le statut AVANT de décoder : une réponse d'erreur non-JSON
         // (proxy, corps vide) ne doit pas masquer le vrai code en erreur de
@@ -76,6 +77,7 @@ impl CommandRouter for SdkCommandRouter {
             .send()
             .await
             .map_err(|e| PortError::Network(format!("GET {url} : {e}")))?;
+        deveye_sdk_client::check_protocol_version(&resp)?;
         let status = resp.status();
         if !status.is_success() {
             // Un échec de listing est un problème de liaison/SDK, pas une

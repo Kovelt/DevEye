@@ -57,6 +57,7 @@ impl AppInspector for DioxusSignalsInspector {
             .send()
             .await
             .map_err(|e| PortError::Network(format!("GET {url} : {e}")))?;
+        deveye_sdk_client::check_protocol_version(&resp)?;
         if !resp.status().is_success() {
             return Err(PortError::Inspect(format!(
                 "SDK a répondu {} pour {url}",

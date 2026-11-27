@@ -55,6 +55,7 @@ impl JsEvaluator for SdkEvaluator {
             .send()
             .await
             .map_err(|e| PortError::Network(format!("POST {url} : {e}")))?;
+        deveye_sdk_client::check_protocol_version(&resp)?;
         let status = resp.status();
         let body: EvalResponse = resp
             .json()
