@@ -1,0 +1,3 @@
+isError: true
+--- bloc 0
+{"detail":"capacité absente (mock)","ok":false,"reason":"unsupported"}

@@ -1,0 +1,3 @@
+isError: true
+--- bloc 0
+{"actual_count":0,"actual_text":null,"ok":false,"selector":".item"}
