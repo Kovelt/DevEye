@@ -7,14 +7,14 @@
 //! arbre au format legacy reste au format legacy).
 //!
 //! Deux règles, dans cet ordre :
-//! - la valeur d'un widget secret (`state.secret`, `secret`, rôle `password`) est
-//!   remplacée par [`REDACTED`] ;
+//! - la valeur (`value`, et `text` du format legacy) d'un widget secret
+//!   (`state.secret`, `secret`, rôle `password`) est remplacée par [`REDACTED`] ;
 //! - une valeur structurée (objet, liste) passe par le masquage par noms de clés
 //!   du wire protocol (§2.4). Les clés propres à l'app (`Config::secret_keys`)
 //!   sont inconnues du serveur : le SDK les applique avant publication.
 //!
-//! Une réponse qui n'a pas la forme d'une liste de widgets reçoit le masquage par
-//! clés sur tout l'arbre. Le masquage reste un filet, pas une garantie.
+//! Une réponse qui n'a pas la forme d'une liste de widgets n'est pas modifiée
+//! (ADR-0064, amendé). Le masquage reste un filet, pas une garantie.
 
 use serde_json::{Map, Value};
 
@@ -80,22 +80,21 @@ pub fn redact_by_key(value: &mut Value) {
     }
 }
 
-/// Widget secret : drapeau `state.secret` ou `secret`, ou rôle `password`.
+/// Widget secret : drapeau `state.secret` ou `secret`, ou rôle `password`
+/// (insensible à la casse et aux espaces, comme `UiWidget::is_secret`).
 fn is_secret_widget(widget: &Map<String, Value>) -> bool {
-    let flagged = widget
-        .get("state")
-        .and_then(|state| state.get("secret"))
-        .or_else(|| widget.get("secret"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let flag = |value: Option<&Value>| value.and_then(Value::as_bool).unwrap_or(false);
+    let flagged = flag(widget.get("state").and_then(|state| state.get("secret")))
+        || flag(widget.get("secret"));
     let password = ["role", "kind"]
         .iter()
         .filter_map(|key| widget.get(*key).and_then(Value::as_str))
-        .any(|role| role.eq_ignore_ascii_case("password"));
+        .any(|role| role.trim().eq_ignore_ascii_case("password"));
     flagged || password
 }
 
-/// Liste de widgets d'une réponse : la liste racine ou le champ `widgets`.
+/// Liste de widgets d'une réponse reconnue : la liste racine ou le champ
+/// `widgets`. Toute autre forme n'est pas un arbre de widgets.
 fn widget_list(tree: &mut Value) -> Option<&mut Vec<Value>> {
     match tree {
         Value::Array(items) => Some(items),
@@ -104,26 +103,45 @@ fn widget_list(tree: &mut Value) -> Option<&mut Vec<Value>> {
     }
 }
 
-/// Masque `tree` en place (réponse brute de la route `ui.widgets`).
-pub fn mask_route_value(tree: &mut Value) {
-    let Some(widgets) = widget_list(tree) else {
-        redact_by_key(tree);
+/// Champs de structure d'un widget : jamais pris pour des secrets (`secret` est
+/// le drapeau, pas une donnée).
+const STRUCTURAL: &[&str] = &["id", "role", "kind", "rect", "parent", "state", "secret"];
+
+/// Masque un widget en place, enfants imbriqués compris.
+fn mask_widget(widget: &mut Value) {
+    let Some(map) = widget.as_object_mut() else {
         return;
     };
-    for widget in widgets {
-        let Some(map) = widget.as_object_mut() else {
+    let secret = is_secret_widget(map);
+    for (key, inner) in map.iter_mut() {
+        if STRUCTURAL.contains(&key.as_str()) {
             continue;
-        };
-        let secret = is_secret_widget(map);
-        if let Some(value) = map.get_mut("value") {
-            if secret {
-                if !value.is_null() {
-                    *value = Value::String(REDACTED.to_string());
-                }
-            } else {
-                redact_by_key(value);
-            }
         }
+        if key == "children" {
+            if let Some(children) = inner.as_array_mut() {
+                children.iter_mut().for_each(mask_widget);
+            }
+        } else if secret && (key == "value" || key == "text") {
+            // `text` : contenu d'un champ dans le format legacy (egui, imgui).
+            if !inner.is_null() {
+                *inner = Value::String(REDACTED.to_string());
+            }
+        } else if is_secret_key(key) {
+            *inner = Value::String(REDACTED.to_string());
+        } else {
+            redact_by_key(inner);
+        }
+    }
+}
+
+/// Masque `tree` en place (réponse brute de la route `ui.widgets`).
+///
+/// Une réponse qui n'a pas la forme d'un arbre de widgets (liste racine ou champ
+/// `widgets`) est laissée intacte : la route est celle d'un handler quelconque et
+/// `dom` ne doit pas en altérer la sortie.
+pub fn mask_route_value(tree: &mut Value) {
+    if let Some(widgets) = widget_list(tree) {
+        widgets.iter_mut().for_each(mask_widget);
     }
 }
 
@@ -212,9 +230,34 @@ mod tests {
         assert_eq!(legacy[0]["value"], REDACTED);
         assert_eq!(legacy[1]["text"], "OK");
 
+        // Forme inconnue : sortie de `dom` inchangée par rapport à la 1.0.
         let mut unknown = json!({ "nodes": [{ "name": "x", "password": "p" }], "page": 3 });
+        let before = unknown.clone();
         mask_route_value(&mut unknown);
-        assert_eq!(unknown["nodes"][0]["password"], REDACTED);
-        assert_eq!(unknown["page"], 3);
+        assert_eq!(unknown, before);
+    }
+
+    #[test]
+    fn role_case_text_and_children_are_covered() {
+        let mut tree = json!({
+            "widgets": [
+                { "kind": " PASSWORD ", "text": "hunter2" },
+                { "kind": "textbox", "state": { "secret": false }, "secret": true, "value": "x" },
+                { "kind": "textbox", "password": "p", "value": "ok" },
+                { "kind": "panel", "children": [
+                    { "kind": "password", "value": "deep" },
+                    { "kind": "label", "text": "visible" }
+                ] }
+            ]
+        });
+        mask_route_value(&mut tree);
+        let w = &tree["widgets"];
+        assert_eq!(w[0]["text"], REDACTED);
+        assert_eq!(w[1]["value"], REDACTED);
+        assert_eq!(w[1]["secret"], true);
+        assert_eq!(w[2]["password"], REDACTED);
+        assert_eq!(w[2]["value"], "ok");
+        assert_eq!(w[3]["children"][0]["value"], REDACTED);
+        assert_eq!(w[3]["children"][1]["text"], "visible");
     }
 }

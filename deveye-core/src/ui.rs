@@ -356,9 +356,15 @@ impl UiWidget {
     }
 
     /// Vrai si la valeur ne doit jamais être exposée : `state.secret` ou rôle
-    /// `password`.
+    /// `password` (insensible à la casse et aux espaces de bord, comme le
+    /// masquage du serveur).
     pub fn is_secret(&self) -> bool {
-        self.state.secret || self.role.as_str() == UiRole::PASSWORD
+        self.state.secret
+            || self
+                .role
+                .as_str()
+                .trim()
+                .eq_ignore_ascii_case(UiRole::PASSWORD)
     }
 
     /// Centre du rect, où cliquer pour viser le widget.
@@ -678,6 +684,15 @@ fn legacy_widget(index: usize, item: &Value) -> Result<UiWidget, UiReadError> {
         .and_then(Value::as_str)
         .map(str::to_string);
     widget.value = map.get("value").filter(|v| !v.is_null()).cloned();
+    widget.state.secret = ["secret"]
+        .iter()
+        .filter_map(|key| map.get(*key).and_then(Value::as_bool))
+        .chain(
+            map.get("state")
+                .and_then(|state| state.get("secret"))
+                .and_then(Value::as_bool),
+        )
+        .any(|flag| flag);
     Ok(widget)
 }
 
@@ -930,6 +945,22 @@ mod tests {
         assert_eq!(tree.widgets[0].value, None);
         assert_eq!(tree.widgets[1].value, None);
         assert_eq!(tree.widgets[2].value, Some(json!("alice")));
+    }
+
+    #[test]
+    fn secret_role_is_case_and_space_insensitive_and_legacy_flag_is_read() {
+        for role in ["password", "Password", "PASSWORD", " password "] {
+            assert!(UiWidget::new("a", role).is_secret(), "{role}");
+        }
+        assert!(!UiWidget::new("a", "textbox").is_secret());
+        let tree = UiTree::from_value(&json!([
+            { "kind": "textbox", "secret": true, "value": "x" },
+            { "kind": "textbox", "state": { "secret": true }, "value": "y" },
+            { "kind": "textbox", "value": "z" }
+        ]))
+        .expect("arbre legacy lisible");
+        let flags: Vec<bool> = tree.widgets.iter().map(UiWidget::is_secret).collect();
+        assert_eq!(flags, [true, true, false]);
     }
 
     #[test]

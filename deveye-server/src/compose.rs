@@ -12,8 +12,8 @@ use adapter_cdp_webview::CdpClient;
 use adapter_clipboard_wayland::WaylandClipboard;
 use adapter_commands_http::SdkCommandRouter;
 use adapter_composite::{
-    CompositeInspector, CompositeWaitCondition, JsConsoleErrorSource, NoopConsoleErrorSource,
-    RouteDomInspector, DEFAULT_DOM_ROUTE,
+    CompositeInspector, CompositeWaitCondition, JsConsoleErrorSource, MaskingCommandRouter,
+    NoopConsoleErrorSource, RouteDomInspector, DEFAULT_DOM_ROUTE,
 };
 use adapter_dioxus_signals::{
     DioxusSignalsInspector, EvalDomInspector, JsInteraction, SdkEvaluator,
@@ -494,8 +494,10 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
     let state_inspector: Arc<dyn AppInspector> =
         Arc::new(DioxusSignalsInspector::new(args.sdk_url.clone()));
     let log_source: Arc<dyn LogSource> = Arc::new(SdkTracingLogSource::new(args.sdk_url.clone()));
-    let command_router: Arc<dyn CommandRouter> =
-        Arc::new(SdkCommandRouter::new(args.sdk_url.clone()));
+    let command_router: Arc<dyn CommandRouter> = Arc::new(MaskingCommandRouter::new(
+        Arc::new(SdkCommandRouter::new(args.sdk_url.clone())),
+        DEFAULT_DOM_ROUTE,
+    ));
 
     let inspector: Arc<dyn AppInspector> = Arc::new(CompositeInspector {
         dom: dom_inspector,

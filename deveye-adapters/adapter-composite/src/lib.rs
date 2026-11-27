@@ -546,13 +546,13 @@ impl AppInspector for CompositeInspector {
 
 // ── RouteDomInspector ─────────────────────────────────────────────────────────
 
-/// Route par defaut de [`RouteDomInspector`] : l'application cible la sert avec
+/// Route par défaut de [`RouteDomInspector`] : l'application cible la sert avec
 /// la description JSON de ses widgets (`deveye_sdk::ui::publish`, ou
 /// `deveye_sdk::expose_route("ui.widgets", ..)` pour un handler maison).
 pub const DEFAULT_DOM_ROUTE: &str = "ui.widgets";
 
-/// Age (ms) au-dela duquel un arbre `deveye.ui/1` est signale comme perime : l'UI
-/// de l'app est gelee, ou aucune frame n'a ete rendue depuis.
+/// Âge (ms) au-delà duquel un arbre `deveye.ui/1` est signalé comme périmé : l'UI
+/// de l'app est gelée, ou aucune frame n'a été rendue depuis.
 const UI_STALE_AFTER_MS: u64 = 2_000;
 
 /// `AppInspector` dont le « DOM » est la reponse d'une route de commande de
@@ -564,14 +564,15 @@ const UI_STALE_AFTER_MS: u64 = 2_000;
 /// au port `AppInspector`, donc a l'outil MCP `dom`.
 ///
 /// Contrat :
-/// - requete : `router.invoke(route, {})` ; le payload reste `{}` (un handler
+/// - requête : `router.invoke(route, {})` ; le payload reste `{}` (un handler
 ///   tiers qui valide son payload strictement casserait sur un champ inconnu,
 ///   ADR-0065) ;
-/// - reponse : la valeur JSON du handler, **sans conversion** (un arbre au format
-///   legacy reste au format legacy), enveloppee dans [`DomTree`], **apres
-///   masquage des secrets** : la valeur d'un widget secret est remplacee par
-///   `<secret>` et les valeurs structurees passent par le masquage par cles
-///   (ADR-0064) ; [`ui_tree`](Self::ui_tree) rend la meme vue sous forme typee ;
+/// - réponse : la valeur JSON du handler, **sans conversion** (un arbre au format
+///   legacy reste au format legacy), enveloppée dans [`DomTree`], **après
+///   masquage des secrets** : la valeur d'un widget secret est remplacée par
+///   `<secret>` et les valeurs structurées passent par le masquage par clés
+///   (ADR-0064) ; une réponse qui n'est pas un arbre de widgets est laissée
+///   intacte ; [`ui_tree`](Self::ui_tree) rend la même vue sous forme typée ;
 /// - cout : rien tant que `dom` n'est pas appele (aucune surveillance en
 ///   arriere-plan) ; l'outil `dom` refuse les arbres > ~100 Ko.
 ///
@@ -601,11 +602,11 @@ impl RouteDomInspector {
         &self.route
     }
 
-    /// Lit l'arbre au schema `deveye.ui/1` (ou au format legacy, converti par
-    /// [`UiTree::from_value`]), secrets masques.
+    /// Lit l'arbre au schéma `deveye.ui/1` (ou au format legacy, converti par
+    /// [`UiTree::from_value`]), secrets masqués.
     ///
     /// # Errors
-    /// Route indisponible (comme [`AppInspector::dom_snapshot`]) ou reponse qui
+    /// Route indisponible (comme [`AppInspector::dom_snapshot`]) ou réponse qui
     /// n'est pas un arbre de widgets lisible ([`PortError::Inspect`]).
     pub async fn ui_tree(&self) -> PortResult<UiTree> {
         let raw = self.fetch_masked().await?;
@@ -623,7 +624,7 @@ impl RouteDomInspector {
         })
     }
 
-    /// Reponse brute de la route, secrets masques.
+    /// Réponse brute de la route, secrets masqués.
     async fn fetch_masked(&self) -> PortResult<serde_json::Value> {
         let mut tree = match self.router.invoke(&self.route, serde_json::json!({})).await {
             Ok(tree) => tree,
@@ -644,6 +645,40 @@ impl RouteDomInspector {
     }
 }
 
+/// Décorateur de [`CommandRouter`] qui applique le masquage des secrets à la
+/// réponse de la route des widgets (`route`), pour que `invoke_command` ne
+/// contourne pas le masquage de `dom` (ADR-0064). Les autres routes passent
+/// telles quelles.
+pub struct MaskingCommandRouter {
+    inner: Arc<dyn CommandRouter>,
+    route: String,
+}
+
+impl MaskingCommandRouter {
+    /// Enveloppe `inner` ; `route` est la route dont la réponse est masquée.
+    pub fn new(inner: Arc<dyn CommandRouter>, route: impl Into<String>) -> Self {
+        Self {
+            inner,
+            route: route.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl CommandRouter for MaskingCommandRouter {
+    async fn invoke(&self, name: &str, args: serde_json::Value) -> PortResult<serde_json::Value> {
+        let mut value = self.inner.invoke(name, args).await?;
+        if name == self.route {
+            mask_route_value(&mut value);
+        }
+        Ok(value)
+    }
+
+    async fn list(&self) -> PortResult<Vec<deveye_core::CommandDescriptor>> {
+        self.inner.list().await
+    }
+}
+
 /// Signale un arbre `deveye.ui/1` plus vieux que [`UI_STALE_AFTER_MS`].
 fn warn_if_stale(tree: &serde_json::Value) {
     let Some(published) = tree
@@ -659,7 +694,7 @@ fn warn_if_stale(tree: &serde_json::Value) {
     if age > UI_STALE_AFTER_MS {
         warn!(
             age_ms = age,
-            "arbre ui.widgets perime : l'UI de l'app est peut-etre gelee ou n'a pas rendu de frame"
+            "arbre ui.widgets périmé : l'UI de l'app est peut-être gelée ou n'a pas rendu de frame"
         );
     }
 }
@@ -1845,6 +1880,27 @@ mod tests {
         );
     }
 
+    /// `invoke_command` passe par le même masquage que `dom` pour la route des
+    /// widgets ; les autres routes ne sont pas touchées.
+    #[tokio::test]
+    async fn masking_router_masks_only_the_widgets_route() {
+        let tree = serde_json::json!({ "widgets": [{ "role": "password", "value": "hunter2" }] });
+        let masked =
+            MaskingCommandRouter::new(FakeRouter::replying(Ok(tree.clone())), "ui.widgets");
+        let out = masked
+            .invoke("ui.widgets", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(out["widgets"][0]["value"], "<secret>");
+
+        let other = MaskingCommandRouter::new(FakeRouter::replying(Ok(tree.clone())), "ui.widgets");
+        let out = other
+            .invoke("app.other", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(out, tree);
+    }
+
     /// Route vide -> route par defaut ; route personnalisee respectee.
     #[tokio::test]
     async fn route_dom_default_and_custom_route() {
@@ -1959,8 +2015,8 @@ mod tests {
         );
     }
 
-    /// Le format legacy est servi tel quel par `dom` (secrets masques) et lu par
-    /// `ui_tree` ; une reponse sans widgets est une erreur d'inspection claire.
+    /// Le format legacy est servi tel quel par `dom` (secrets masqués) et lu par
+    /// `ui_tree` ; une réponse sans widgets est une erreur d'inspection claire.
     #[tokio::test]
     async fn route_dom_legacy_stays_legacy_and_unreadable_trees_are_reported() {
         let legacy = serde_json::json!({
