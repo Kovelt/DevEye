@@ -10,6 +10,9 @@ homepage.workspace = true
 description = "Adapter DevEye : cible X11 isolee (yeux GetImage, mains XTEST, fenetres QueryTree) pour tout serveur X prive (Xvfb) — aucune dependance a xcap ni a un gestionnaire de fenetres."
 publish = false  # interne, non publie
 
+[lints]
+workspace = true
+
 [dependencies]
 deveye-core = { path = "../../deveye-core" }
 deveye-ports = { path = "../../deveye-ports" }

@@ -10,6 +10,9 @@ homepage.workspace = true
 description = "Adapter DevEye pilotant un webview via Chrome DevTools Protocol (WebView2, Chromium, Edge)."
 publish = false  # interne, non publie
 
+[lints]
+workspace = true
+
 [dependencies]
 deveye-core = { path = "../../deveye-core" }
 deveye-ports = { path = "../../deveye-ports" }

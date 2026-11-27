@@ -45,6 +45,13 @@ authors = ["NuvoraCode / Morgan Voltz"]
 repository = "https://github.com/Morgan-Voltz/DevEye"
 homepage = "https://github.com/Morgan-Voltz/DevEye"
 
+# Lints communs (ADR-0009). Chaque crate les active par `[lints] workspace = true`.
+# Seule exception : adapter-interaction-kwin-eis, qui déclare ses propres lints
+# (un unique `unsafe` localisé, cf. son Cargo.toml).
+[workspace.lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
 # Dépendances partagées.
 # Chaque crate ajoute ses propres features par-dessus via `{ workspace = true }`.
 [workspace.dependencies]

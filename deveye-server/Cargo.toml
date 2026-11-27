@@ -10,6 +10,9 @@ homepage.workspace = true
 description = "Binaire DevEye : compose les adapters et expose un serveur MCP a Claude."
 publish = false  # interne, non publie
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "deveye-server"
 path = "src/main.rs"

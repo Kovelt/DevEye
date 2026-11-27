@@ -13,6 +13,9 @@ publish = false  # interne, non publie
 # Destiné à être ajouté en dépendance de l'app cible UNIQUEMENT en
 # cfg(debug_assertions).
 
+[lints]
+workspace = true
+
 [dependencies]
 deveye-core = { path = "../deveye-core" }
 serde = { workspace = true }

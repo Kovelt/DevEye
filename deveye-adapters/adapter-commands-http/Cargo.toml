@@ -10,6 +10,9 @@ homepage.workspace = true
 description = "Adapter DevEye : CommandRouter via POST /devtools/command et GET /devtools/commands du SDK opt-in (HTTP local)."
 publish = false  # interne, non publie
 
+[lints]
+workspace = true
+
 [dependencies]
 deveye-core = { path = "../../deveye-core" }
 deveye-ports = { path = "../../deveye-ports" }

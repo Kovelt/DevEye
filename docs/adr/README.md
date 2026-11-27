@@ -72,3 +72,5 @@ Option retenue, en une phrase.
 | [0006](0006-exception-rustsec-chrono.md) | Exception d'audit pour chrono (RUSTSEC-2026-0543) | Accepté |
 | [0007](0007-exception-rustsec-quick-xml.md) | Exception d'audit pour quick-xml en build-dependency (RUSTSEC-2026-0194 et 0195) | Accepté |
 | [0008](0008-montees-de-version-avis-rustsec.md) | Montées de version des dépendances touchées par les avis RUSTSEC | Accepté |
+| [0009](0009-lints-de-workspace-et-exception-kwin-eis.md) | Lints de workspace et exception unsafe de l'adapter KWin EIS | Accepté |
+| [0010](0010-toolchain-stable-et-msrv-1-88.md) | Toolchain stable épinglée par fichier et MSRV 1.88 | Accepté |

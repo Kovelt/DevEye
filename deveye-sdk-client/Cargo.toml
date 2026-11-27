@@ -10,5 +10,8 @@ homepage.workspace = true
 description = "Client HTTP partage pour les adapters DevEye communiquant avec le SDK opt-in."
 publish = false  # interne, non publie
 
+[lints]
+workspace = true
+
 [dependencies]
 reqwest = { workspace = true }

@@ -1,0 +1,6 @@
+# Toolchain de développement : stable, avec rustfmt et clippy. La MSRV (1.88,
+# `rust-version` du workspace) est vérifiée à part en CI (`cargo +1.88 check`).
+# ADR-0010.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

@@ -10,6 +10,9 @@ homepage.workspace = true
 description = "Adapter DevEye : presse-papiers Wayland via wl-copy / wl-paste (wl-clipboard)."
 publish = false  # interne, non publie
 
+[lints]
+workspace = true
+
 [dependencies]
 deveye-ports = { path = "../../deveye-ports" }
 async-trait = { workspace = true }

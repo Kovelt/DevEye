@@ -10,6 +10,9 @@ homepage.workspace = true
 description = "Domaine pur de DevEye : AppSession, Snapshot, InteractionCommand, Recording, Diff."
 publish = false  # interne, non publie
 
+[lints]
+workspace = true
+
 [dependencies]
 chrono = { workspace = true }
 serde = { workspace = true }
