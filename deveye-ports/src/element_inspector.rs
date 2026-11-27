@@ -34,6 +34,11 @@ pub enum ElementError {
     /// Un autre élément recouvre le centre ; `by` est sa référence si elle est connue.
     #[error("élément couvert")]
     Obscured { by: Option<String> },
+    /// L'arbre servi par l'app est trop ancien pour qu'on agisse dessus : l'app ne
+    /// republie plus (gelée, ou rendu à la demande qui ne s'est pas déclenché), les
+    /// rects pourraient être périmés. `age_ms` est l'âge mesuré.
+    #[error("arbre périmé : publié il y a {age_ms} ms")]
+    StaleTree { age_ms: u64 },
     /// Cette cible ne sait pas produire d'éléments ; `hint` dit comment faire.
     #[error("éléments non pris en charge : {hint}")]
     Unsupported { hint: String },

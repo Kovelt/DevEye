@@ -84,7 +84,7 @@ impl SnapshotParams {
             query = query.with_scope(scope.trim());
         }
         if let Some(depth) = self.max_depth {
-            query = query.with_max_depth(depth);
+            query = query.with_max_depth(depth.max(1));
         }
         query
     }
@@ -336,6 +336,15 @@ pub(crate) fn element_failure(
             }
             error.into_result()
         }
+        ElementError::StaleTree { age_ms } => tagged(ToolError::new(
+            ErrorReason::StaleTree,
+            format!("l'app n'a pas republié son arbre depuis {age_ms} ms"),
+        ))
+        .with_hint(
+            "l'app est peut-être gelée ou n'a pas redessiné : provoquer un rendu (survol, \
+             focus de la fenêtre) puis relancer `snapshot` ; les rects pourraient être périmés",
+        )
+        .into_result(),
         ElementError::UnknownRef(unknown) => ToolError::new(
             ErrorReason::UnknownRef,
             format!("référence inconnue : {unknown}"),
@@ -392,7 +401,7 @@ pub(crate) fn element_failure(
 #[tool_router(router = perception_router, vis = "pub(crate)")]
 impl DeveyeMcpServer {
     #[tool(
-        description = "[expérimental] Décrit les éléments de l'app cible en arbre compact, chacun avec une RÉFÉRENCE réutilisable par `act` (hors promesse semver, ADR-0073). Références : `w:<id>` pour les widgets natifs (cibles x11 et kwin-eis, identifiant fourni par l'app via la route `ui.widgets` : stable d'une relance à l'autre seulement si l'app fournit des identifiants déterministes ; les éléments `[ephemeral]` ont un identifiant dupliqué ou synthétisé, non durable) ; `e<n>` pour les pages web (cibles sdk et auto, script du pont JS : stable tant que le nœud vit, jamais réutilisée, périmée par un rechargement de la page ; rôle implicite et nom accessible simplifiés, iframes non parcourues, jamais la valeur d'un champ mot de passe). Texte par défaut, une ligne par élément : `- button \"Enregistrer\" [ref=w:save] [disabled]` (états `disabled`, `checked`/`unchecked`, `expanded`/`collapsed`, `selected`, `focused`, `offscreen`, `scrollable`, `ephemeral`, puis ` = \"valeur\"` ; jamais la valeur d'un champ secret) ; `focus:` désigne l'élément qui a le focus clavier ; `format: \"json\"` rend le même contenu avec les rects (aussi en `structuredContent`). Paramètres : `scope` (référence d'un sous-arbre), `max_depth`, `max_nodes` (défaut 400, plafond 2000, `truncated` si coupé), `interactive_only` (défaut true), `viewport_only` (défaut false). Les rects sont INDICATIFS : `act` remesure au moment de l'action. Sur une cible sans arbre d'éléments, répond `isError` `{ ok: false, reason: \"unsupported\", hint }` avec la marche à suivre (`target_info.elements` le dit d'avance).",
+        description = "[expérimental] Décrit les éléments de l'app cible en arbre compact, chacun avec une RÉFÉRENCE réutilisable par `act` (hors promesse semver, ADR-0073). Références : `w:<id>` pour les widgets natifs (cibles x11 et kwin-eis, identifiant fourni par l'app via la route `ui.widgets` : stable d'une relance à l'autre seulement si l'app fournit des identifiants déterministes ; les éléments `[ephemeral]` ont un identifiant dupliqué ou synthétisé, non durable : un identifiant synthétisé dont le rôle ou le nom a changé répond `stale_ref`) ; `e<n>` pour les pages web (cibles sdk et auto, script du pont JS : stable tant que le nœud vit, jamais réutilisée, périmée par un rechargement de la page ; rôle implicite et nom accessible simplifiés, iframes non parcourues, shadow roots ouverts traversés, valeur masquée pour les champs reconnus comme secrets par heuristique ou marqués `data-deveye-secret`). Texte par défaut, une ligne par élément : `- button \"Enregistrer\" [ref=w:save] [disabled]` (états `disabled`, `checked`/`unchecked`, `expanded`/`collapsed`, `selected`, `focused`, `offscreen`, `scrollable`, `ephemeral`, puis ` = \"valeur\"` ; jamais la valeur d'un widget secret) ; `focus:` désigne l'élément qui a le focus clavier ; `format: \"json\"` rend le même contenu avec les rects (aussi en `structuredContent`). Paramètres : `scope` (référence d'un sous-arbre), `max_depth`, `max_nodes` (défaut 400, plafond 2000, `truncated` si coupé), `interactive_only` (défaut true), `viewport_only` (défaut false). Les rects sont INDICATIFS : `act` remesure au moment de l'action. Sur une cible sans arbre d'éléments, répond `isError` `{ ok: false, reason: \"unsupported\", hint }` avec la marche à suivre (`target_info.elements` le dit d'avance).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -703,6 +712,12 @@ mod tests {
                 None
             )["reason"],
             "ambiguous_ref"
+        );
+        let stale_tree = read(ElementError::StaleTree { age_ms: 42_000 }, Some("w:ok"));
+        assert_eq!(stale_tree["reason"], "stale_tree");
+        assert!(
+            stale_tree["hint"].is_string()
+                && stale_tree["detail"].as_str().unwrap().contains("42000")
         );
         let obscured = read(
             ElementError::Obscured {

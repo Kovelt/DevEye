@@ -155,6 +155,8 @@ pub(crate) enum ErrorReason {
     InteractionFailed,
     /// La référence d'élément a existé mais l'élément a disparu (`act`).
     StaleRef,
+    /// L'app n'a pas republié son arbre d'éléments depuis trop longtemps (`act`).
+    StaleTree,
     /// La référence n'a jamais été émise ou n'a pas une forme connue (`act`).
     UnknownRef,
     /// Plusieurs éléments portent la même référence : agir serait un pari.
