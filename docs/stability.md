@@ -16,7 +16,7 @@ Tant que la version majeure ne change pas, ces éléments ne cassent pas.
 | `deveye-sdk-client` | client HTTP et constantes partagés avec les adapters |
 | **Wire protocol v1** | endpoints, formes JSON et en-têtes décrits dans [wire-protocol.md](wire-protocol.md), dont `X-DevEye-Protocol-Version: 1.0` (la mineure augmente à chaque ajout, la majeure à chaque rupture) |
 | **Outils MCP** | le nom de chaque outil, le nom et le type de chaque paramètre, la forme de chaque réponse |
-| **`deveye-server`** | les options (`--target`, `--display`, `--cdp-url`, `--sdk-url`, `--screencap-window`, etc.), leurs valeurs possibles et leurs valeurs par défaut |
+| **`deveye-server`** | les options (`--target`, `--display`, `--cdp-url`, `--sdk-url`, `--screencap-window`, etc.), leurs valeurs possibles, leurs valeurs par défaut et les combinaisons refusées ([ADR-0031](adr/0031-validation-des-flags-selon-la-cible.md)) ; `--version` ; la sous-commande `doctor` et ses codes de sortie (0 : prêt ou avertissements, 1 : prérequis bloquant manquant, 2 : erreur d'usage) — le texte du diagnostic n'est pas couvert |
 
 Les crates MIT (`deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`) sont les seuls destinés à être consommés comme bibliothèques ; ils ne dépendent jamais d'un crate AGPL ([ADR-0002](adr/0002-licences-agpl-outil-mit-bibliotheques.md)).
 

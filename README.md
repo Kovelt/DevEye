@@ -118,6 +118,13 @@ DISPLAY=:250 ./mon-app &          # l'app tourne SUR le serveur privé
   --serve-mcp
 ```
 
+Les options propres à une cible sont refusées avec les autres (une option sans effet est une erreur, pas un silence) ; sans `--serve-mcp`, le binaire s'arrête en erreur d'usage.
+
+```bash
+deveye-server --version                   # version, commit de build, versions des protocoles
+deveye-server doctor --target kwin-eis    # diagnostic en lecture seule : un statut et un conseil par vérification
+```
+
 ### Brancher dans Claude Code (`.mcp.json`)
 
 Créer `.mcp.json` à la racine du projet client :

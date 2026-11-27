@@ -113,7 +113,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `dom` | aucun | JSON du DOM courant, plus un second bloc `{captured_at}` (erreur `isError` si l'arbre dépasse ~100 Ko : cibler avec `find_element`/`eval_js`) | « renvoie le DOM courant » |
 | `state` | `{keys?}` | JSON `{ ... }` (filtré aux clés demandées si `keys` fourni), plus un second bloc `{captured_at, signals, note?}` ; `signals: 0` = SDK joignable mais aucun signal publié ; SDK injoignable = `isError` `{reason: "sdk_unavailable"}` | « quel est l'état applicatif courant ? » ; `keys: ["count"]` pour un seul signal |
 | `assert_state` | `{expected}` | JSON `{ok, mismatches}` | « vérifie `{count: 3, page: "Agenda"}` dans le state » (`isError` si divergence) |
-| `target_info` | aucun | JSON `{target, eyes, hands, eval_js, dom, state, console_errors, list_windows, notes}` | « quelles capacités a la cible ? » (à appeler en premier ; dit si `eval_js`/`dom` répondront) |
+| `target_info` | aucun | JSON `{target, effective_backend, eyes, hands, eval_js, dom, state, console_errors, list_windows, window_geometry, focus_window, window_manager, clipboard, js_dependent_tools, server: {version, commit, sdk_protocol, mcp_protocol}, notes}` | « quelles capacités a la cible ? » (à appeler en premier ; dit si `eval_js`/`dom`/fenêtres/presse-papiers répondront, quel backend sert réellement — `cdp`, `sdk` après un repli du mode `auto`, ou `indetermine` — et la version du serveur) |
 | `logs_tail` | `{limit?}` | JSON `{events: [{level, target, message, ...}], truncated, total}` (défaut 200 events les plus récents ; `total` = nombre réellement drainé) | « affiche les derniers logs » |
 | `logs_wait` | `{level_min?, timeout_ms?, limit?}` | JSON `{events, timed_out, truncated, total}` | « clique Valider puis attends une erreur (max 10 s) » (long-poll : rend tous les logs drainés ; `level_min` invalide = `invalid_params` ; défaut 5000 ms, plafond 30000) |
 | `find_element` | `{selector}` | JSON `{found, tag, text, value, rect, visible, disabled, attributes}` | « inspecte le premier `#save-btn` » (alternatif léger à `dom` ; `value` = valeur des inputs) |
@@ -159,7 +159,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 - `eval_js` est le couteau-suisse pour tout cas non couvert : lire un `getBoundingClientRect`, sonder un état frontend, déclencher du JS interne au framework, ou injecter des événements clavier (`new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })`).
 - **Touche clavier** : `press_key({ key })` pour une touche unique (`Enter`, `Tab`, `Escape`, `ArrowDown`…), `key_combo({ modifiers, key })` pour une combinaison (`Ctrl+S`, `Ctrl+Shift+P`). Les deux marchent en kwin-eis et en x11 (events OS-level), là où `eval_js` est indisponible. Nuance de nommage : noms W3C en CDP (`Enter`, `ArrowDown`), noms XKB en kwin-eis (`Return`, `Down`), les deux acceptés en x11 ; les noms communs (`Tab`, `Escape`, `F5`) passent partout.
 - **Navigation** : `navigate({ route })` (routeur du SDK opt-in, interface découvrable) ; ou `invoke_command` si l'app expose une route logique métier (ex. `set-page`). Indisponible en kwin-eis (pas de routeur applicatif OS-level).
-- **Découverte de cible** : appeler `target_info` en début de session dit quelles capacités répondront (ex. `eval_js`/`dom` = false en kwin-eis) — évite de tester un outil pour découvrir qu'il renvoie `Unsupported`.
+- **Découverte de cible** : appeler `target_info` en début de session dit quelles capacités répondront (ex. `eval_js`/`dom` = false en kwin-eis ; `list_windows`, `window_geometry` et `focus_window` = false hors KDE/Wayland ; `focus_window` exige en plus `--screencap-window`) — évite de tester un outil pour découvrir qu'il renvoie `Unsupported`. `js_dependent_tools` liste les outils qui exigent un moteur JS. En mode `auto`, `effective_backend` passe de `cdp` à `sdk` quand le CDP tombe (et la bascule est journalisée sur stderr) : relire `target_info` si un geste ne se comporte plus comme en CDP.
 - **Disparition d'un élément** : `wait_for_selector({ selector, negate: true })` attend qu'un spinner/toast/modale disparaisse (pas de sleep arbitraire).
 - Le buffer logs est **drainé** à chaque appel `logs_tail` : un second appel ne renverra que les events arrivés entre-temps. Pour attendre de nouveaux logs après une action sans boucler côté agent, utiliser `logs_wait` (long-poll, filtre `level_min`, rend les logs drainés) ; `wait_for_log` attend un message précis mais consomme les logs qu'il ignore.
 - Pour éviter tout sleep arbitraire après une action asynchrone, préférer `wait_for_selector` (attend un sélecteur CSS) ou `wait_condition` (prédicats : `dom-selector`, `state-key`, `screenshot-stable`).
@@ -398,6 +398,42 @@ Dans le client, après les deux lancements :
 
 Le client doit appeler `mcp__deveye__screenshot` (et afficher l'image) puis `mcp__deveye__state`. Si ça marche, on est branché.
 
+### Diagnostiquer avant de lancer : `deveye-server doctor`
+
+Quand quelque chose ne répond pas (binaire périmé, port pris, filtre CDP, variable KWin absente), `doctor` vérifie l'environnement **en lecture seule** pour la cible demandée, sans composer les adapters ni lancer de serveur :
+
+```bash
+deveye-server doctor                      # cible auto
+deveye-server doctor --target kwin-eis    # les options de cible s'appliquent
+deveye-server doctor --target x11 --display :250 --sdk-url http://127.0.0.1:31400
+```
+
+Chaque vérification affiche un statut et, quand ce n'est pas `[OK]`, un conseil :
+
+| Vérification | Ce qui est sondé |
+|---|---|
+| Session graphique | `XDG_SESSION_TYPE` et `XDG_CURRENT_DESKTOP` (Wayland/X11, KDE) |
+| KWin | un processus `kwin_wayland`/`kwin_x11` de l'utilisateur dans `/proc` |
+| `KWIN_SCREENSHOT_NO_PERMISSION_CHECKS` | la variable dans l'environnement du processus KWin (repli sur celui de `doctor` si `/proc/<pid>/environ` est protégé) |
+| Accès EIS | introspection D-Bus (`busctl --user introspect`) de `org.kde.KWin.EIS.RemoteDesktop` ; la connexion réelle n'est jamais tentée |
+| Xvfb, display privé | `Xvfb` dans le `PATH` ; garde d'isolation d'`adapter-x11` et socket `/tmp/.X11-unix/X<n>` |
+| SDK de l'app cible | `GET /devtools/info` : version du SDK, version du protocole, capacités ; distingue « port occupé par autre chose » de « rien n'écoute » |
+| CDP | `GET /json/version` : navigateur et version du protocole CDP ; même distinction pour le port |
+
+Statuts : `[OK]`, `[ATTENTION]` (utile à la cible, non bloquant : capacité réduite), `[ÉCHEC]` (prérequis bloquant de la cible demandée), `[SANS OBJET]`. **Code de sortie : 1 si au moins un `[ÉCHEC]`, 0 sinon** (les avertissements ne font pas échouer). Un même manque n'a pas la même gravité selon la cible : le SDK est bloquant pour `--target sdk`, un simple avertissement pour `auto`. Les sondes réseau ont un délai de 3 s.
+
+### Version
+
+`deveye-server --version` affiche la version du binaire, le commit court de la compilation (`inconnu` hors dépôt git) et les versions des protocoles ; `-V` n'en donne que la première ligne :
+
+```text
+deveye-server 1.0.0 (commit 1a2b3c4d5)
+protocole SDK (wire protocol) : 1.0
+protocole MCP : 2025-11-25
+```
+
+Les mêmes informations sont dans le champ `server` de `target_info` et dans le `serverInfo` de l'handshake MCP. Le commit vient de la variable d'environnement `DEVEYE_GIT_COMMIT` si elle est posée à la compilation (builds de release), sinon de `git rev-parse` s'il est disponible.
+
 ---
 
 ## Étape 6 — Sécurité : vérifier qu'aucune ligne DevEye ne fuite en prod
@@ -428,8 +464,11 @@ Côté app cible, le seul fichier qui référence DevEye est son `Cargo.toml` (f
 
 | Symptôme | Cause probable | Fix |
 |----------|----------------|-----|
-| `CDP injoignable au demarrage (...) — reconnexion automatique au premier appel d'outil.` | App cible pas lancée avec `--features deveye`, navigateur CDP absent, ou WebView2 pas prêt | Lancer l'app/navigateur puis **rappeler l'outil** : l'attache est paresseuse, inutile de relancer `deveye-server`. En natif Linux, utiliser `--target sdk`. |
+| `CDP injoignable au démarrage — reconnexion automatique au premier appel d'outil` (avertissement sur stderr) | App cible pas lancée avec `--features deveye`, navigateur CDP absent, ou WebView2 pas prêt | Lancer l'app/navigateur puis **rappeler l'outil** : l'attache est paresseuse, inutile de relancer `deveye-server`. En natif Linux, utiliser `--target sdk`. |
 | `timeout en attente d'une page CDP attachable (10 s) : aucune page ne correspond au filtre (…) ; pages vues : …` | Aucune page ouverte ne correspond au filtre de cible ; le message liste les pages vues (titre et URL tronqués) | Corriger le filtre d'après la liste : `--cdp-target-filter-url <sous-chaine>` ou `--cdp-target-filter-title <sous-chaine>` ; `--cdp-accept-blank` si la page est encore `about:blank` ; vérifier que le navigateur/l'app est chargé(e) |
+| `repli sur le pont natif (SDK + OS) : le CDP est injoignable` (stderr) | Mode `auto` : le CDP est tombé, les appels passent par le pont SDK (la bascule est journalisée une fois, le retour aussi) | `target_info` → `effective_backend` dit lequel sert ; relancer le navigateur/l'app pour revenir au CDP, ou fixer `--target sdk`/`cdp` |
+| `error: aucun mode : ajouter --serve-mcp …` (code 2) | Le binaire n'a plus de sortie silencieuse « composition validée » | Ajouter `--serve-mcp`, ou utiliser `deveye-server doctor` pour diagnostiquer |
+| `error: --cdp-url n'est accepté qu'avec --target auto ou cdp ; cible actuelle : sdk` (code 2) | Une option sans effet sur la cible est refusée plutôt qu'ignorée (même règle pour `--cdp-target-filter-*`, `--cdp-accept-blank`, et `--screencap-backend` avec `x11`) | Retirer l'option, ou changer de `--target` |
 | `Connection refused: 127.0.0.1:31337` côté `state` ou `logs_tail` | Feature `deveye` absente du build de l'app | Vérifier `dx serve --features deveye`. Le SDK refuse de bind sinon |
 | Le client ne voit pas `deveye` dans `/mcp` | `.mcp.json` mal placé, syntaxe JSON invalide, ou chemin du binaire faux | Vérifier `.mcp.json` à la racine ; valider la syntaxe ; vérifier que `target\release\deveye-server.exe` existe |
 | `Tool execution failed: ...` quand on appelle un outil | Erreur côté adapter (CDP injoignable, SDK crashé, etc.) | Regarder les logs `deveye-server` dans le panneau MCP du client ; relancer l'app si besoin |
