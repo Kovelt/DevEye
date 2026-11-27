@@ -98,3 +98,5 @@ Option retenue, en une phrase.
 | [0032](0032-sous-commande-doctor-en-lecture-seule.md) | Sous-commande `doctor` en lecture seule | Proposé |
 | [0033](0033-version-affichee-et-provenance-du-commit-sans-dependance.md) | Version affichée et provenance du commit (sans dépendance) | Proposé |
 | [0034](0034-capacites-completes-de-target-info-et-repli-observable.md) | Capacités complètes de `target_info`, repli observable et choix unique du backend OS | Proposé |
+| [0035](0035-suite-de-conformite-boite-noire-du-protocole.md) | Suite de conformité boîte noire du protocole | Accepté |
+| [0036](0036-statut-du-shim-dotnet-implementation-tierce.md) | Statut du shim .NET : implémentation tierce validée par la suite de conformité | Accepté |
