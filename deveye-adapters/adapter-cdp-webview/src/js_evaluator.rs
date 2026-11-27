@@ -40,16 +40,23 @@ struct RemoteException {
     value: Value,
     #[serde(default)]
     description: Option<String>,
+    /// `error` pour une instance d'`Error` ; absent pour les autres valeurs.
+    #[serde(default)]
+    subtype: Option<String>,
 }
 
 impl ExceptionDetails {
-    /// Message lisible et trace éventuelle, dans l'ordre de préférence :
-    /// `description` (première ligne = message, le tout = trace si elle a
-    /// plusieurs lignes), puis la valeur levée, puis le `text` générique
-    /// (« Uncaught »).
+    /// Message lisible et trace éventuelle. Pour une `Error`, `description`
+    /// (première ligne = message, le tout = trace si elle a plusieurs
+    /// lignes). Pour toute autre valeur levée (`throw {code: 42}`), la valeur
+    /// prime : `description` n'y vaut que « Object ». Sans valeur, on retombe
+    /// sur `description`, puis sur le `text` générique (« Uncaught »).
     fn into_error(self) -> PortError {
         let thrown = self.exception.unwrap_or_default();
-        if let Some(description) = thrown.description.filter(|d| !d.trim().is_empty()) {
+        let is_error = thrown.subtype.as_deref() == Some("error");
+        let has_value = !thrown.value.is_null();
+        let description = thrown.description.filter(|d| !d.trim().is_empty());
+        if let Some(description) = description.filter(|_| is_error || !has_value) {
             let message = description.lines().next().unwrap_or("").trim().to_string();
             let stack = description.contains('\n').then_some(description);
             return PortError::Script { message, stack };
@@ -127,6 +134,41 @@ mod tests {
             }
             other => panic!("attendu Script, obtenu {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_thrown_plain_object_reports_its_value_not_the_generic_description() {
+        let error = details(json!({
+            "text": "Uncaught",
+            "exception": {
+                "type": "object",
+                "description": "Object",
+                "value": { "code": 42 }
+            }
+        }))
+        .into_error();
+        assert!(matches!(
+            error,
+            PortError::Script { ref message, stack: None } if message == r#"{"code":42}"#
+        ));
+    }
+
+    #[test]
+    fn an_error_instance_keeps_its_description_even_with_a_value() {
+        let error = details(json!({
+            "text": "Uncaught",
+            "exception": {
+                "type": "object",
+                "subtype": "error",
+                "description": "TypeError: x\n    at <anonymous>:1:1",
+                "value": { "ignored": true }
+            }
+        }))
+        .into_error();
+        assert!(matches!(
+            error,
+            PortError::Script { ref message, .. } if message == "TypeError: x"
+        ));
     }
 
     #[test]
