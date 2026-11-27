@@ -42,7 +42,7 @@ Sous KDE Plasma Wayland, ajouter au besoin `"--screencap-backend", "kwin"` et po
 | Marche | Ne marche pas |
 |---|---|
 | `screenshot*`, `assert_visual`, `observe` | `resize`, `upload_file`, `handle_dialog` (CDP seulement) |
-| `click*`, `hover`, `drag_drop`, `type_text`, `press_key`, `key_combo`, `scroll` (événements JS synthétiques) | tout ce qui exige de **vrais** événements système (menus natifs, dialogues du système) |
+| `click*`, `hover`, `drag_drop`, `type_text`, `press_key`, `key_combo`, `scroll`, paramètre `modifiers` (événements JS synthétiques, `isTrusted` faux ; `key_hold` indisponible) | tout ce qui exige de **vrais** événements système (menus natifs, dialogues du système) |
 | `eval_js`, `dom` (`outerHTML`), `find_element`, `wait_for_*`, `collect_console_errors` | `list_windows` (liste vide : pas de vue inter-fenêtres) |
 | `state`, `logs_*`, `invoke_command`, `navigate` | |
 

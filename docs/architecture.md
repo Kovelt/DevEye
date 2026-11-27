@@ -84,7 +84,8 @@ DevEye/
 │       ├── snapshot.rs         # Screenshot, DomTree, StateDump, Position, Size
 │       ├── command.rs          # InteractionCommand (Click, Hover, Type, KeyPress, KeyCombo,
 │       │                       # Navigate, DragDrop, Scroll, DoubleClick, HandleDialog, UploadFile,
-│       │                       # Resize), MouseButton, CommandDescriptor
+│       │                       # Resize, WithModifiers, KeyHold), MouseButton, CommandDescriptor
+│       ├── modifier.rs         # Modifier (Ctrl, Shift, Alt, Meta), MAX_KEY_HOLD_MS
 │       ├── wait_condition.rs   # WaitPredicate, WaitOutcome
 │       ├── console_error.rs    # ConsoleError, ConsoleLevel
 │       ├── window_info.rs      # WindowInfo
@@ -203,9 +204,11 @@ Variantes de `InteractionCommand` (`deveye-core/src/command.rs`) :
 - `HandleDialog { accept, prompt_text }` — répond à une boîte de dialogue JS (`alert`/`confirm`/`prompt`). CDP-only : le moteur JS est suspendu pendant un dialog, `eval_js` y est impossible.
 - `UploadFile { selector, paths }` — renseigne les fichiers d'un `input[type=file]`. CDP-only (`DOM.setFileInputFiles`) : le verrou de sécurité navigateur interdit de setter `.value` depuis JS.
 
+- `WithModifiers { modifiers, command }` — décorateur (depuis 1.2) : exécute un geste de pointeur (`Click`, `DoubleClick`, `Hover`, `DragDrop`, `Scroll`, jamais une imbrication ni un `KeyHold`) avec des `Modifier` (`Ctrl`, `Shift`, `Alt`, `Meta`) maintenus. Vérifié à la construction, à la désérialisation et par `validate()`, que chaque adapter appelle avant d'émettre. x11 et kwin-eis pressent de vraies touches autour du geste et relâchent toujours en ordre inverse ; CDP renseigne le masque `modifiers` des événements souris ; le pont SDK pose `ctrlKey`/`shiftKey`/`altKey`/`metaKey` sur des événements synthétiques non fiables (ADR-0075).
+- `KeyHold { key, duration_ms }` — touche maintenue puis relâchée en un seul appel, au plus `MAX_KEY_HOLD_MS` (10 000). x11 et kwin-eis seulement ; `Unsupported` en CDP et via le pont SDK (ADR-0075).
 - `Resize { width, height }` — émule un viewport de `width` x `height` pixels CSS (`Emulation.setDeviceMetricsOverride`, `deviceScaleFactor: 0` pour garder l'échelle réelle de l'écran). Émulation du moteur de rendu : la fenêtre de l'OS n'est pas redimensionnée ; `0` x `0` retire l'émulation. CDP-only : toutes les autres cibles répondent `Unsupported` (ADR-0019).
 
-Adapters : `adapter-x11` (XTEST `FakeInput` sur un serveur X privé — gestes interpolés, clavier du serveur, remappage temporaire des caractères absents ; `Navigate`/`HandleDialog`/`UploadFile`/`Resize` → `Unsupported`), `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`, toutes variantes), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK ; `Navigate`/`HandleDialog`/`UploadFile`/`Resize` y renvoient `PortError::Unsupported`, sémantique applicative ou WebView impossible OS-level).
+Adapters : `adapter-x11` (XTEST `FakeInput` sur un serveur X privé — gestes interpolés, clavier du serveur, remappage temporaire des caractères absents ; `Navigate`/`HandleDialog`/`UploadFile`/`Resize` → `Unsupported` ; `plan_modifiers` et `plan_hold` pour `WithModifiers` et `KeyHold`), `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`, toutes variantes), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK ; `Navigate`/`HandleDialog`/`UploadFile`/`Resize` y renvoient `PortError::Unsupported`, sémantique applicative ou WebView impossible OS-level).
 
 ### 4. `JsEvaluator`
 

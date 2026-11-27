@@ -42,7 +42,7 @@ Le test de bout en bout de cette cible se fait à la main sur une vraie session 
 
 - **Focus.** EIS envoie les événements à la fenêtre **active**. Une notification Plasma ou un dialogue système peut la remplacer et détourner les clics **sans erreur**. Appeler `focus_window` avant chaque séquence d'interaction.
 - **Coordonnées.** Les gestes sont relatifs au viewport de la fenêtre capturée ; `window_geometry` donne l'origine écran de la fenêtre si l'agent doit raisonner en coordonnées absolues.
-- **Touches.** Noms XKB (`Return`, `Down`) ; les noms communs (`Tab`, `Escape`, `F5`, `space`) passent partout. `key_combo` déclenche les raccourcis du toolkit (Ctrl+S, Ctrl+Z).
+- **Touches.** Noms XKB (`Return`, `Down`) ; les noms communs (`Tab`, `Escape`, `F5`, `space`) passent partout. `key_combo` déclenche les raccourcis du toolkit (Ctrl+S, Ctrl+Z). Le paramètre `modifiers` des outils de souris presse de vraies touches autour du geste (Shift+clic pour étendre une sélection) et `key_hold` maintient une touche jusqu'à 10 s ; le comportement sur la session vivante (dialogue d'autorisation EIS) se vérifie à la main ([ADR-0075](../adr/0075-modificateurs-d-entree-withmodifiers-et-keyhold-borne.md)).
 - **Saisie.** `type_text` envoie des événements sans savoir si un champ les reçoit : vérifier par `screenshot_region`.
 - **Connexion EIS.** La connexion D-Bus qui appelle `connectToEIS` doit rester ouverte pendant toute la session ; DevEye la maintient, ne pas la couper.
 - **Liste des fenêtres.** `list_windows` rend visibles les fenêtres qui peuvent voler le focus ; l'utiliser quand les clics « ne font rien ».
