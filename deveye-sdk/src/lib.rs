@@ -249,8 +249,10 @@ pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
 ///
 /// Appelable de n'importe où (avant `dioxus::launch` compris). Idempotent au
 /// sens où un second appel re-spawn une tâche mais échouera à lier le même
-/// port (avertissement `tracing`) — ce qui est sans conséquence pour l'app. Un
-/// port déjà pris est signalé de la même façon, sans interrompre l'app.
+/// port : l'échec est écrit sur stderr (et dans `tracing`), sans interrompre
+/// l'app. Les clés de `with_secret_keys` **s'accumulent** entre appels : un
+/// second `init` ne démasque jamais celles du premier. Un port déjà pris est
+/// signalé de la même façon.
 ///
 /// **Filet de sécurité (défense en profondeur)** : en build **release**, cette
 /// fonction est un **no-op** — le SDK n'ouvre *jamais* de port HTTP hors
@@ -267,14 +269,19 @@ pub fn init(config: Config) {
     #[cfg(debug_assertions)]
     {
         let registry = REGISTRY.clone();
-        *registry
+        // Étend l'ensemble au lieu de l'affecter : un second `init` (port de
+        // repli, double appel) ne doit jamais démasquer des clés posées par un
+        // premier appel dont le serveur sert encore le même registre.
+        registry
             .secret_keys
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = config
-            .secret_keys
-            .iter()
-            .map(|key| redact::normalize_key(key))
-            .collect();
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(
+                config
+                    .secret_keys
+                    .iter()
+                    .map(|key| redact::normalize_key(key)),
+            );
         runtime().spawn(async move {
             let app = Router::new()
                 .route("/devtools/info", get(info_handler))
@@ -303,28 +310,43 @@ pub fn init(config: Config) {
                 .layer(middleware::from_fn(add_protocol_version))
                 .with_state(registry);
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], config.port));
-            match tokio::net::TcpListener::bind(addr).await {
-                Ok(listener) => {
-                    if let Err(e) = axum::serve(listener, app).await {
-                        tracing::error!(
-                            "deveye-sdk: le serveur HTTP s'est arrete avec une erreur: {e}"
-                        );
-                    }
-                }
-                Err(e) => {
-                    // Non fatal pour l'app hôte, mais jamais silencieux : sans
-                    // ce message, un port pris (autre instance, autre app)
-                    // laissait l'agent parler à la mauvaise app sans le savoir.
-                    tracing::warn!(
-                        port = config.port,
-                        error = %e,
-                        "deveye-sdk: impossible de lier 127.0.0.1:{} ; le SDK reste inactif \
-                         (choisir un autre port via DEVEYE_PORT)",
-                        config.port
+            if let Some(listener) = bind_or_report(addr).await {
+                if let Err(e) = axum::serve(listener, app).await {
+                    tracing::error!(
+                        "deveye-sdk: le serveur HTTP s'est arrete avec une erreur: {e}"
                     );
                 }
             }
         });
+    }
+}
+
+/// Message d'échec de liaison du port, partagé par stderr et `tracing`.
+#[cfg(debug_assertions)]
+fn bind_failure_message(addr: std::net::SocketAddr, error: &std::io::Error) -> String {
+    format!(
+        "deveye-sdk: impossible de lier {addr} ({error}) ; le SDK reste inactif \
+         (choisir un autre port via DEVEYE_PORT)"
+    )
+}
+
+/// Lie l'adresse ; en cas d'échec (port pris par une autre instance ou une
+/// autre app), le signale sans interrompre l'app hôte.
+///
+/// Le message part aussi sur stderr : `init` s'exécute avant l'installation de
+/// la couche `tracing` du SDK (et souvent avant tout abonné), donc un simple
+/// `tracing::warn!` serait perdu et l'agent parlerait à la mauvaise app sans
+/// le savoir.
+#[cfg(debug_assertions)]
+async fn bind_or_report(addr: std::net::SocketAddr) -> Option<tokio::net::TcpListener> {
+    match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => Some(listener),
+        Err(error) => {
+            let message = bind_failure_message(addr, &error);
+            eprintln!("{message}");
+            tracing::warn!(port = addr.port(), error = %error, "{message}");
+            None
+        }
     }
 }
 
@@ -687,6 +709,29 @@ mod tests {
         }
         std::env::remove_var("DEVEYE_PORT");
         assert_eq!(Config::default().port, DEFAULT_PORT);
+    }
+
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn bind_or_report_returns_none_when_port_is_taken() {
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = taken.local_addr().unwrap();
+        assert!(bind_or_report(addr).await.is_none());
+        let error = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+        let message = bind_failure_message(addr, &error);
+        assert!(message.contains(&addr.to_string()) && message.contains("DEVEYE_PORT"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn second_init_keeps_secret_keys_of_the_first() {
+        // Port déjà pris : les `init` n'ouvrent aucun serveur utilisable.
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = taken.local_addr().unwrap().port();
+        init(Config::with_port(port).with_secret_keys(["iban-test-r25"]));
+        init(Config::with_port(port));
+        let keys = REGISTRY.secret_keys.read().unwrap();
+        assert!(keys.contains(&redact::normalize_key("iban-test-r25")));
     }
 
     #[test]
