@@ -85,3 +85,4 @@ Option retenue, en une phrase.
 | [0019](0019-resize-variante-d-interaction-command.md) | Redimensionnement du viewport : variante `InteractionCommand::Resize` | Accepté |
 | [0020](0020-logs-wait-long-poll-des-logs.md) | `logs_wait` : long-poll des logs et niveau invalide en `invalid_params` | Proposé |
 | [0021](0021-validation-des-coordonnees-des-gestes.md) | Validation des coordonnées des gestes avant dispatch | Proposé |
+| [0022](0022-capture-cdp-a-l-echelle-css.md) | Capture CDP à l'échelle CSS | Proposé |

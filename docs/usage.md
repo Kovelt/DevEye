@@ -89,7 +89,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|
-| `screenshot` | aucun | image PNG (contenu image natif MCP, affichée par le client) | « prends un screenshot » |
+| `screenshot` | aucun | image PNG (contenu image natif MCP, affichée par le client) | « prends un screenshot » (**en CDP, le PNG est à l'échelle CSS** : 1 pixel d'image = 1 pixel CSS, les coordonnées lues sur l'image se passent telles quelles à `click`/`hover`, y compris sur un écran HiDPI — aucun facteur à appliquer) |
 | `screenshot_region` | `{x, y, width, height}` | image PNG recadrée | « capture la zone (0, 0, 320, 200) » (vérif ciblée, moins de tokens ; seule vérif visuelle de composant en kwin-eis) |
 | `screenshot_element` | `{selector}` | image PNG recadrée (ou `isError {found:false}`) | « capture `#facture` » (résout le rect par JS, gère le DPI ; cdp/sdk) |
 | `assert_visual` | `{baseline_path, threshold?, x?, y?, width?, height?}` | JSON `{ok, diff_ratio, threshold, same_dims, ...}` | « compare au golden `ref.png` » (crée la baseline si absente ; `isError` si > seuil ; **seule assertion déterministe en kwin-eis**) |
@@ -128,7 +128,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `list_commands` | aucun | JSON `[{name, description}]` | « quelles commandes l'app expose-t-elle ? » |
 | `collect_console_errors` | aucun | JSON `[{level, text, url?, line?, timestamp}]` | « y a-t-il eu des erreurs JS depuis la dernière vérification ? » |
 | `list_windows` | aucun | JSON `[{id, title, url, kind}]` | « liste les onglets/fenêtres de la cible CDP » |
-| `resize` | `{width, height}` | JSON `{ok}` | « passe en 375×812 » (CDP : émule le viewport responsive, pas la fenêtre OS ; `0`×`0` retire l'émulation ; sdk/kwin-eis/x11 : `isError` `unsupported`) |
+| `resize` | `{width, height}` | JSON `{ok}` | « passe en 375×812 » (CDP : émule le viewport responsive, pas la fenêtre OS ; `0`×`0` retire l'émulation ; le viewport rapporté exclut la barre de défilement, d'où 360 px pour `375` si la page défile ; sdk/kwin-eis/x11 : `isError` `unsupported`) |
 
 **Conseils d'usage** :
 

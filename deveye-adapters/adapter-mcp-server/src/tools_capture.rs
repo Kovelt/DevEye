@@ -8,7 +8,9 @@ use super::*;
 
 #[tool_router(router = capture_router, vis = "pub(crate)")]
 impl DeveyeMcpServer {
-    #[tool(description = "Capture un screenshot PNG du viewport de l'app cible (image MCP).")]
+    #[tool(
+        description = "Capture un screenshot PNG du viewport de l'app cible (image MCP). En CDP, le PNG est à l'échelle CSS même sur un écran HiDPI : 1 pixel de l'image = 1 pixel CSS = l'unité des coordonnées de `click`/`hover`/`scroll`, sans facteur à appliquer. Sur les autres cibles, le PNG est en pixels de la fenêtre capturée."
+    )]
     pub(crate) async fn screenshot(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.acquire_gate("screenshot").await;
         let shot = match unsupported_aware(self.renderer.screenshot().await) {
@@ -73,9 +75,10 @@ impl DeveyeMcpServer {
         if !rect.get("found").and_then(|v| v.as_bool()).unwrap_or(false) {
             return Ok(json_error(&rect));
         }
-        // 2) Capturer puis recadrer. Le PNG peut etre en pixels physiques
-        // (HiDPI) alors que le rect est en pixels CSS : on met a l'echelle par
-        // le ratio dimensions-PNG / viewport-logique.
+        // 2) Capturer puis recadrer. En CDP le PNG est a l'echelle CSS (ratio
+        // 1), mais les autres renderers (xcap, kwin) peuvent rendre des pixels
+        // physiques alors que le rect est en pixels CSS : on met a l'echelle
+        // par le ratio dimensions-PNG / viewport-logique.
         let shot = match unsupported_aware(self.renderer.screenshot().await) {
             Ok(v) => v,
             // La cible ne peut pas capturer (fenetre KWin/xcap introuvable...) :
