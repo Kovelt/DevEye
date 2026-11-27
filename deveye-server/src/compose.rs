@@ -307,8 +307,9 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
             info.dom = false;
             info.list_windows = kwin_windows;
             info.notes =
-                "Rendu natif, pas de WebView : dom/eval_js/find_element/wait_for_selector \
-                    renvoient Unsupported, navigate indisponible. state/logs via le SDK/shim \
+                "Rendu natif, pas de WebView : dom/eval_js/find_element \
+                    renvoient Unsupported, navigate indisponible ; wait_for_selector/wait_for_text \
+                    attendent le timeout complet puis repondent found:false. state/logs via le SDK/shim \
                     de l'app si lance. Yeux et assertions visuelles : screenshot/assert_visual. \
                     list_windows/window_geometry/focus_window via KWin Scripting : necessitent \
                     KDE/Wayland (ces champs sont faux ailleurs). list_windows enumere tout le \
@@ -330,11 +331,13 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
             info.notes =
                 "Serveur X explicite (--display), jamais la session vivante : display < 100, \
                     $DISPLAY et XWayland refuses. Pas de WebView : eval_js/find_element/\
-                    wait_for_selector/click_text renvoient Unsupported, navigate/handle_dialog/\
-                    upload_file aussi. dom = reponse de la route `ui.widgets` de l'app (rects en \
+                    click_text renvoient Unsupported, navigate/handle_dialog/\
+                    upload_file aussi ; wait_for_selector/wait_for_text attendent le timeout \
+                    complet puis repondent found:false. dom = reponse de la route `ui.widgets` de l'app (rects en \
                     coordonnees fenetre : cliquer au centre avec `click`), vide d'erreur Inspect \
                     si l'app ne l'expose pas ; state/logs/commandes via le SDK (--sdk-url). \
-                    Attentes : wait_condition (state-key, screenshot-stable, log-message). \
+                    Attentes : wait_condition (state-key, screenshot-stable, screenshot-region-stable, \
+                    log-message, target-alive ; pas dom-selector ni text-content). \
                     Clavier = celui du serveur X ; un caractere absent est injecte par remappage \
                     temporaire. Molette : un cran par tranche de 120 px de dx/dy. Presse-papiers \
                     indisponible. Limites de capture : l'image est la racine du serveur X \

@@ -25,6 +25,7 @@ Les crates MIT (`deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`
 Aucune promesse de compatibilité sur :
 
 - les crates `adapter-*` : leur API Rust est interne (`publish = false`) ; seuls comptent les comportements qu'ils exposent à travers les ports, l'outil MCP et la CLI ;
+- la bibliothèque `deveye-conformance` (`publish = false`) ; son **binaire** `deveye-conformance` est en revanche un outil que des tiers lancent pour valider leur SDK ([ADR-0035](adr/0035-suite-de-conformite-boite-noire-du-protocole.md)) : ses options (`--url`, `--invoke-route`, `--slow-expression`, `--abandon-expression`, `--strict`) et ses codes de sortie (0 conforme, 1 écarts, 2 suite inexécutable) suivent les règles de la CLI du tableau ci-dessus (ajout optionnel = mineure, retrait ou renommage = majeure) ; le texte du rapport n'est pas couvert ;
 - les modules internes de `deveye-server` (composition, façades de repli, journalisation) ;
 - les messages d'erreur et de log (leur texte peut changer ; les codes et la structure d'erreur MCP, non) ;
 - les éléments marqués `#[doc(hidden)]` ou non exportés.

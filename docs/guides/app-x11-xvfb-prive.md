@@ -6,12 +6,14 @@ Pour une app X11 sans webview ni SDK (egui, GTK, Qt, imgui), la cible `x11` lui 
 
 ```bash
 Xvfb :250 -nolisten tcp -screen 0 1400x1000x24 &
-DISPLAY=:250 ./mon-app &        # l'app tourne SUR le serveur privé
+DISPLAY=:250 DEVEYE_PORT=31400 ./mon-app &   # l'app tourne SUR le serveur privé ; son SDK écoute 31400
 ```
 
 `Xvfb` : paquet `xorg-x11-server-Xvfb` (Fedora) ou `xvfb` (Debian et Ubuntu). **Le display doit être ≥ 100** : `:99`, habituel des CI, est refusé, prendre `:100` ou plus. Aucune bibliothèque système de plus n'est nécessaire côté DevEye (client X en Rust pur).
 
 ## 2. Brancher DevEye
+
+Le `--sdk-url` ci-dessous vise le port **31400** : l'app doit donc être lancée avec `DEVEYE_PORT=31400` (sinon son SDK écoute le port par défaut 31337 et `state`, `logs_*`, `invoke_command` répondent `sdk_unavailable`).
 
 ```json
 {
@@ -34,7 +36,7 @@ La garde refuse, sans option pour la lever : un display non local, un numéro < 
 
 `--sdk-url` désigne le SDK que l'app embarque, s'il y en a un ([integration.md](../integration.md)) : il fournit `state`, `logs_*`, `list_commands`, `invoke_command`.
 
-Pas de JavaScript : `eval_js`, `find_element`, `click_selector`, `click_text`, `wait_for_selector`, `wait_for_text` répondent `unsupported`. Le « DOM » est la **réponse de la route `ui.widgets`** de l'app, renvoyée sans interprétation par l'outil `dom` :
+Pas de JavaScript : `eval_js`, `find_element`, `click_selector`, `click_text` répondent `unsupported`. `wait_for_selector` et `wait_for_text` n'ont pas de réponse `unsupported` immédiate : sans DOM, ils attendent le `timeout_ms` complet puis répondent `found: false` (ne pas en conclure que l'élément est absent) ; utiliser `wait_condition` avec un prédicat sans DOM (`state-key`, `screenshot-stable`, `screenshot-region-stable`, `log-message`, `target-alive`). Le « DOM » est la **réponse de la route `ui.widgets`** de l'app, renvoyée sans interprétation par l'outil `dom` :
 
 ```rust
 #[cfg(all(debug_assertions, feature = "deveye"))]

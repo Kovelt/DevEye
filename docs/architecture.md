@@ -147,7 +147,7 @@ pub trait Renderer: Send + Sync {
 }
 ```
 
-`PortResult<T>` = `Result<T, PortError>` (défini dans `deveye-ports::errors`). `Screenshot` est un wrapper newtype autour de `Vec<u8>` (bytes PNG).
+`PortResult<T>` = `Result<T, PortError>` (défini dans `deveye-ports::errors`). `Screenshot` est une struct de `deveye-core` (`bytes` : l'image encodée, `captured_at`, `viewport`).
 
 - `adapter-cdp-webview` (`Page.captureScreenshot` CDP) — webview Chromium (app desktop wry, navigateur)
 - `adapter-screencap-xcap` (capture fenêtre OS) — X11 / XWayland / Wayland non-KDE
@@ -258,7 +258,7 @@ pub trait WaitCondition: Send + Sync {
 }
 ```
 
-Attente conditionnelle sur l'état de l'app cible. `WaitPredicate` est une enum (domaine, `deveye-core/src/wait_condition.rs`) avec sept variantes : `DomSelector { selector, visible?, negate? }` (présence CSS, optionnellement visible et/ou inversée — base de `wait_for_gone`), `StateKey { key, expected }` (valeur du state SDK), `ScreenshotStable { threshold_ms }` (deux captures identiques = stabilité visuelle), `ScreenshotRegionStable { x, y, width, height, threshold_ms }` (idem, borné à une région — ignore un curseur clignotant ailleurs dans le viewport), `LogMessage { contains, level_min? }` (attend un message dans le buffer de logs), `TargetAlive {}` (sonde `renderer.screenshot()` : attend qu'une cible crashée redevienne joignable) et `TextContent { text, selector?, visible? }` (texte dans l'`innerText`/`textContent`, indisponible en kwin-eis faute de DOM). Retourne un `WaitOutcome { satisfied, elapsed_ms, detail }` — un timeout n'est pas une erreur (`Err`), c'est un `satisfied: false`. Implémenté par `CompositeWaitCondition` dans `adapter-composite` (boucle de polling sur les ports déjà composés). Exposé via l'outil MCP `wait_condition`, et via les outils dédiés `wait_for_selector`/`wait_for_text`/`wait_for_log`/`wait_screenshot_region`/`wait_target_alive`.
+Attente conditionnelle sur l'état de l'app cible. `WaitPredicate` est une enum (domaine, `deveye-core/src/wait_condition.rs`) avec sept variantes : `DomSelector { selector, visible?, negate? }` (présence CSS, optionnellement visible et/ou inversée — base de `wait_for_gone`), `StateKey { key, expected }` (valeur du state SDK), `ScreenshotStable { threshold_ms }` (deux captures identiques = stabilité visuelle), `ScreenshotRegionStable { x, y, width, height, threshold_ms }` (idem, borné à une région — ignore un curseur clignotant ailleurs dans le viewport), `LogMessage { contains, level_min? }` (attend un message dans le buffer de logs), `TargetAlive {}` (sonde d'abord le canal d'interaction réel par `evaluator.evaluate("1")` ; seule une cible sans JavaScript, `Unsupported`, retombe sur `renderer.screenshot()` : attend qu'une cible crashée redevienne joignable) et `TextContent { text, selector?, visible? }` (texte dans l'`innerText`/`textContent`, indisponible en kwin-eis faute de DOM). Retourne un `WaitOutcome { satisfied, elapsed_ms, detail }` — un timeout n'est pas une erreur (`Err`), c'est un `satisfied: false`. Implémenté par `CompositeWaitCondition` dans `adapter-composite` (boucle de polling sur les ports déjà composés). Exposé via l'outil MCP `wait_condition`, et via les outils dédiés `wait_for_selector`/`wait_for_text`/`wait_for_log`/`wait_screenshot_region`/`wait_target_alive`.
 
 ### 9. `WindowLister`
 
@@ -387,9 +387,8 @@ Le contrat complet des routes HTTP du SDK (codes de statut, formes des corps, ga
 
 - Windows et macOS (`deveye-server` ne compile que sous Linux, ADR-0037) ; GNOME Wayland (portails XDG envisagés en 1.x)
 - `adapter-tauri`
-- `adapter-cdp-chrome-standalone` (piloter Chrome déjà ouvert sans wry)
-- VRT (Visual Regression Testing) — `Diff` est dans le domaine, le comparateur viendra plus tard
-- Replay de `Recording` — tests E2E reproductibles
+- `adapter-cdp-chrome-standalone` : adapter dédié à un Chrome déjà ouvert (`--target cdp` couvre déjà un Chrome lancé avec son port de débogage, sans adapter dédié)
+- Replay de scénarios enregistrés (`Recording`, absent du domaine) — tests E2E reproductibles ; la régression visuelle est couverte par l'outil `assert_visual` (comparaison à une baseline, [ADR-0030](adr/0030-assert-visual-masques-image-de-difference-et-mise-a-jour.md)), mais DevEye ne produit pas de modèle `Diff` générique
 - Dashboard HTML pour humain (alternative au MCP)
 - Redimensionnement de la **fenêtre OS** réelle : `resize` n'émule que le viewport du moteur de rendu (ADR-0019) ; un `window_geometry_set` serait un ajout mineur ultérieur.
 

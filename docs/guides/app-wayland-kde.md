@@ -36,7 +36,7 @@ Le test de bout en bout de cette cible se fait à la main sur une vraie session 
 | Presse-papiers | `clipboard_get`, `clipboard_set` (`wl-clipboard`) |
 | Avec le SDK de l'app | `state`, `logs_*`, `invoke_command`, `list_commands` |
 
-`dom`, `eval_js`, `find_element`, `click_selector`, `click_text`, `wait_for_selector`, `wait_for_text`, `navigate`, `resize`, `upload_file`, `handle_dialog` répondent `{ reason: "unsupported" }` : un rendu natif n'a ni DOM ni JavaScript.
+`dom`, `eval_js`, `find_element`, `click_selector`, `click_text`, `navigate`, `resize`, `upload_file`, `handle_dialog` répondent `{ reason: "unsupported" }` : un rendu natif n'a ni DOM ni JavaScript. `wait_for_selector` et `wait_for_text` attendent alors le `timeout_ms` complet puis répondent `found: false` : utiliser `wait_condition` avec un prédicat sans DOM (`state-key`, `screenshot-stable`, `screenshot-region-stable`, `log-message`, `target-alive`).
 
 ## 4. Garde-fous
 

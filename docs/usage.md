@@ -111,6 +111,8 @@ Créer `.mcp.json` à la racine du projet de l'app. Le serveur parle MCP sur **s
 }
 ```
 
+Ici l'app est lancée avec `DEVEYE_PORT=31400` (`DISPLAY=:250 DEVEYE_PORT=31400 ./mon-app`) : le port de `--sdk-url` doit être celui où son SDK écoute, 31337 par défaut.
+
 Vérifier dans Claude Code avec `/mcp` : `deveye` doit apparaître. Variante de développement du serveur lui-même (recompile à la volée, plus lent à démarrer) : `"command": "cargo"`, `"args": ["run", "--quiet", "-p", "deveye-server", "--", "--serve-mcp"]` depuis un clone de DevEye.
 
 ---
@@ -208,7 +210,10 @@ Codes de sortie : 0 conforme, 1 écarts, 2 la suite n'a pas pu s'exécuter. Le b
 | Outil ou famille | `cdp` | `sdk` | `kwin-eis` | `x11` |
 |---|---|---|---|---|
 | `screenshot`, `screenshot_region`, `assert_visual`, `observe` (capture) | oui | oui | oui | oui |
-| `screenshot_element`, `find_element`, `assert_selector`, `eval_js`, `click_selector`, `click_text`, `wait_for_selector`, `wait_for_text`, `collect_console_errors` | oui | oui | non | non |
+| `screenshot_element`, `find_element`, `assert_selector`, `eval_js`, `click_selector`, `click_text`, `collect_console_errors` | oui | oui | non | non |
+| `wait_for_selector`, `wait_for_text`, `wait_condition` (`dom-selector`, `text-content`) | oui | oui | attend le timeout puis `found: false` | attend le timeout puis `found: false` |
+| `wait_condition` (`state-key`, `log-message`) | SDK | SDK | SDK | SDK |
+| `wait_condition` (`screenshot-stable`, `screenshot-region-stable`), `wait_screenshot_region`, `wait_target_alive` | oui | oui | oui | oui |
 | `click`, `double_click`, `right_click`, `hover`, `drag_drop`, `type_text`, `press_key`, `key_combo`, `scroll` | oui | oui | oui | oui |
 | `navigate` | oui | oui | non | non |
 | `resize`, `handle_dialog`, `upload_file` | oui | non | non | non |
@@ -455,7 +460,7 @@ DISPLAY=:250 ./mon-app &       # l'app tourne SUR le serveur privé
 deveye-server doctor --target x11 --display :250
 ```
 
-Pas de JS : `eval_js`, `find_element`, `click_selector`, `click_text`, `wait_for_selector`, `wait_for_text` répondent `unsupported`. Le « DOM » est la réponse de la route `ui.widgets` de l'app (rects en coordonnées de fenêtre : cliquer au centre avec `click`). Le clavier est celui du serveur X ; un caractère absent est injecté par remappage temporaire. Molette : un cran par tranche de 120 px. Presse-papiers indisponible. Attentes disponibles : `wait_condition` (`state-key`, `screenshot-stable`, `log-message`).
+Pas de JS : `eval_js`, `find_element`, `click_selector`, `click_text` répondent `unsupported`. `wait_for_selector` et `wait_for_text` n'ont pas de réponse `unsupported` immédiate : sans DOM, ils attendent le `timeout_ms` complet puis répondent `found: false` (ne pas en conclure que l'élément est absent) ; utiliser `wait_condition` avec un prédicat sans DOM. Le « DOM » est la réponse de la route `ui.widgets` de l'app (rects en coordonnées de fenêtre : cliquer au centre avec `click`). Le clavier est celui du serveur X ; un caractère absent est injecté par remappage temporaire. Molette : un cran par tranche de 120 px. Presse-papiers indisponible. Attentes utiles : `wait_condition` avec `state-key`, `screenshot-stable`, `screenshot-region-stable`, `log-message` et `target-alive` (cinq prédicats sur sept ; `dom-selector` et `text-content` exigent un DOM).
 
 #### Limites de la cible x11
 
