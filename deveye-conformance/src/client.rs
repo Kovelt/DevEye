@@ -72,7 +72,7 @@ impl Target {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
-            // Une variable HTTP_PROXY ne doit jamais s'intercaler : on teste
+            // Une variable HTTP_PROXY ne doit jamais s'intercaler : on testé
             // l'implémentation, pas un proxy.
             .no_proxy()
             .build()

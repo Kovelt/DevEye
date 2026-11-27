@@ -243,10 +243,10 @@ fn absorb_transient<T>(result: PortResult<T>, predicate: &'static str) -> PortRe
     }
 }
 
-/// Variante de [`absorb_transient`] pour les predicats adosses au SDK de l'app
+/// Variante de [`absorb_transient`] pour les prédicats adosses au SDK de l'app
 /// (`state_snapshot`, `poll` des logs). Une `PortError::Protocol` y vient d'une
-/// incompatibilite de majeure du wire protocol, d'une route absente ou d'une
-/// reponse illisible : rien qui s'arrange en reessayant. La propager donne a
+/// incompatibilité de majeure du wire protocol, d'une route absente ou d'une
+/// réponse illisible : rien qui s'arrange en réessayant. La propager donne a
 /// l'appelant le message actionnable au lieu d'un `wait_for` qui expire sans
 /// explication.
 fn absorb_transient_sdk<T>(
@@ -1368,7 +1368,7 @@ mod tests {
         }
     }
 
-    /// Une incompatibilite de majeure du wire protocol (`PortError::Protocol`
+    /// Une incompatibilité de majeure du wire protocol (`PortError::Protocol`
     /// cote SDK) ne doit pas etre avalee en « pas encore vrai » : `wait_until`
     /// la propage avec son message au lieu d'expirer sans explication.
     #[tokio::test]

@@ -24,7 +24,7 @@ fmt:
 fmt-check:
     cargo fmt --all --check
 
-# Conformite du wire protocol : SDK Rust en processus, ou `just conformance <url>` pour une implementation tierce
+# Conformité du wire protocol : SDK Rust en processus, ou `just conformance <url>` pour une implémentation tierce
 conformance url="":
     if [ -z "{{url}}" ]; then cargo test -p deveye-conformance --locked -- --nocapture; else cargo run -q --locked -p deveye-conformance -- --url "{{url}}"; fi
 
@@ -32,15 +32,15 @@ conformance url="":
 doc:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
-# Tests de la cible x11 contre un Xvfb prive (requiert le paquet Xvfb)
+# Tests de la cible x11 contre un Xvfb privé (requiert le paquet Xvfb)
 x11:
     cargo test -p adapter-x11 --locked -- --ignored --test-threads=1
 
-# Session MCP de bout en bout : binaire, stdio, Xvfb prive, fenetre fixture
+# Session MCP de bout en bout : binaire, stdio, Xvfb privé, fenêtre fixture
 e2e:
     cargo test -p deveye-server --test e2e_mcp --locked -- --ignored --test-threads=1
 
-# MSRV : verifie le plancher annonce par rust-version (requiert `rustup toolchain install 1.88`)
+# MSRV : vérifie le plancher annonce par rust-version (requiert `rustup toolchain install 1.88`)
 msrv:
     cargo +1.88 check --workspace --all-targets --locked
 
@@ -53,11 +53,11 @@ release-noop:
     cargo test --release --locked -p deveye-sdk --test release_noop
     scripts/verify-sdk-release-noop.sh
 
-# Frontiere des licences : aucun crate MIT ne depend d'un crate AGPL (ADR-0002)
+# Frontière des licences : aucun crate MIT ne depend d'un crate AGPL (ADR-0002)
 license-boundary:
     scripts/verify-license-boundary.sh
 
-# Contenu des paquets des 4 crates publiables (LICENSE-MIT embarquee), sans rien publier
+# Contenu des paquets des 4 crates publiables (LICENSE-MIT embarquée), sans rien publier
 packages:
     scripts/verify-packages.sh
 
@@ -65,14 +65,14 @@ packages:
 sbom:
     cargo cyclonedx --format json
 
-# Installe deveye-server dans ~/.local/bin (build release du depot local).
+# Installe deveye-server dans ~/.local/bin (build release du dépôt local).
 # Alternative : `cargo install --path deveye-server --locked` (vers ~/.cargo/bin).
 install:
     cargo build --release --locked -p deveye-server
     install -Dm755 target/release/deveye-server "$HOME/.local/bin/deveye-server"
 
-# Synchronise les copies des bibliotheques vers VOS cibles (outil de transition
-# deprecie, ADR-0040) : `just sync-deveye --target app=/chemin/copie`, ou avec
+# Synchronise les copies des bibliothèques vers VOS cibles (outil de transition
+# déprécié, ADR-0040) : `just sync-deveye --target app=/chemin/copie`, ou avec
 # un fichier scripts/sync-targets ; options --check, --dry-run, --force.
 sync-deveye *args:
     ./scripts/sync-deveye.sh {{args}}

@@ -406,7 +406,7 @@ impl DeveyeMcpServer {
         )
     )]
     pub(crate) async fn target_info(&self) -> Result<CallToolResult, McpError> {
-        // Description resolue au demarrage, sauf le backend effectif relu a
+        // Description résolue au démarrage, sauf le backend effectif relu a
         // chaque appel (repli du mode auto) : pas de gate, pas d'I/O.
         let mut info = self.target_info.clone();
         if let Some(probe) = &self.effective_backend {

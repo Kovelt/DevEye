@@ -125,7 +125,7 @@ use deveye_ports::{
     WindowManager,
 };
 
-// H1 : les outils `#[tool]` sont repartis par famille dans ces sous-modules
+// H1 : les outils `#[tool]` sont répartis par famille dans ces sous-modules
 // (chacun `use super::*;` pour voir DeveyeMcpServer, les structs de
 // parametres et les helpers ci-dessous) — lib.rs ne garde que la definition
 // du serveur, les helpers communs et l'assemblage des routeurs (`new`).
@@ -216,16 +216,16 @@ impl ServerVersion {
 /// (en mode `auto`, il change quand le CDP tombe puis revient).
 pub type EffectiveBackendProbe = Arc<dyn Fn() -> String + Send + Sync>;
 
-/// Description de la cible active et de ses capacites, renvoyee par l'outil
+/// Description de la cible active et de ses capacités, renvoyee par l'outil
 /// `target_info`. Construite par `deveye-server` (compose) selon le `--target`
-/// choisi et la session detectee : permet a l'agent de savoir d'avance quels
-/// outils repondront (ex. `eval_js`/`dom` absents en kwin-eis) sans tenter un
-/// appel pour le decouvrir. Seul `effective_backend` varie en cours de session.
+/// choisi et la session détectée : permet a l'agent de savoir d'avance quels
+/// outils répondront (ex. `eval_js`/`dom` absents en kwin-eis) sans tenter un
+/// appel pour le découvrir. Seul `effective_backend` varie en cours de session.
 #[derive(Clone, Debug, Serialize)]
 pub struct TargetInfo {
     /// Mode actif : "auto" | "cdp" | "sdk" | "kwin-eis" | "x11".
     pub target: String,
-    /// Backend qui sert reellement les yeux et les mains a cet instant :
+    /// Backend qui sert réellement les yeux et les mains a cet instant :
     /// "cdp", "sdk" (repli du mode `auto`), "kwin-eis", "x11", ou
     /// "indetermine" tant qu'aucun appel n'a tranche (mode `auto`).
     pub effective_backend: Option<String>,
@@ -242,23 +242,23 @@ pub struct TargetInfo {
     pub state: bool,
     /// Les erreurs console JS sont collectables (`collect_console_errors`) ?
     pub console_errors: bool,
-    /// `list_windows` peut renvoyer des fenetres ? CDP : onglets ; kwin-eis :
-    /// fenetres du workspace, **seulement sous KDE/Wayland** ; x11 : fenetres
-    /// du serveur prive ; faux en `sdk` (pas de visibilite inter-fenetres).
+    /// `list_windows` peut renvoyer des fenêtres ? CDP : onglets ; kwin-eis :
+    /// fenêtres du workspace, **seulement sous KDE/Wayland** ; x11 : fenêtres
+    /// du serveur privé ; faux en `sdk` (pas de visibilité inter-fenetres).
     pub list_windows: bool,
-    /// `window_geometry` repond-il (KWin Scripting sous KDE/Wayland, ou serveur X prive) ?
+    /// `window_geometry` répond-il (KWin Scripting sous KDE/Wayland, ou serveur X privé) ?
     pub window_geometry: bool,
-    /// `focus_window` repond-il (KWin avec `--screencap-window`, ou serveur X prive) ?
+    /// `focus_window` répond-il (KWin avec `--screencap-window`, ou serveur X privé) ?
     pub focus_window: bool,
     /// Gestionnaire de fenetres derriere `list_windows`/`window_geometry`/
     /// `focus_window` : "kwin", "x11" ou "aucun".
     pub window_manager: String,
     /// `clipboard_get`/`clipboard_set` disponibles (Wayland ; jamais en x11) ?
     pub clipboard: bool,
-    /// Outils qui exigent un moteur JS (webview CDP ou pompe SDK) et repondent
+    /// Outils qui exigent un moteur JS (webview CDP ou pompe SDK) et répondent
     /// `Unsupported` quand `eval_js` est faux.
     pub js_dependent_tools: Vec<String>,
-    /// Identite et versions du serveur.
+    /// Identité et versions du serveur.
     pub server: ServerVersion,
     /// Notes libres : pieges, prerequis, capacites indisponibles.
     pub notes: String,
@@ -905,7 +905,7 @@ impl ServerHandler for DeveyeMcpServer {
         let mut info = ServerConfig::default();
         info.protocol_version = ProtocolVersion::V_2025_11_25;
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        // Identite annoncee a l'handshake : sans elle, le client voit celle de la
+        // Identité annoncée a l'handshake : sans elle, le client voit celle de la
         // bibliotheque rmcp et non celle de deveye-server (ADR-0033).
         info.server_info = rmcp::model::Implementation::new(
             "deveye-server",
@@ -925,7 +925,7 @@ impl ServerHandler for DeveyeMcpServer {
              wait_ready, target_info, observe. \
              Appeler target_info en premier pour connaitre les capacites de la \
              cible (eval_js/dom indisponibles en kwin-eis). observe resume \
-             l'app en un appel (capture reduite, arbre, etat, console, logs)."
+             l'app en un appel (capture reduite, arbre, état, console, logs)."
                 .to_string(),
         );
         info
@@ -955,7 +955,7 @@ pub(crate) fn to_json_text<T: Serialize + ?Sized>(value: &T) -> String {
 
 /// Serialise `value` en texte JSON et emballe dans un [`CallToolResult`] succes.
 /// La serialisation ne peut echouer sur les types utilises ici (tous implementent
-/// `Serialize` correctement) ; un echec serait rendu visible (`to_json_text`). N14.
+/// `Serialize` correctement) ; un échec serait rendu visible (`to_json_text`). N14.
 fn json_success<T: Serialize>(value: &T) -> CallToolResult {
     CallToolResult::success(vec![ContentBlock::text(to_json_text(value))])
 }
@@ -989,8 +989,8 @@ fn unsupported_error(detail: impl Into<String>) -> CallToolResult {
     }))
 }
 
-/// Payload `isError` d'une exception levee par le JS evalue dans la cible
-/// (`PortError::Script`) : un resultat que l'agent doit lire et corriger (son
+/// Payload `isError` d'une exception levée par le JS evalue dans la cible
+/// (`PortError::Script`) : un résultat que l'agent doit lire et corriger (son
 /// expression est fausse), pas une panne du serveur ni de la liaison. Porte le
 /// message et, quand le moteur la fournit, la trace (ADR-0023).
 fn script_error(message: String, stack: Option<String>) -> CallToolResult {
@@ -1038,7 +1038,7 @@ fn state_aware(
 /// E1 : deroule un `PortResult<T>` en distinguant « capacite absente sur la
 /// cible active » (`PortError::Unsupported`, cf. [`unsupported_error`]) et
 /// « exception JS de l'expression evaluee » (`PortError::Script`, cf.
-/// [`script_error`]) de toute autre panne de port (mappee par [`port_to_mcp`]). Sur `Ok`, renvoie
+/// [`script_error`]) de toute autre panne de port (mappée par [`port_to_mcp`]). Sur `Ok`, renvoie
 /// la valeur telle quelle ; sur erreur, renvoie l'issue MCP a faire remonter
 /// directement (soit un resultat isError structure, soit une erreur
 /// JSON-RPC classique) — a consommer par
@@ -2792,11 +2792,11 @@ mod dispatch_tests {
 
     // ------------------------------------------------------------------
     // (d) le gate serialise : 2 appels concurrents (sur deux ports/outils
-    // differents) ne sont jamais dans leur section critique en meme temps.
+    // différents) ne sont jamais dans leur section critique en même temps.
     // ------------------------------------------------------------------
 
     /// Compteur de sections critiques simultanement en cours. Si le gate ne
-    /// serialisait pas vraiment, deux appels concurrents feraient monter
+    /// sérialisait pas vraiment, deux appels concurrents feraient monter
     /// `max_observed` a 2 (chacun incremente `current` avant son `sleep`,
     /// sans attendre l'autre).
     struct ConcurrencyProbe {
@@ -2851,7 +2851,7 @@ mod dispatch_tests {
         });
         // `screenshot` passe par `acquire_gate` (instrumente), `dom` par un
         // `gate.lock()` direct : les deux tiennent le MEME mutex, preuve que
-        // la serialisation couvre bien tous les outils et pas seulement ceux
+        // la sérialisation couvre bien tous les outils et pas seulement ceux
         // instrumentes.
         let s1 = server.clone();
         let s2 = server.clone();
@@ -3040,7 +3040,7 @@ mod dispatch_tests {
         assert_eq!(info.server_info.version, "9.9.9");
     }
 
-    /// `target_info` porte les capacites completes, les versions et relit le
+    /// `target_info` porte les capacités complètes, les versions et relit le
     /// backend effectif a chaque appel (repli du mode auto, ADR-0034).
     #[tokio::test]
     async fn target_info_exposes_versions_capabilities_and_live_backend() {

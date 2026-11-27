@@ -55,8 +55,8 @@ const CSS_SCALE_TOLERANCE: f64 = 1.005;
 // dans `adapter-mcp-server::crop_png`). Une methode `screenshot_clip(rect)`
 // sur le trait `Renderer` avec impl par defaut (delegant a `screenshot()` +
 // crop) permettrait a CDP de surcharger avec le `clip` natif sans casser les
-// 5-6 autres implementeurs. Non fait : changement de trait, a grouper avec
-// d'autres evolutions de `Renderer` apres la 1.0.
+// 5-6 autres implémenteurs. Non fait : changement de trait, a grouper avec
+// d'autres evolutions de `Renderer` après la 1.0.
 
 #[async_trait]
 impl Renderer for CdpClient {

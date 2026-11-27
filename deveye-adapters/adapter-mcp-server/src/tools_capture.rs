@@ -127,9 +127,9 @@ impl DeveyeMcpServer {
         if !rect.get("found").and_then(|v| v.as_bool()).unwrap_or(false) {
             return Ok(json_error(&rect));
         }
-        // 2) Capturer puis recadrer. En CDP le PNG est a l'echelle CSS (ratio
+        // 2) Capturer puis recadrer. En CDP le PNG est a l'échelle CSS (ratio
         // 1), mais les autres renderers (xcap, kwin) peuvent rendre des pixels
-        // physiques alors que le rect est en pixels CSS : on met a l'echelle
+        // physiques alors que le rect est en pixels CSS : on met a l'échelle
         // par le ratio dimensions-PNG / viewport-logique.
         let shot = match unsupported_aware(self.renderer.screenshot().await) {
             Ok(v) => v,
@@ -206,7 +206,7 @@ impl DeveyeMcpServer {
             }
         }
         if !exists || update {
-            // Baseline absente, ou remplacement explicite : on l'ecrit a
+            // Baseline absente, ou remplacement explicite : on l'écrit a
             // partir de la capture courante.
             if let Some(parent) = path.parent() {
                 if !parent.as_os_str().is_empty() {
@@ -258,9 +258,9 @@ impl DeveyeMcpServer {
         if ok {
             return Ok(json_success(&payload));
         }
-        // Echec a dimensions egales : l'image de difference montre OU ca
+        // Échec a dimensions egales : l'image de difference montre OU ca
         // diverge, sans que l'agent ait a ouvrir deux captures. Pas d'image si
-        // les dimensions different (rien de pixel a pixel a dessiner).
+        // les dimensions différent (rien de pixel a pixel a dessiner).
         let mut blocks = Vec::with_capacity(2);
         let diff_image = match &outcome.images {
             Some((baseline_img, current_img)) => {

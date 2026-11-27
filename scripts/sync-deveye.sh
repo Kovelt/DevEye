@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # sync-deveye.sh -- OUTIL DE TRANSITION, deprecie (ADR-0040).
 #
-# Copie les bibliotheques que l'app cible embarque (deveye-core, deveye-ports,
+# Copie les bibliothèques que l'app cible embarque (deveye-core, deveye-ports,
 # deveye-sdk) vers des dossiers de copie que VOUS designez. Il n'existe que
 # tant que ces crates ne sont pas publies sur crates.io : des qu'une version
-# est publiee, declarez-les en dependance versionnee (docs/integration.md) et
+# est publiee, declarez-les en dépendance versionnee (docs/integration.md) et
 # supprimez la copie. Les adapters et deveye-server ne sont jamais copies :
 # ils servent cote orchestrateur, pas dans l'app cible.
 #
-# Le script n'ecrit que lorsqu'on le lance, et uniquement dans les cibles
+# Le script n'écrit que lorsqu'on le lance, et uniquement dans les cibles
 # demandees. Il ne contient aucune cible : elles viennent, par ordre de
 # priorite, de
 #   1. l'argument repetable   --target [ETIQUETTE=]DOSSIER
@@ -20,17 +20,17 @@
 # qui recevra les trois crates (un sous-dossier par crate).
 #
 # Durcissements (herites de l'ancien script) :
-#   * VENDORED.md ecrit a la racine de chaque copie a chaque sync : commit
+#   * VENDORED.md écrit a la racine de chaque copie a chaque sync : commit
 #     source, date, hash par crate ;
-#   * avant d'ecraser, le script verifie via ce fichier que la copie n'a pas ete
-#     editee depuis la derniere sync -- abandon sinon (--force outrepasse,
+#   * avant d'ecraser, le script vérifie via ce fichier que la copie n'a pas ete
+#     editee depuis la dernière sync -- abandon sinon (--force outrepasse,
 #     apres avoir rapatrie a la main ce qui doit l'etre) ;
-#   * --check compare le depot et les copies sans rien ecrire.
+#   * --check compare le dépôt et les copies sans rien ecrire.
 #
 # Usage : scripts/sync-deveye.sh [--dry-run | --check] [--force]
 #                                [--target [ETIQUETTE=]DOSSIER]...
 #                                [--targets-file FICHIER]
-# Codes de sortie : 0 = ok (ou copies a jour avec --check) ; 1 = derive detectee
+# Codes de sortie : 0 = ok (ou copies a jour avec --check) ; 1 = derive détectée
 # (--check) ou copie editee localement (abandon) ; 2 = usage ou configuration
 # invalide : aucune cible, cible absente, rsync manquant.
 set -euo pipefail
@@ -122,7 +122,7 @@ fi
 
 # --- Hash et VENDORED.md ---------------------------------------------------
 # Hash stable d'une crate : contenu des .rs + Cargo.toml, chemins relatifs
-# tries -- comparable entre le depot et une copie quel que soit le prefixe.
+# tries -- comparable entre le dépôt et une copie quel que soit le prefixe.
 hash_crate() {
   local root="$1" crate="$2"
   if [[ ! -d "${root}/${crate}" ]]; then
@@ -148,10 +148,10 @@ write_vendored_md() {
   {
     echo "# Copie de DevEye -- NE PAS EDITER"
     echo
-    echo "Generee par \`scripts/sync-deveye.sh\` depuis le depot DevEye (outil de"
-    echo "transition, deprecie : preferer une dependance versionnee)."
-    echo "Tout correctif doit naitre dans DevEye puis etre re-propage ; une edition"
-    echo "locale sera detectee et bloquera la prochaine synchronisation."
+    echo "Générée par \`scripts/sync-deveye.sh\` depuis le dépôt DevEye (outil de"
+    echo "transition, déprécié : preferer une dépendance versionnee)."
+    echo "Tout correctif doit naitre dans DevEye puis être re-propage ; une edition"
+    echo "locale sera détectée et bloquera la prochaine synchronisation."
     echo
     echo "- Commit source : \`${commit}\`"
     echo "- Date de sync : $(date -Iseconds)"
@@ -164,7 +164,7 @@ write_vendored_md() {
   } > "${dest_root}/VENDORED.md"
 }
 
-# --- --check : derive, sans ecriture ---------------------------------------
+# --- --check : derive, sans écriture ---------------------------------------
 if [[ "${MODE}" == "check" ]]; then
   drift=0
   for i in "${!DIRS[@]}"; do
@@ -195,7 +195,7 @@ sync_to() {
       rec="$(recorded_hash "${dest_root}" "${crate}")"
       cur="$(hash_crate "${dest_root}" "${crate}")"
       if [[ -n "${rec}" && "${cur}" != "ABSENT" && "${rec}" != "${cur}" ]]; then
-        echo "ABANDON : ${dest_root}/${crate} a ete edite depuis la derniere sync" >&2
+        echo "ABANDON : ${dest_root}/${crate} a ete edite depuis la dernière sync" >&2
         echo "          (hash consigne ${rec}, hash courant ${cur})." >&2
         echo "          Rapatrier les changements dans DevEye, puis relancer avec --force." >&2
         exit 1
@@ -222,4 +222,4 @@ for i in "${!DIRS[@]}"; do
   sync_to "${DIRS[$i]}" "${LABELS[$i]}"
 done
 
-echo "Synchronisation terminee. Verifier que les consommateurs compilent."
+echo "Synchronisation terminee. Vérifier que les consommateurs compilent."

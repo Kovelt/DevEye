@@ -248,7 +248,7 @@ pub fn to_steps(command: InteractionCommand, origin: (i32, i32)) -> Result<Vec<S
         InteractionCommand::KeyCombo { modifiers, key } => {
             steps.push(Step::Combo { modifiers, key })
         }
-        // Navigate, HandleDialog et UploadFile sont deja refuses par
+        // Navigate, HandleDialog et UploadFile sont déjà refuses par
         // `check_supported` ; toute commande future sans traduction X11 l'est ici.
         other => {
             return Err(X11Error::Unsupported(format!(

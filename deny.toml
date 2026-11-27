@@ -1,36 +1,36 @@
-# cargo-deny — audit des dependances (audit du 04/07/2026, item I3).
+# cargo-deny — audit des dépendances (audit du 04/07/2026, item I3).
 # Lancer : `cargo deny check` (advisories, bans, licenses, sources), comme le
-# job CI `deny`. Decisions : ADR-0002 (licences), ADR-0006 et ADR-0007
+# job CI `deny`. Décisions : ADR-0002 (licences), ADR-0006 et ADR-0007
 # (exceptions d'avis).
 
 [advisories]
 version = 2
-# RUSTSEC : vulnerabilites et crates non maintenues. `unmaintained` cadre au
-# workspace : xcap et consorts tirent des crates d'ecosysteme X11/Wayland au
-# rythme de maintenance inegal, on ne veut pas echouer sur du transitif profond.
+# RUSTSEC : vulnérabilités et crates non maintenues. `unmaintained` cadre au
+# workspace : xcap et consorts tirent des crates d'écosystème X11/Wayland au
+# rythme de maintenance inégal, on ne veut pas échouer sur du transitif profond.
 unmaintained = "workspace"
 ignore = [
     # quick-xml 0.30.0 : deux DoS (run-time quadratique / allocation namespace
-    # non bornee). Tire UNIQUEMENT en build-dependency par xcb (lui-meme via
-    # xcap) pour parser les definitions de protocole X11 A LA COMPILATION —
-    # jamais expose a une entree runtime non fiable. Pas de version corrigee
-    # atteignable sans bump de xcb/xcap. A lever quand xcap remonte quick-xml.
+    # non bornée). Tire UNIQUEMENT en build-dependency par xcb (lui-même via
+    # xcap) pour parser les définitions de protocole X11 À LA COMPILATION —
+    # jamais exposé à une entrée runtime non fiable. Pas de version corrigee
+    # atteignable sans bump de xcb/xcap. À lever quand xcap remonte quick-xml.
     # ADR-0007.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
-    # chrono 0.4 : declare non maintenu (RUSTSEC-2026-0543), sans version
-    # corrigee. Aucune faille connue : seul le statut de maintenance est en
+    # chrono 0.4 : déclaré non maintenu (RUSTSEC-2026-0543), sans version
+    # corrigée. Aucune faille connue : seul le statut de maintenance est en
     # cause. chrono fait partie de l'API publique de deveye-core
-    # (horodatages des snapshots et des evenements de log) : le remplacer est
-    # un changement cassant, reserve a la 2.0. Exception posee le 27/11/2026,
-    # a rouvrir avant la 2.0. ADR-0006.
+    # (horodatages des snapshots et des événements de log) : le remplacer est
+    # un changement cassant, réservé à la 2.0. Exception posée le 27/11/2026,
+    # à rouvrir avant la 2.0. ADR-0006.
     "RUSTSEC-2026-0543",
 ]
 
 [licenses]
 version = 2
-# Licences tierces acceptees (liste blanche exacte, completee a l'usage : toute
-# nouvelle licence dans le graphe doit etre examinee, pas ajoutee par reflexe).
+# Licences tierces acceptées (liste blanche exacte, complétée à l'usage : toute
+# nouvelle licence dans le graphe doit être examinée, pas ajoutée par réflexe).
 allow = [
     "MIT",
     "Apache-2.0",
@@ -42,9 +42,9 @@ allow = [
     "Zlib",
     "CDLA-Permissive-2.0",
 ]
-# Nos propres crates : AGPL-3.0-or-later (outil) et MIT (bibliotheques) sont
-# declares par chaque manifeste. L'exception AGPL est limitee a ces crates par
-# nom : aucune dependance tierce AGPL n'est acceptee implicitement. ADR-0002.
+# Nos propres crates : AGPL-3.0-or-later (outil) et MIT (bibliothèques) sont
+# déclarés par chaque manifeste. L'exception AGPL est limitée à ces crates par
+# nom : aucune dépendance tierce AGPL n'est acceptée implicitement. ADR-0002.
 exceptions = [
     { crate = "deveye-server", allow = ["AGPL-3.0-or-later"] },
     { crate = "deveye-conformance", allow = ["AGPL-3.0-or-later"] },
@@ -65,8 +65,8 @@ exceptions = [
 # Les doublons de versions gonflent les temps de build sans casser : warn.
 multiple-versions = "warn"
 wildcards = "deny"
-# Les dependances path internes du workspace n'ont pas de version : ce sont
-# des "wildcards" legitimes, pas des dependances flottantes de crates.io.
+# Les dépendances path internes du workspace n'ont pas de version : ce sont
+# des "wildcards" légitimes, pas des dépendances flottantes de crates.io.
 allow-wildcard-paths = true
 
 [sources]
