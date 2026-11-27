@@ -82,7 +82,7 @@ fn window_info_from_json(v: &Value) -> WindowInfo {
 /// Génère le script KWin qui liste les fenêtres et renvoie un tableau JSON
 /// `[{id, title, kind}, ...]` via `callDBus` vers `dest`.
 fn build_list_script(dest: &str) -> String {
-    let dest_js = serde_json::to_string(dest).expect("string serialise");
+    let dest_js = serde_json::Value::from(dest).to_string();
     format!(
         r#"var dest = {dest_js};
 var list = (typeof workspace.windowList === "function") ? workspace.windowList()

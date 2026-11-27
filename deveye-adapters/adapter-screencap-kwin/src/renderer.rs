@@ -206,8 +206,8 @@ impl KwinRenderer {
 /// pour les deux plutôt que deux scripts quasi identiques.
 fn build_resolve_script(needle: &str, dest: &str) -> String {
     // serde_json produit des littéraux JS/JSON sûrs (échappement des guillemets).
-    let needle_js = serde_json::to_string(&needle.to_lowercase()).expect("string serialise");
-    let dest_js = serde_json::to_string(dest).expect("string serialise");
+    let needle_js = serde_json::Value::from(needle.to_lowercase()).to_string();
+    let dest_js = serde_json::Value::from(dest).to_string();
     format!(
         r#"var dest = {dest_js};
 var needle = {needle_js};

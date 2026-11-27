@@ -909,6 +909,31 @@ fn parse_mouse_button(button: Option<&str>) -> Result<MouseButton, McpError> {
     }
 }
 
+/// Littéral de chaîne JavaScript (entre guillemets, échappé) pour `s`, à
+/// insérer dans un snippet évalué dans la cible. S'appuie sur l'affichage de
+/// `serde_json::Value`, qui ne peut pas échouer pour une chaîne en mémoire :
+/// aucun `expect` ni valeur de repli silencieuse (ADR-0024).
+fn js_string(s: &str) -> String {
+    serde_json::Value::from(s).to_string()
+}
+
+/// Certains clients MCP sérialisent un argument objet en **chaîne** JSON
+/// (`"{\"page\":\"Agenda\"}"` au lieu de `{"page":"Agenda"}`). Une chaîne qui
+/// contient un objet ou un tableau JSON valide est donc relue comme tel ; toute
+/// autre valeur (dont une chaîne ordinaire, un nombre ou un booléen écrit en
+/// chaîne) est transmise inchangée, pour ne pas altérer un argument voulu comme
+/// texte.
+fn reparse_stringified_args(args: serde_json::Value) -> serde_json::Value {
+    if let serde_json::Value::String(text) = &args {
+        if let Ok(parsed @ (serde_json::Value::Object(_) | serde_json::Value::Array(_))) =
+            serde_json::from_str::<serde_json::Value>(text)
+        {
+            return parsed;
+        }
+    }
+    args
+}
+
 /// Interprète un niveau de log textuel (`trace`, `debug`, `info`, `warn`,
 /// `error`, insensible à la casse) en réutilisant la désérialisation serde de
 /// [`LogLevel`], donc sans table de correspondance à tenir à jour. Un niveau
@@ -1398,6 +1423,7 @@ mod dispatch_tests {
         CommandDescriptor, ConsoleError, DomTree, LogEvent, Screenshot, Size, StateDump,
         WaitOutcome, WindowInfo, WindowRect,
     };
+    use serde_json::json;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
@@ -2087,6 +2113,85 @@ mod dispatch_tests {
             .expect("E1 : pas d'erreur protocolaire");
         assert_eq!(result.is_error, Some(true));
         assert_eq!(body_json(&result)["reason"], "unsupported");
+    }
+
+    // ------------------------------------------------------------------
+    // js_string / invoke_command : arguments stringifies.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn js_string_escapes_quotes_backslashes_and_line_breaks() {
+        assert_eq!(js_string("a\"b"), r#""a\"b""#);
+        assert_eq!(js_string("a\\b"), r#""a\\b""#);
+        assert_eq!(js_string("l1\nl2"), r#""l1\nl2""#);
+        // Un sélecteur hostile reste une simple chaîne littérale.
+        let hostile = "x\"); alert(1); (\"";
+        let literal = js_string(hostile);
+        let reparsed: String = serde_json::from_str(&literal).expect("littéral JSON valide");
+        assert_eq!(reparsed, hostile);
+    }
+
+    #[test]
+    fn reparse_stringified_args_unwraps_json_objects_and_arrays() {
+        assert_eq!(
+            reparse_stringified_args(json!("{\"page\":\"Agenda\",\"n\":2}")),
+            json!({ "page": "Agenda", "n": 2 })
+        );
+        assert_eq!(
+            reparse_stringified_args(json!("[1, 2, 3]")),
+            json!([1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn reparse_stringified_args_leaves_other_values_untouched() {
+        for value in [
+            json!(null),
+            json!({ "deja": "objet" }),
+            json!("simple texte"),
+            // Une chaîne qui ressemble à un scalaire reste du texte voulu.
+            json!("42"),
+            json!("true"),
+            json!("{pas du json"),
+        ] {
+            assert_eq!(reparse_stringified_args(value.clone()), value);
+        }
+    }
+
+    /// Routeur qui enregistre le payload reçu.
+    #[derive(Clone, Default)]
+    struct PayloadSpy {
+        seen: Arc<Mutex<Vec<serde_json::Value>>>,
+    }
+    #[async_trait]
+    impl CommandRouter for PayloadSpy {
+        async fn invoke(
+            &self,
+            _route: &str,
+            payload: serde_json::Value,
+        ) -> PortResult<serde_json::Value> {
+            self.seen.lock().unwrap().push(payload);
+            Ok(json!({ "ok": true }))
+        }
+        async fn list(&self) -> PortResult<Vec<CommandDescriptor>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_command_reparses_a_stringified_object_argument() {
+        let spy = PayloadSpy::default();
+        let server = server_with(|ports| {
+            ports.command_router = Arc::new(spy.clone());
+        });
+        server
+            .invoke_command(Parameters(InvokeCommandParams {
+                name: "set-page".to_string(),
+                args: json!("{\"page\":\"Agenda\"}"),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(spy.seen.lock().unwrap()[0], json!({ "page": "Agenda" }));
     }
 
     // ------------------------------------------------------------------

@@ -85,7 +85,8 @@ impl InteractionSink for CdpClient {
                 // remontera l'erreur — ce qui est le bon signal.
                 let expression = format!(
                     "window.__deveye_router__ && window.__deveye_router__.invoke('navigate', {{ route: {} }})",
-                    serde_json::to_string(&route).expect("string serialise")
+                    // `Value` s'affiche en littéral JSON : pas de `expect`.
+                    Value::from(route)
                 );
                 let _: Value = self
                     .call(

@@ -89,8 +89,8 @@ impl WindowGeometry for KwinWindowGeometry {
 /// [`crate::renderer::KwinRenderer`], ce qui permet de partager le cache de
 /// résolution entre les deux.
 fn build_geometry_script(needle: &str, dest: &str) -> String {
-    let needle_js = serde_json::to_string(&needle.to_lowercase()).expect("string serialise");
-    let dest_js = serde_json::to_string(dest).expect("string serialise");
+    let needle_js = serde_json::Value::from(needle.to_lowercase()).to_string();
+    let dest_js = serde_json::Value::from(dest).to_string();
     format!(
         r#"var dest = {dest_js};
 var needle = {needle_js};

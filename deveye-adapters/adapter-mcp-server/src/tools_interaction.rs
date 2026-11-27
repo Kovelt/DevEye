@@ -119,7 +119,7 @@ impl DeveyeMcpServer {
         let _serial = self.gate.lock().await;
         let snippet = format!(
             "(function(){{ const el = document.querySelector({selector}); {LOCATE_CENTER} }})()",
-            selector = serde_json::to_string(&p.selector).expect("string serialise"),
+            selector = js_string(&p.selector),
         );
         self.click_located(&snippet).await
     }
@@ -137,7 +137,7 @@ impl DeveyeMcpServer {
              const els = Array.from(document.querySelectorAll({CLICKABLES})); \
              const el = els.find(e => (e.innerText || e.textContent || '').trim() === target); \
              {LOCATE_CENTER} }})()",
-            text = serde_json::to_string(&p.text).expect("string serialise"),
+            text = js_string(&p.text),
         );
         self.click_located(&snippet).await
     }

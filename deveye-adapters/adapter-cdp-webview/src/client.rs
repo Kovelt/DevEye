@@ -532,12 +532,13 @@ fn no_target_message(filter: &TargetFilter, seen: &[SeenPage]) -> String {
 
 fn attach_to(inner: &Arc<CdpInner>, target_id: &str) {
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
-    let payload = serde_json::to_string(&json!({
+    // `Value::to_string` ne peut pas échouer : pas de `expect` (ADR-0024).
+    let payload = json!({
         "id": id,
         "method": "Target.attachToTarget",
         "params": { "targetId": target_id, "flatten": true },
-    }))
-    .expect("serialise attachToTarget");
+    })
+    .to_string();
     // La réponse arrive en parallèle d'un event Target.attachedToTarget ;
     // c'est l'event qui pose `session`. On ignore la réponse ici.
     let _ = inner.cmd_tx.send(Message::Text(payload));

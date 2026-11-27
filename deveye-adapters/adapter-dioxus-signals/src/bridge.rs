@@ -122,6 +122,13 @@ impl JsInteraction {
     }
 }
 
+/// Littéral de chaîne JavaScript (entre guillemets, échappé) pour `s`.
+/// `Value::to_string` ne peut pas échouer pour une chaîne en mémoire : aucun
+/// `expect` (ADR-0024).
+fn js_string(s: &str) -> String {
+    serde_json::Value::from(s).to_string()
+}
+
 /// `None` pour un bouton inconnu (`MouseButton` est `#[non_exhaustive]`).
 fn button_code(button: MouseButton) -> Option<u8> {
     match button {
@@ -180,7 +187,7 @@ fn hover_snippet(position: Position) -> String {
 }
 
 fn type_snippet(text: &str) -> String {
-    let text = serde_json::to_string(text).expect("string serialise");
+    let text = js_string(text);
     // Setter natif du prototype : les frameworks réactifs interceptent la
     // propriété `value` de l'instance — passer par le prototype garantit que
     // l'événement `input` voit la nouvelle valeur.
@@ -196,7 +203,7 @@ fn type_snippet(text: &str) -> String {
 }
 
 fn keypress_snippet(key: &str) -> String {
-    let key = serde_json::to_string(key).expect("string serialise");
+    let key = js_string(key);
     format!(
         "(function(){{ const el = document.activeElement || document.body; \
          const opts = {{ key: {key}, bubbles: true, cancelable: true }}; \
@@ -214,7 +221,7 @@ fn has_modifier(modifiers: &[String], aliases: &[&str]) -> bool {
 }
 
 fn keycombo_snippet(modifiers: &[String], key: &str) -> String {
-    let key = serde_json::to_string(key).expect("string serialise");
+    let key = js_string(key);
     let ctrl = has_modifier(modifiers, &["ctrl", "control"]);
     let shift = has_modifier(modifiers, &["shift"]);
     let alt = has_modifier(modifiers, &["alt"]);
@@ -270,7 +277,7 @@ fn scroll_snippet(position: Position, dx: i32, dy: i32) -> String {
 }
 
 fn navigate_snippet(route: &str) -> String {
-    let route = serde_json::to_string(route).expect("string serialise");
+    let route = js_string(route);
     // Le hook routeur `__deveye_router__` est injecté par le SDK opt-in.
     format!(
         "(function(){{ if (!window.__deveye_router__) \
@@ -586,6 +593,11 @@ mod tests {
             .await
             .expect_err("resize exige CDP");
         assert!(matches!(err, PortError::Unsupported(_)), "{err:?}");
+    }
+
+    #[test]
+    fn js_string_produit_un_litteral_echappe() {
+        assert_eq!(js_string("a\"b\\c\nd"), r#""a\"b\\c\nd""#);
     }
 
     #[test]

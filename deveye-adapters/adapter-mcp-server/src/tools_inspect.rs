@@ -272,7 +272,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Invoque une commande logique exposée par l'app cible (route déclarée via deveye_sdk::expose_route). `name` = nom de la commande, `args` = payload JSON. Renvoie la valeur produite par le handler. Plus robuste qu'une cascade de clics pour mettre l'app dans un état donné."
+        description = "Invoque une commande logique exposée par l'app cible (route déclarée via deveye_sdk::expose_route). `name` = nom de la commande, `args` = payload JSON (un objet ou tableau passé sous forme de chaîne JSON est relu comme tel). Renvoie la valeur produite par le handler. Plus robuste qu'une cascade de clics pour mettre l'app dans un état donné."
     )]
     pub(crate) async fn invoke_command(
         &self,
@@ -281,7 +281,7 @@ impl DeveyeMcpServer {
         let _serial = self.gate.lock().await;
         let value = self
             .command_router
-            .invoke(&p.name, p.args)
+            .invoke(&p.name, reparse_stringified_args(p.args))
             .await
             .map_err(port_to_mcp)?;
         Ok(json_success(&value))
