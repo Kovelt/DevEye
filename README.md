@@ -25,15 +25,15 @@ DevEye est un serveur [MCP](https://modelcontextprotocol.io) (Model Context Prot
 **1. `cargo install` depuis GitHub** (compile le binaire, version épinglée) :
 
 ```bash
-cargo install --git https://github.com/Kovelt/DevEye --tag v1.1.0 deveye-server --locked
+cargo install --git https://github.com/Kovelt/DevEye --tag v1.2.0 deveye-server --locked
 ```
 
-**2. Archive de release** : télécharger `deveye-server-v1.1.0-x86_64-unknown-linux-gnu.tar.gz` et `SHA256SUMS` depuis les [versions GitHub](https://github.com/Kovelt/DevEye/releases), puis :
+**2. Archive de release** : télécharger `deveye-server-v1.2.0-x86_64-unknown-linux-gnu.tar.gz` et `SHA256SUMS` depuis les [versions GitHub](https://github.com/Kovelt/DevEye/releases), puis :
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf deveye-server-v1.1.0-x86_64-unknown-linux-gnu.tar.gz
-install -Dm755 deveye-server-v1.1.0-x86_64-unknown-linux-gnu/deveye-server ~/.local/bin/deveye-server
+tar -xzf deveye-server-v1.2.0-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 deveye-server-v1.2.0-x86_64-unknown-linux-gnu/deveye-server ~/.local/bin/deveye-server
 ```
 
 L'archive contient le binaire, `LICENSE` (AGPL-3.0), `LICENSE-MIT`, ce README et le CHANGELOG.

@@ -12,7 +12,7 @@ body:
     attributes:
       label: Version
       description: Sortie de `deveye-server --version`.
-      placeholder: deveye-server 1.1.0
+      placeholder: deveye-server 1.2.0
     validations:
       required: true
   - type: input

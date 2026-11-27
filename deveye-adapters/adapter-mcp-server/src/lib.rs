@@ -77,9 +77,9 @@
 //! - `observe` : outil composite — capture bornée, résumé de l'arbre, état,
 //!   erreurs console et logs récents en un appel (ADR-0029) ; la section
 //!   `elements` (références `snapshot`) s'y ajoute sur demande
-//! - `snapshot` **[expérimental]** : arbre compact d'éléments avec références
+//! - `snapshot` **(expérimental)** : arbre compact d'éléments avec références
 //!   stables (`w:<id>` pour les widgets natifs), texte par défaut, JSON sur demande
-//! - `act` **[expérimental]** : agit sur un élément par sa référence (position
+//! - `act` **(expérimental)** : agit sur un élément par sa référence (position
 //!   remesurée au moment de l'action, jamais de relocalisation silencieuse)
 //!
 //! **Sorties structurées (ADR-0067)** : 29 outils à petite sortie déclarent un
