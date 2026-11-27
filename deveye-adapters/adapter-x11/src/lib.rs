@@ -299,7 +299,9 @@ mod tests {
             display: ":259".into(),
             ..X11Config::default()
         });
-        let Ok(t) = t else { return }; // :259 appartient a un autre uid ou meme $DISPLAY
+        // Pas de sortie silencieuse : la garde n'ecarte :259 que s'il est egal a
+        // $DISPLAY, cas a corriger dans l'environnement plutot qu'a masquer.
+        let t = t.expect("garde : :259 doit etre accepte (ne pas definir DISPLAY=:259)");
         for cmd in [
             InteractionCommand::navigate("x"),
             InteractionCommand::handle_dialog(true, None),
