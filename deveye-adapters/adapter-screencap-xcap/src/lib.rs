@@ -6,7 +6,7 @@
 //! l'observation passive. Pour l'interactivité, voir `adapter-cdp-webview`.
 //!
 //! L'implémentation cherche la fenêtre par sous-chaîne du titre (insensible
-//! à la casse) ; si aucune ne matche, [`Renderer::screenshot`] renvoie
+//! à la casse) ; si aucune ne matche, [`Renderer::screenshot`](deveye_ports::Renderer::screenshot) renvoie
 //! `PortError::Unsupported`.
 
 #![forbid(unsafe_code)]

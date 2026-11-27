@@ -27,7 +27,7 @@ const KWIN_PIPE_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// La fenêtre est désignée par sous-chaîne (insensible à la casse) de son
 /// `caption`. La résolution (UUID + géométrie) passe par
-/// [`crate::resolve_cache`] (TTL court, partagé avec [`crate::KwinWindowGeometry`])
+/// `crate::resolve_cache` (TTL court, partagé avec [`crate::KwinWindowGeometry`])
 /// pour éviter de rejouer un cycle `loadScript`/`start`/`unloadScript` complet
 /// à chaque appel — tout en restant à jour aux ouvertures/fermetures de
 /// fenêtres entre deux outils MCP (TTL expiré, ou purge immédiate sur erreur).
@@ -44,7 +44,7 @@ impl KwinRenderer {
     }
 
     /// Résout `(uuid, géométrie_écran_complète)` via une connexion **déjà
-    /// ouverte par l'appelant** : cache-first (cf. [`crate::resolve_cache`]),
+    /// ouverte par l'appelant** : cache-first (cf. `crate::resolve_cache`),
     /// sinon script KWin éphémère (cycle de vie porté par [`run_kwin_script`])
     /// sur `conn`. Utilisé par [`Renderer::screenshot`], qui a de toute façon
     /// besoin d'une connexion pour `CaptureWindow` — pas la peine d'en ouvrir
@@ -186,7 +186,7 @@ impl Renderer for KwinRenderer {
 impl KwinRenderer {
     /// Resout l'origine ecran `(x, y)` de la fenetre cible : cache d'abord
     /// (meme entree que [`KwinRenderer::viewport_size`], cf.
-    /// [`KwinRenderer::resolve_rect_lazy`]), sinon script KWin ephemere — sans
+    /// `KwinRenderer::resolve_rect_lazy`), sinon script KWin ephemere — sans
     /// jamais ouvrir de connexion D-Bus sur un cache hit.
     ///
     /// Retourne [`KwinScreencapError::WindowNotFound`] si aucune fenetre ne

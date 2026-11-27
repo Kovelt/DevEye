@@ -2,12 +2,12 @@
 //!
 //! Aucun gestionnaire de fenetres requis : on n'utilise ni
 //! `_NET_CLIENT_LIST_STACKING` (vide sans WM) ni EWMH. Un titre peut etre pose
-//! tard par l'application (baseview, GLFW...) : [`find_window`] reessaie
+//! tard par l'application (baseview, GLFW...) : `find_window` reessaie
 //! jusqu'a un delai.
 //!
 //! La logique de selection ([`Matcher`], [`pick_window`]) est pure et testee
 //! sur des arbres construits a la main ; seules les fonctions prenant une
-//! [`Session`] parlent au serveur.
+//! `Session` parlent au serveur.
 
 use std::time::{Duration, Instant};
 

@@ -12,13 +12,11 @@ pub enum MouseButton {
     Middle,
 }
 
-/// Commande d'interaction envoyée à l'app cible via un [`InteractionSink`].
+/// Commande d'interaction envoyée à l'app cible via un `InteractionSink` (trait défini dans `deveye-ports`).
 ///
 /// Les variantes couvrent les besoins MVP du sprint DE-1. `MockAdapter` est
 /// gardé sous le pied : il viendra quand on aura un consommateur réel
 /// (sprint DE-2+).
-///
-/// [`InteractionSink`]: la doc vit dans `deveye-ports`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum InteractionCommand {

@@ -3,7 +3,7 @@
 //! - [`DioxusSignalsInspector`] : `AppInspector::state_snapshot` (le state
 //!   exposé par l'app). Pour le DOM, composer avec `adapter-cdp-webview` —
 //!   ou avec le **pont natif** ci-dessous quand le webview n'a pas de CDP.
-//! - Module [`bridge`] : yeux et mains via le SDK (`SdkEvaluator`,
+//! - Module `bridge` : yeux et mains via le SDK (`SdkEvaluator`,
 //!   `JsInteraction`, `EvalDomInspector`) pour piloter l'app desktop
 //!   WebKitGTK sans CDP.
 
