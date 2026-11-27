@@ -14,7 +14,7 @@ Sous Linux, seul système supporté en 1.x, le webview d'une app Dioxus desktop 
 - aucun CDP, aucune dépendance nouvelle, aucun changement du protocole du SDK (version 1.0, ADR-0068) : on n'ajoute que du JavaScript envoyé par le canal d'évaluation existant ;
 - les références ne doivent jamais être réutilisées, même après un rechargement de page (pas de rebind silencieux, ADR-0072) ;
 - le script doit se tester sans app : dans un Chromium headless, par `Runtime.evaluate`, il est évalué exactement comme par la pompe ;
-- jamais de valeur de champ mot de passe, quelle que soit la requête.
+- jamais de valeur pour un champ reconnu comme secret (filet heuristique, voir « Secrets » : la page n'a pas de notion de secret, seulement des indices).
 
 ## Options considérées
 
@@ -35,11 +35,11 @@ Sous Linux, seul système supporté en 1.x, le webview d'une app Dioxus desktop 
 
 **Périmé** : une clé morte ou détachée donne `Stale` avec pour `candidates` les éléments vivants de même rôle et de même nom, tirés d'un instantané frais ; la référence est oubliée par la table et reste périmée (pas de rebind).
 
-**Secrets** : jamais de valeur pour `input[type=password]`, ni pour un champ dont l'`autocomplete` vaut `current-password` ou `new-password` (cas du bouton « afficher le mot de passe » qui bascule le type en `text`). Les autres valeurs sont tronquées à 200 caractères.
+**Secrets** : le script ne rend pas la valeur d'un champ reconnu comme secret. Indices, par ordre : l'attribut `data-deveye-secret` (sur le champ ou un ancêtre, sauf valeur `false`) ; `input[type=password]` ; un champ vu un jour en `password` (un `WeakSet` retient les champs qu'un bouton « afficher » bascule en `text`, pour autant qu'un instantané les ait vus avant) ; un `autocomplete` `current-password`, `new-password`, `one-time-code` ou `cc-*` ; un `name`, `id`, `aria-label` ou `placeholder` qui satisfait les règles de noms de clés d'ADR-0064 (mêmes termes que `docs/schemas/shared-vectors-1.json`, plus quelques termes de paiement) ; un test dans Chromium vérifie chaque clé requise des vecteurs partagés et qu'aucune clé ordinaire n'est masquée. C'est un **filet, pas une garantie** (SECURITY.md) : un champ sans aucun de ces indices est lu. Le masquage vit dans le script et pas côté Rust, parce que seule la page connaît les attributs du champ ; le nom accessible que reçoit le serveur n'est pas un indice fiable. Les autres valeurs sont tronquées à 200 caractères.
 
 **Câblage** (`deveye-server`) : `--target sdk` compose le pont sur `SdkEvaluator` ; `--target auto` le compose sur l'évaluateur de repli (CDP tant qu'il répond, sinon la pompe) : une bascule change de page côté script, donc d'epoch, donc de génération, sans état partagé de plus. `--target cdp` reste `unsupported` avec une marche à suivre (l'arbre d'accessibilité CDP viendra, et `FallbackElementInspector` lui est réservé). `target_info.elements` est vrai sur `sdk` et `auto`.
 
-**Correctif d'adjacence** : `JsInteraction` (clic, double-clic, survol) utilisait `document.elementFromPoint`, qui s'arrête à l'hôte d'un shadow root : un clic sur un bouton du shadow DOM n'atteignait pas le bouton alors que le pont le désigne. Les trois gestes traversent désormais les shadow roots ouverts (comportement inchangé hors shadow DOM).
+**Correctif d'adjacence** : `JsInteraction` (clic, double-clic, survol) utilisait `document.elementFromPoint`, qui s'arrête à l'hôte d'un shadow root : un clic sur un bouton du shadow DOM n'atteignait pas le bouton alors que le pont le désigne. Les trois gestes traversent désormais les shadow roots ouverts (comportement inchangé hors shadow DOM). La revue du lot l'a étendu à tous les gestes que `act` produit : la saisie résout l'élément actif en profondeur (`shadowRoot.activeElement`) et gère `contenteditable` (`execCommand('insertText')`, repli par ajout du texte), le défilement et le glisser partent de l'élément en profondeur, et la remontée vers un conteneur défilant sort d'un shadow root par son hôte. Les touches (`key`, `key_combo`) visent l'élément actif en profondeur.
 
 **Validation** : `deveye-server/tests/bridge_chromium.rs` (`#[ignore]`, Chromium ou Brave installé, un seul processus) exécute le **même script** dans un Chromium headless par `Runtime.evaluate` : mêmes références d'un instantané à l'autre, clic au centre remesuré après un décalage de mise en page, élément hors vue ou dans un conteneur défilant amené puis cliqué, shadow DOM, désactivé, couvert, nœud déplacé qui garde sa référence, nœud retiré périmé avec candidats, rechargement de page sans réutilisation de numéro, absence de toute valeur secrète. **Taille mesurée** (page de 56 éléments dont une liste de 40 lignes au balisage verbeux) : environ 1,6 Ko de texte compact et 5,3 Ko de JSON contre 18,8 Ko de DOM brut (`outerHTML`), soit 9 % et 28 % ; consigné, sans seuil bloquant.
 
@@ -48,3 +48,9 @@ Sous Linux, seul système supporté en 1.x, le webview d'une app Dioxus desktop 
 **Positives** : un agent désigne un élément d'une app WebKitGTK sans CSS ni coordonnées ; aucune dépendance, aucun changement de protocole ; le script est testé dans un vrai navigateur sans compiler d'app.
 
 **Coûts et risques** : le script est plus fruste que l'arbre d'accessibilité (rôles par table, noms simplifiés, iframes ignorées, pas de calcul d'accessibilité complet) ; un clic synthétique n'est pas `isTrusted` ; `locate` fait défiler la page (effet de bord voulu, comme un humain) ; le rect d'un élément en ligne sur plusieurs lignes est l'enveloppe des lignes, son centre peut tomber hors de l'élément (alors `Obscured` ou clic voisin) ; le test réel sur une app Dioxus WebKitGTK reste manuel (compilation coûteuse). Un `WeakRef` absent (WebKitGTK avant 2.34) retient les éléments tant que la page vit.
+
+## Amendements issus de la revue du lot
+
+- **Centre hors fenêtre** : `locate` amène l'élément en vue aussi quand son rect recouvre la fenêtre mais que son **centre** (le point cliqué) est dehors ; l'élément « à moitié visible » n'est plus refusé en `offscreen`.
+- **Profondeur de sortie** : chaque niveau d'arbre coûte deux niveaux JSON ; le décodeur `serde_json` du serveur refuse au-delà de 128. La sortie est donc bornée à 50 niveaux (`truncated` quand coupée), quelle que soit la profondeur du DOM (parcours borné à 300). `max_depth: 0` vaut 1, comme sur les widgets natifs.
+- **Secrets** : voir « Secrets » ci-dessus ; la limite est consignée dans `SECURITY.md`.
