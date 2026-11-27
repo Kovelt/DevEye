@@ -139,6 +139,13 @@ fn js_string(s: &str) -> String {
     serde_json::Value::from(s).to_string()
 }
 
+/// Élément sous le point, shadow roots ouverts traversés : `elementFromPoint` du
+/// document s'arrête à l'hôte, et un clic sur l'hôte n'atteint pas le bouton du
+/// shadow DOM (le pont d'éléments désigne aussi ces éléments).
+const DEEP_AT: &str = "const deepAt = (e, x, y) => { \
+     while (e && e.shadowRoot) { const d = e.shadowRoot.elementFromPoint(x, y); \
+     if (!d || d === e) break; e = d; } return e; };";
+
 /// `None` pour un bouton inconnu (`MouseButton` est `#[non_exhaustive]`).
 fn button_code(button: MouseButton) -> Option<u8> {
     match button {
@@ -163,7 +170,7 @@ fn click_snippet(position: Position, button: MouseButton) -> PortResult<String> 
         _ => "el.dispatchEvent(new MouseEvent('click', opts));",
     };
     Ok(format!(
-        "(function(){{ const el = document.elementFromPoint({x}, {y}); \
+        "(function(){{ {DEEP_AT} const el = deepAt(document.elementFromPoint({x}, {y}), {x}, {y}); \
          if (!el) return {{ ok: false, reason: 'aucun élément à ({x}, {y})' }}; \
          const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, \
                          clientX: {x}, clientY: {y}, button: {b}, buttons: 1 }}; \
@@ -184,7 +191,7 @@ fn click_snippet(position: Position, button: MouseButton) -> PortResult<String> 
 fn hover_snippet(position: Position) -> String {
     let (x, y) = (position.x, position.y);
     format!(
-        "(function(){{ const el = document.elementFromPoint({x}, {y}); \
+        "(function(){{ {DEEP_AT} const el = deepAt(document.elementFromPoint({x}, {y}), {x}, {y}); \
          if (!el) return {{ ok: false, reason: 'aucun élément à ({x}, {y})' }}; \
          const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, \
                          clientX: {x}, clientY: {y} }}; \
@@ -254,7 +261,7 @@ fn doubleclick_snippet(position: Position) -> String {
     let (x, y) = (position.x, position.y);
     // Deux clicks + un dblclick synthetiques sur l'element sous le point.
     format!(
-        "(function(){{ const el = document.elementFromPoint({x}, {y}); \
+        "(function(){{ {DEEP_AT} const el = deepAt(document.elementFromPoint({x}, {y}), {x}, {y}); \
          if (!el) return {{ ok: false, reason: 'aucun élément à ({x}, {y})' }}; \
          const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, \
                          clientX: {x}, clientY: {y}, button: 0, buttons: 1 }}; \
