@@ -83,3 +83,8 @@ ci: fmt-check lint test doc x11 e2e deny conformance release-noop license-bounda
 # Régénère docs/schemas/ui-widgets-1.json depuis les types de deveye-core
 schema:
     DEVEYE_UPDATE_SCHEMA=1 cargo test -p deveye-core --features schema --test ui_schema
+
+# Compatibilité semver des bibliothèques MIT contre un tag, avec et sans la surface expérimentale (ADR-0072)
+semver baseline="v1.1.0":
+    cargo semver-checks check-release -p deveye-core -p deveye-ports -p deveye-sdk -p deveye-sdk-client --baseline-rev {{baseline}}
+    cargo semver-checks check-release -p deveye-core -p deveye-ports --features unstable-elements --baseline-rev {{baseline}}

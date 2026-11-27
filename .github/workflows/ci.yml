@@ -181,6 +181,21 @@ jobs:
           cargo semver-checks check-release
           -p deveye-core -p deveye-ports -p deveye-sdk -p deveye-sdk-client
           --baseline-rev "$BASELINE_TAG"
+      - name: cargo semver-checks avec la surface expérimentale (ADR-0072)
+        if: steps.baseline.outputs.tag != ''
+        env:
+          BASELINE_TAG: ${{ steps.baseline.outputs.tag }}
+        run: >-
+          cargo semver-checks check-release
+          -p deveye-core -p deveye-ports
+          --features unstable-elements
+          --baseline-rev "$BASELINE_TAG"
+      - name: Surface expérimentale (compile, lint et teste avec la feature)
+        run: |
+          cargo clippy --locked -p deveye-core -p deveye-ports --all-targets \
+            --features deveye-core/unstable-elements,deveye-ports/unstable-elements -- -D warnings
+          cargo test --locked -p deveye-core -p deveye-ports \
+            --features deveye-core/unstable-elements,deveye-ports/unstable-elements
 
   # Frontière des licences et contenu des paquets des quatre crates publiables.
   # Aucune publication ici (ADR-0004) : `cargo package --list` ne publie rien.
