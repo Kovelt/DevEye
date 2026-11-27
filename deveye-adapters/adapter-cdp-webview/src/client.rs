@@ -88,6 +88,19 @@ struct SeenPage {
     url: String,
 }
 
+impl SeenPage {
+    /// Vue `TargetInfo` pour réutiliser [`TargetFilter::matches`] : seules les
+    /// pages (`type=page`) sont mémorisées.
+    fn as_target_info(&self) -> TargetInfo {
+        TargetInfo {
+            target_id: self.target_id.clone(),
+            kind: "page".into(),
+            title: self.title.clone(),
+            url: self.url.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct SessionInfo {
     session_id: String,
@@ -498,9 +511,28 @@ async fn handle_event(inner: &Arc<CdpInner>, method: &str, params: Value) {
                 .unwrap_or(false)
             {
                 *guard = None;
+                drop(guard);
+                reattach_to_known_page(inner).await;
             }
         }
         _ => {}
+    }
+}
+
+/// Après la destruction de la page attachée : rattache la première page déjà
+/// vue qui correspond au filtre. Sans cela, une page connue avant la
+/// destruction (donc sans nouvel événement `targetCreated`) ne serait jamais
+/// reprise et l'appel suivant expirerait.
+async fn reattach_to_known_page(inner: &Arc<CdpInner>) {
+    let candidate = inner
+        .seen
+        .lock()
+        .await
+        .iter()
+        .find(|page| inner.filter.matches(&page.as_target_info()))
+        .map(|page| page.target_id.clone());
+    if let Some(target_id) = candidate {
+        request_attach(inner, &target_id, true).await;
     }
 }
 
@@ -538,10 +570,24 @@ fn truncate_chars(text: &str) -> String {
 /// Message d'erreur quand aucune page ne correspond au filtre : il liste les
 /// pages vues (titre et URL tronqués) pour que l'agent corrige son filtre.
 fn no_target_message(filter: &TargetFilter, seen: &[SeenPage]) -> String {
-    let mut msg = format!(
-        "timeout en attente d'une page CDP attachable (10 s) : aucune page ne correspond au filtre ({})",
-        filter.describe()
-    );
+    // Une page vue qui correspond au filtre mais n'est pas attachée est une
+    // panne différente d'un filtre qui ne correspond à rien : le message ne
+    // doit pas les confondre.
+    let matching = seen
+        .iter()
+        .filter(|p| filter.matches(&p.as_target_info()))
+        .count();
+    let mut msg = if matching > 0 {
+        format!(
+            "timeout en attente d'une page CDP attachable (10 s) : {matching} page(s) vue(s) correspondent au filtre ({}) mais aucune n'a pu être attachée",
+            filter.describe()
+        )
+    } else {
+        format!(
+            "timeout en attente d'une page CDP attachable (10 s) : aucune page ne correspond au filtre ({})",
+            filter.describe()
+        )
+    };
     if seen.is_empty() {
         msg.push_str(" ; aucune page vue par le navigateur");
     } else {
@@ -1103,5 +1149,65 @@ mod tests {
             attach_requests(&mut rx),
             vec!["p1".to_string(), "p2".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn destroying_the_attached_page_reattaches_to_a_known_matching_page() {
+        let (inner, mut rx) = make_inner_with_rx();
+        let attached = json!({ "sessionId": "s1",
+            "targetInfo": { "targetId": "p1", "type": "page", "title": "T", "url": "http://a/" } });
+        handle_event(
+            &inner,
+            "Target.targetCreated",
+            created_params("p1", "http://a/"),
+        )
+        .await;
+        handle_event(
+            &inner,
+            "Target.targetCreated",
+            created_params("p2", "http://b/"),
+        )
+        .await;
+        handle_event(&inner, "Target.attachedToTarget", attached).await;
+        assert_eq!(attach_requests(&mut rx), vec!["p1".to_string()]);
+        handle_event(
+            &inner,
+            "Target.targetDestroyed",
+            json!({ "targetId": "p1" }),
+        )
+        .await;
+        assert!(inner.session.lock().await.is_none());
+        assert_eq!(attach_requests(&mut rx), vec!["p2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn destroying_the_attached_page_without_other_page_requests_nothing() {
+        let (inner, mut rx) = make_inner_with_rx();
+        let attached = json!({ "sessionId": "s1",
+            "targetInfo": { "targetId": "p1", "type": "page", "title": "T", "url": "http://a/" } });
+        handle_event(
+            &inner,
+            "Target.targetCreated",
+            created_params("p1", "http://a/"),
+        )
+        .await;
+        handle_event(&inner, "Target.attachedToTarget", attached).await;
+        let _ = attach_requests(&mut rx);
+        handle_event(
+            &inner,
+            "Target.targetDestroyed",
+            json!({ "targetId": "p1" }),
+        )
+        .await;
+        assert!(attach_requests(&mut rx).is_empty());
+    }
+
+    #[test]
+    fn no_target_message_distinguishes_a_matching_but_unattached_page() {
+        let msg = no_target_message(&TargetFilter::default(), &[seen("Accueil", "http://a/")]);
+        assert!(msg.contains("correspondent au filtre"), "{msg}");
+        assert!(msg.contains("aucune n'a pu être attachée"), "{msg}");
+        let blank = no_target_message(&TargetFilter::default(), &[seen("", "about:blank")]);
+        assert!(blank.contains("aucune page ne correspond"), "{blank}");
     }
 }

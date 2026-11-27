@@ -145,3 +145,45 @@ impl WindowLister for LazyCdp {
         self.client().await?.list_windows().await
     }
 }
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+    use clap::Parser as _;
+
+    fn filter(extra: &[&str]) -> TargetFilter {
+        let args = Args::try_parse_from(["deveye-server"].into_iter().chain(extra.iter().copied()))
+            .expect("arguments valides");
+        build_cdp_filter(&args)
+    }
+
+    #[test]
+    fn without_flags_the_filter_is_open_and_rejects_blank() {
+        let f = filter(&[]);
+        assert!(f.is_open());
+        assert!(!f.accept_blank);
+    }
+
+    #[test]
+    fn url_title_and_blank_flags_are_forwarded_independently() {
+        let f = filter(&["--cdp-target-filter-url", "localhost"]);
+        assert_eq!(f.url_contains.as_deref(), Some("localhost"));
+        assert!(f.title_contains.is_none() && !f.accept_blank);
+
+        let f = filter(&["--cdp-target-filter-title", "Accueil"]);
+        assert_eq!(f.title_contains.as_deref(), Some("Accueil"));
+        assert!(f.url_contains.is_none() && !f.accept_blank);
+
+        let f = filter(&["--cdp-accept-blank"]);
+        assert!(f.accept_blank && f.is_open());
+
+        let f = filter(&[
+            "--cdp-target-filter-url",
+            "a",
+            "--cdp-target-filter-title",
+            "b",
+            "--cdp-accept-blank",
+        ]);
+        assert!(f.url_contains.is_some() && f.title_contains.is_some() && f.accept_blank);
+    }
+}
