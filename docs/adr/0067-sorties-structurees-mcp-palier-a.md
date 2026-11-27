@@ -18,7 +18,9 @@ Un serveur MCP minimal (stdio, sans dépendance) renvoyant une liste de 120 él�
 - **Succès** : Claude Code transmet au modèle **un seul** exemplaire, le `structuredContent` à la place du texte (vérifié avec deux contenus volontairement différents : seul le contenu structuré apparaît dans le `tool_result`). Le coût d'entrée est identique dans les deux cas (même nombre de jetons en cache, 3 907). Aucun doublon dans ce client.
 - **`isError: true`** : Claude Code transmet le **texte**, y compris quand un `structuredContent` non conforme à l'`outputSchema` l'accompagne ; aucune erreur de validation.
 
-Conséquence : pour les outils du palier A, ce que le modèle lit dans Claude Code est le `structuredContent` ; il doit donc valoir exactement le texte. Les autres clients (doublon éventuel, validation stricte) n'ont pas pu être mesurés ici : le risque résiduel est borné en limitant le périmètre.
+Conséquence : pour les outils du palier A, ce que le modèle lit dans Claude Code est le `structuredContent` ; il doit donc valoir exactement le texte. Les autres clients (doublon éventuel, validation stricte, clients officiels TypeScript et Python sur `isError`) n'ont pas pu être mesurés ici : le risque résiduel est borné en limitant le périmètre.
+
+Limites de la mesure : elle date de la 1.1, a été faite à la main sur Claude Code 2.1.332, et son script et sa sortie brute n'ont pas été versionnés : elle n'est pas rejouable à l'identique. Le comportement d'un client peut changer d'une version à l'autre ; en cas de doute, refaire la mesure avec un serveur minimal (même liste de 120 éléments, texte seul puis texte + `structuredContent`). Le test de bout en bout en révision 2024-11-05 vérifie que le texte reste lisible, pas qu'un client strict ignore les champs additifs.
 
 ## Facteurs de décision
 

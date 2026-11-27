@@ -847,6 +847,28 @@ async fn every_tier_a_branch_carries_structured_content_equal_to_its_text() {
     );
 }
 
+/// Un outil hors palier A (texte seul pour ses succès) renvoie, sur une erreur
+/// typée, un `structuredContent` égal à son texte et sans `outputSchema`
+/// (ADR-0067, périmètre documenté dans `docs/usage.md`).
+#[tokio::test]
+async fn typed_errors_of_text_only_tools_still_carry_structured_content() {
+    let s = server(|p| p.evaluator = Arc::new(Eval(Box::new(|| Err(unsupported())))));
+    let result = ok(s
+        .find_element(Parameters(SelectorParams {
+            selector: "#x".to_string(),
+        }))
+        .await);
+    assert_eq!(result.is_error, Some(true));
+    let structured = result
+        .structured_content
+        .clone()
+        .expect("une erreur typée porte un structuredContent");
+    assert_eq!(structured, text_json(&result));
+    assert_eq!(structured["ok"], json!(false));
+    assert_eq!(structured["reason"], json!("unsupported"));
+    assert!(!declared_schemas().contains_key("find_element"));
+}
+
 #[tokio::test]
 async fn state_carries_freshness_and_source_in_meta_without_touching_its_text() {
     let with_sdk = server(|p| p.inspector = Arc::new(state_with(&[("page", json!("A"))])));
