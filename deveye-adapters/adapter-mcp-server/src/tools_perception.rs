@@ -803,6 +803,10 @@ mod tests {
             Err(ElementError::Unsupported { hint }) => {
                 Err(ElementError::Unsupported { hint: hint.clone() })
             }
+            Err(ElementError::Ambiguous { reference, count }) => Err(ElementError::Ambiguous {
+                reference: reference.clone(),
+                count: *count,
+            }),
             Err(other) => Err(ElementError::UnknownRef(other.to_string())),
         }
     }
@@ -825,6 +829,25 @@ mod tests {
     impl InteractionSink for Spy {
         async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
             self.0.lock().unwrap().push(command);
+            Ok(())
+        }
+    }
+
+    /// Accepte `ok` gestes puis échoue : simule un second geste (saisie) refusé
+    /// après un clic déjà parti.
+    struct FailingAfter {
+        ok: usize,
+        seen: Mutex<Vec<InteractionCommand>>,
+    }
+
+    #[async_trait::async_trait]
+    impl InteractionSink for FailingAfter {
+        async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
+            let mut seen = self.seen.lock().unwrap();
+            if seen.len() >= self.ok {
+                return Err(PortError::Interaction("saisie refusée".into()));
+            }
+            seen.push(command);
             Ok(())
         }
     }
@@ -959,6 +982,83 @@ mod tests {
         assert!(!body["hint"].as_str().unwrap().is_empty());
         assert_eq!(body["candidates"][0], "w:save#2");
         assert!(spy.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn act_on_a_duplicated_id_reports_ambiguous_ref_and_emits_nothing() {
+        let elements = Scripted::new(Err(ElementError::Ambiguous {
+            reference: "w:save".into(),
+            count: 2,
+        }));
+        let (server, spy) = rig(elements);
+        let result = server
+            .act(Parameters(act_call("w:save", "click")))
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
+        let body = json_of(&result);
+        assert_eq!(body["reason"], "ambiguous_ref");
+        assert_eq!(body["ref"], "w:save");
+        assert!(spy.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn act_double_click_and_scroll_into_view_emit_the_expected_gestures() {
+        let elements = Scripted::new(Ok(ElementLocation::new("w:a", [100, 100, 40, 20])));
+        let (server, spy) = rig(elements);
+        server
+            .act(Parameters(act_call("w:a", "double_click")))
+            .await
+            .unwrap();
+        let result = server
+            .act(Parameters(act_call("w:a", "scroll_into_view")))
+            .await
+            .unwrap();
+        assert_ne!(result.is_error, Some(true));
+        assert_eq!(json_of(&result)["ok"], true);
+        // `scroll_into_view` ne fait que vérifier la visibilité : aucun geste.
+        assert_eq!(
+            *spy.0.lock().unwrap(),
+            vec![InteractionCommand::double_click(Position::new(120, 110))]
+        );
+    }
+
+    #[tokio::test]
+    async fn act_refuses_a_remeasured_center_outside_the_viewport_without_emitting() {
+        // Le viewport factice fait 1 000 x 800 : ce centre est dehors.
+        let elements = Scripted::new(Ok(ElementLocation::new("w:a", [5_000, 5_000, 10, 10])));
+        let (server, spy) = rig(elements);
+        let result = server
+            .act(Parameters(act_call("w:a", "click")))
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(json_of(&result)["reason"], "offscreen");
+        assert!(spy.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn act_type_failing_on_the_second_gesture_reports_the_failure_after_the_click() {
+        let elements = Scripted::new(Ok(ElementLocation::new("w:name", [10, 20, 100, 20])));
+        let sink = Arc::new(FailingAfter {
+            ok: 1,
+            seen: Mutex::new(Vec::new()),
+        });
+        let mut ports = crate::dispatch_tests::base_ports();
+        ports.elements = elements;
+        ports.interaction = sink.clone();
+        ports.renderer = Arc::new(Wide);
+        let server = DeveyeMcpServer::new(ports);
+        let mut params = act_call("w:name", "type");
+        params.text = Some("alice".into());
+        let result = server.act(Parameters(params)).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(json_of(&result)["reason"], "interaction_failed");
+        // Le clic de mise au focus est déjà parti : seule la saisie a échoué.
+        assert_eq!(
+            *sink.seen.lock().unwrap(),
+            vec![InteractionCommand::click(Position::new(60, 30))]
+        );
     }
 
     #[tokio::test]
