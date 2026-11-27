@@ -42,3 +42,8 @@ anyhow = "1"
 tracing = "0.1"
 # Sortie des traces sur STDERR uniquement : stdout est le canal MCP (stdio).
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+
+[dev-dependencies]
+# Fenetre fixture du test de bout en bout MCP (tests/e2e_mcp.rs) : client X11
+# en Rust pur, deja dans le graphe via adapter-x11.
+x11rb = "0.13"

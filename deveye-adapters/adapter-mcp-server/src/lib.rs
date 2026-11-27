@@ -143,6 +143,12 @@ mod tools_wait;
 /// anciens.
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
+/// Nombre d'outils exposés. Source unique : le test de classification de ce
+/// crate et le test de bout en bout du binaire (`deveye-server/tests/e2e_mcp.rs`)
+/// l'exigent tous deux, de sorte qu'ajouter ou retirer un outil impose de
+/// mettre à jour ce nombre, la classification et la documentation.
+pub const EXPECTED_TOOL_COUNT: usize = 44;
+
 /// E4 : timeout par defaut partage par tous les outils `wait_*` a boucle de
 /// polling explicite, quand `timeout_ms` est omis par l'appelant. Une seule
 /// constante nommee plutot que le litteral `5_000` recopie a chaque outil.
@@ -2898,6 +2904,7 @@ mod dispatch_tests {
             );
         }
         assert_eq!(tools.len(), CLASSIFICATION.len());
+        assert_eq!(tools.len(), EXPECTED_TOOL_COUNT);
     }
 
     #[test]
