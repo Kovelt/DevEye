@@ -184,8 +184,8 @@ fallback_port! {
 /// inconnue ou ambiguë n'est jamais rejouée sur l'autre backend : ses références ne
 /// désignent pas les mêmes nœuds, ce serait un rebind silencieux (ADR-0072).
 ///
-/// Pas encore câblé : le primaire (CDP) et le repli (pont JS) arrivent avec les lots
-/// suivants de la 1.2.
+/// Pas encore câblé : `sdk` et `auto` composent le pont JS directement sur leur
+/// évaluateur (ADR-0074) ; ce repli attend le primaire CDP (arbre d'accessibilité).
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct FallbackElementInspector {
     pub(crate) primary: Arc<dyn ElementInspector>,

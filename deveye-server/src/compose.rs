@@ -16,7 +16,7 @@ use adapter_composite::{
     NoopConsoleErrorSource, RouteDomInspector, RouteWidgetsElements, DEFAULT_DOM_ROUTE,
 };
 use adapter_dioxus_signals::{
-    DioxusSignalsInspector, EvalDomInspector, JsInteraction, SdkEvaluator,
+    BridgeElementInspector, DioxusSignalsInspector, EvalDomInspector, JsInteraction, SdkEvaluator,
 };
 use adapter_interaction_kwin_eis::KwinEisInteraction;
 use adapter_logs_tracing::SdkTracingLogSource;
@@ -243,27 +243,37 @@ const JS_DEPENDENT_TOOLS: &[&str] = &[
     "collect_console_errors",
 ];
 
-/// Les cibles dont les éléments viennent de la route `ui.widgets` de l'app : les
-/// natives, sans DOM (`snapshot` et `act`, expérimentaux, ADR-0073).
-fn has_widget_elements(target: TargetMode) -> bool {
-    matches!(target, TargetMode::X11 | TargetMode::KwinEis)
+/// Les cibles qui savent désigner des éléments (`snapshot` et `act`, expérimentaux,
+/// ADR-0073 et ADR-0074) : les natives par la route `ui.widgets`, les webviews à
+/// pompe SDK (`sdk`, `auto`) par le script du pont JS. `--target cdp` pur attend
+/// l'arbre d'accessibilité CDP.
+fn has_elements(target: TargetMode) -> bool {
+    matches!(
+        target,
+        TargetMode::X11 | TargetMode::KwinEis | TargetMode::Sdk | TargetMode::Auto
+    )
 }
 
-/// Marche à suivre sur une cible à webview, où les références d'éléments ne sont
-/// pas encore câblées (pont WebKitGTK puis CDP, feuille de route 1.2).
-const WEBVIEW_ELEMENTS_HINT: &str =
-    "les références d'éléments ne sont pas encore disponibles sur les cibles à webview (pont \
-     WebKitGTK puis CDP à venir) ; en attendant, `dom`, `find_element`, `click_selector` et \
-     `click_text` désignent par sélecteur ou par texte";
+/// Marche à suivre sur `--target cdp`, où les références d'éléments ne sont pas
+/// encore câblées.
+const CDP_ELEMENTS_HINT: &str =
+    "les références d'éléments ne sont pas encore disponibles sur `--target cdp` (arbre \
+     d'accessibilité CDP à venir) ; `--target auto` ou `--target sdk` les servent par le pont JS \
+     du SDK, et `dom`, `find_element`, `click_selector` et `click_text` désignent par sélecteur \
+     ou par texte";
 
 /// Éléments par référence de la cible : widgets natifs par la route `ui.widgets`
-/// (x11, kwin-eis), indisponibles ailleurs.
-fn build_elements(args: &Args) -> Arc<dyn ElementInspector> {
-    if has_widget_elements(args.target) {
-        let router: Arc<dyn CommandRouter> = Arc::new(SdkCommandRouter::new(args.sdk_url.clone()));
-        Arc::new(RouteWidgetsElements::new(router, DEFAULT_DOM_ROUTE))
-    } else {
-        Arc::new(UnsupportedElementInspector::new(WEBVIEW_ELEMENTS_HINT))
+/// (x11, kwin-eis), DOM par le script du pont JS évalué par `evaluator` (sdk ; auto,
+/// où l'évaluateur est celui du repli : CDP puis pompe SDK), indisponibles sur cdp.
+fn build_elements(args: &Args, evaluator: Arc<dyn JsEvaluator>) -> Arc<dyn ElementInspector> {
+    match args.target {
+        TargetMode::X11 | TargetMode::KwinEis => {
+            let router: Arc<dyn CommandRouter> =
+                Arc::new(SdkCommandRouter::new(args.sdk_url.clone()));
+            Arc::new(RouteWidgetsElements::new(router, DEFAULT_DOM_ROUTE))
+        }
+        TargetMode::Sdk | TargetMode::Auto => Arc::new(BridgeElementInspector::new(evaluator)),
+        TargetMode::Cdp => Arc::new(UnsupportedElementInspector::new(CDP_ELEMENTS_HINT)),
     }
 }
 
@@ -290,7 +300,7 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
         focus_window: kwin_focus,
         window_manager: wm_kwin.to_string(),
         clipboard,
-        elements: has_widget_elements(target),
+        elements: has_elements(target),
         js_dependent_tools: JS_DEPENDENT_TOOLS.iter().map(|t| t.to_string()).collect(),
         server: crate::version::server_version(),
         notes: String::new(),
@@ -569,6 +579,8 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
         build_clipboard()
     };
 
+    let elements = build_elements(args, evaluator.clone());
+
     Ok(DeveyeMcpServer::new(DeveyePorts {
         renderer,
         interaction,
@@ -582,7 +594,7 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
         window_manager,
         window_geometry,
         clipboard,
-        elements: build_elements(args),
+        elements,
         target_info: build_target_info(args.target, HostCaps::detect(args)),
         effective_backend: fallback_state
             .map(|state| -> EffectiveBackendProbe { Arc::new(move || state.label().to_string()) }),
@@ -678,29 +690,33 @@ mod tests {
         assert!(info.notes.contains("ui.widgets") && info.notes.contains("--display"));
     }
 
-    /// `snapshot`/`act` : annoncés pour les cibles à arbre de widgets, pas ailleurs.
+    /// `snapshot`/`act` : annoncés pour les cibles à arbre de widgets ou à pompe SDK, pas sur cdp.
     #[test]
     fn elements_are_announced_only_for_widget_targets() {
         for (target, expected) in [
             (TargetMode::X11, true),
             (TargetMode::KwinEis, true),
-            (TargetMode::Auto, false),
+            (TargetMode::Auto, true),
             (TargetMode::Cdp, false),
-            (TargetMode::Sdk, false),
+            (TargetMode::Sdk, true),
         ] {
             let info = build_target_info(target, host(false, false));
             assert_eq!(info.elements, expected, "{target:?}");
-            assert_eq!(has_widget_elements(target), expected, "{target:?}");
+            assert_eq!(has_elements(target), expected, "{target:?}");
         }
     }
 
-    /// Sur une cible à webview, `snapshot` répond `unsupported` avec une marche à suivre.
+    /// Sur `--target cdp`, `snapshot` répond `unsupported` avec une marche à suivre.
     #[tokio::test]
-    async fn webview_targets_answer_unsupported_with_a_hint() {
+    async fn cdp_target_answers_unsupported_with_a_hint() {
         use clap::Parser as _;
         use deveye_core::elements::SnapshotQuery;
-        let args = Args::try_parse_from(["deveye-server", "--target", "sdk"]).expect("args");
-        match build_elements(&args).snapshot(&SnapshotQuery::new()).await {
+        let args = Args::try_parse_from(["deveye-server", "--target", "cdp"]).expect("args");
+        let evaluator: Arc<dyn JsEvaluator> = Arc::new(UnsupportedEvaluator);
+        match build_elements(&args, evaluator)
+            .snapshot(&SnapshotQuery::new())
+            .await
+        {
             Err(deveye_ports::ElementError::Unsupported { hint }) => {
                 assert!(hint.contains("click_selector"), "{hint}")
             }
