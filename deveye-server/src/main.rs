@@ -8,6 +8,15 @@
 //! Voir `docs/architecture.md` pour le contexte global et `docs/usage.md`
 //! pour le mode d'emploi.
 
+// Linux seul est supporté en 1.0 (ADR-0037) : les adapters natifs (X11, KWin,
+// Wayland, D-Bus) n'existent que là. Plutôt qu'un binaire qui échouerait au
+// lancement, la compilation hors Linux s'arrête avec ce message.
+#[cfg(not(target_os = "linux"))]
+compile_error!(
+    "deveye-server ne supporte que Linux en 1.0 (ADR-0037) : les adapters X11, KWin et \
+     Wayland sont propres à Linux. Voir docs/adr/0037-linux-seul-supporte-en-1-0.md."
+);
+
 mod cdp;
 mod cli;
 mod compose;
