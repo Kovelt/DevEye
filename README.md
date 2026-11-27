@@ -256,6 +256,7 @@ Audit post-M7 (108 constats priorisés, dont le gate MCP T1/M1 bloquant) : [docs
 - [docs/usage.md](docs/usage.md) — outils MCP détaillés, configuration client MCP, modes Linux/kwin-eis/x11/WASM, troubleshooting
 - [docs/architecture.md](docs/architecture.md) — architecture hexagonale, 12 ports, robustesse CDP, sécurité
 - [docs/wire-protocol.md](docs/wire-protocol.md) — contrat HTTP du SDK (5 endpoints, formes JSON, garde Host, checklist implémentation tierce)
+- [docs/stability.md](docs/stability.md) — politique semver de la 1.0 : surface stable, dépréciation, MSRV, versionnage du protocole
 
 ---
 
