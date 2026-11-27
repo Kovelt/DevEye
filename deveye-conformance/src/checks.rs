@@ -908,6 +908,53 @@ mod tests {
         Target::new(&format!("http://127.0.0.1:{port}")).unwrap()
     }
 
+    /// Vecteurs partagés avec le SDK Rust et les SDK tiers (ADR-0064).
+    fn shared_vectors() -> Value {
+        const TEXT: &str = include_str!("../../docs/schemas/shared-vectors-1.json");
+        serde_json::from_str(TEXT).expect("vecteurs partagés : JSON invalide")
+    }
+
+    fn strings(value: &Value) -> Vec<String> {
+        value
+            .as_array()
+            .expect("liste attendue")
+            .iter()
+            .map(|v| v.as_str().expect("chaîne attendue").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn host_lists_match_the_shared_vectors() {
+        let guard = &shared_vectors()["host_guard"];
+        assert_eq!(
+            accepted_hosts(31337),
+            strings(&guard["accepted"])
+                .iter()
+                .map(|h| h.replace("{port}", "31337"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            rejected_hosts(31337),
+            strings(&guard["rejected"])
+                .iter()
+                .map(|h| h.replace("{port}", "31337"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn secret_key_rule_matches_the_shared_vectors() {
+        let vectors = shared_vectors();
+        let r = &vectors["redaction"];
+        assert_eq!(r["placeholder"], REDACTED);
+        for key in strings(&r["required_secret_keys"]) {
+            assert!(is_secret_key(&key), "{key}");
+        }
+        for key in strings(&r["ordinary_keys"]) {
+            assert!(!is_secret_key(&key), "{key}");
+        }
+    }
+
     #[tokio::test]
     async fn host_absent_accepts_a_400_from_the_http_stack() {
         let t = stub(Some(

@@ -131,3 +131,4 @@ Les ADR rédigés pendant la préparation de la 1.0 avec le statut « Proposé �
 | [0061](0061-version-1-0-0-perimetre-de-la-sortie.md) | Version 1.0.0 : périmètre de la sortie | Accepté |
 | [0062](0062-schema-deveye-ui-1-de-la-route-ui-widgets.md) | Schéma `deveye.ui/1` de la route `ui.widgets` | Accepté |
 | [0063](0063-dependance-optionnelle-schemars-dans-deveye-core.md) | Dépendance optionnelle `schemars` dans `deveye-core` | Accepté |
+| [0064](0064-masquage-des-secrets-transversal-et-vecteurs-partages.md) | Masquage des secrets transversal et vecteurs partagés | Accepté |

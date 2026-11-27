@@ -767,6 +767,27 @@ mod tests {
     }
 
     #[test]
+    fn shared_host_vectors_agree_with_the_guard() {
+        // Vecteurs partagés (ADR-0064) ; absents d'une archive crates.io : ignoré.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/schemas/shared-vectors-1.json");
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let vectors: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let guard = &vectors["host_guard"];
+        let with_port = |host: &str| host.replace("{port}", "31337");
+        for host in guard["accepted"].as_array().unwrap() {
+            let host = with_port(host.as_str().unwrap());
+            assert!(host_is_local(&host), "devrait accepter {host:?}");
+        }
+        for host in guard["rejected"].as_array().unwrap() {
+            let host = with_port(host.as_str().unwrap());
+            assert!(!host_is_local(&host), "devrait rejeter {host:?}");
+        }
+    }
+
+    #[test]
     fn host_is_local_accepts_loopback_forms() {
         for host in [
             "localhost",

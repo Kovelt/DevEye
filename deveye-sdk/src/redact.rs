@@ -188,4 +188,56 @@ mod tests {
         redact(&mut value, &no_extra());
         assert_eq!(value, json!(null));
     }
+
+    /// Vecteurs partagés avec la suite de conformité et les SDK tiers
+    /// (`docs/schemas/shared-vectors-1.json`, ADR-0064). Absents d'une archive
+    /// crates.io : le test est alors ignoré.
+    fn shared_vectors() -> Option<serde_json::Value> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/schemas/shared-vectors-1.json");
+        let text = std::fs::read_to_string(path).ok()?;
+        Some(serde_json::from_str(&text).expect("vecteurs partagés : JSON invalide"))
+    }
+
+    fn strings(value: &serde_json::Value) -> Vec<String> {
+        value
+            .as_array()
+            .expect("liste attendue")
+            .iter()
+            .map(|v| v.as_str().expect("chaîne attendue").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn shared_vectors_agree_with_the_sdk_rules() {
+        let Some(vectors) = shared_vectors() else {
+            return;
+        };
+        let r = &vectors["redaction"];
+        assert_eq!(r["placeholder"], REDACTED);
+        for group in ["required_secret_keys", "extended_secret_keys"] {
+            for key in strings(&r[group]) {
+                assert!(is_secret_key(&key, &no_extra()), "{key} ({group})");
+            }
+        }
+        for key in strings(&r["ordinary_keys"]) {
+            assert!(!is_secret_key(&key, &no_extra()), "{key}");
+        }
+        let declared = &r["declared_keys"];
+        let extra: HashSet<String> = strings(&declared["declared"])
+            .iter()
+            .map(|k| normalize_key(k))
+            .collect();
+        for key in strings(&declared["secret"]) {
+            assert!(is_secret_key(&key, &extra), "{key}");
+        }
+        for key in strings(&declared["ordinary"]) {
+            assert!(!is_secret_key(&key, &extra), "{key}");
+        }
+        for case in r["redact"].as_array().unwrap() {
+            let mut input = case["input"].clone();
+            redact(&mut input, &no_extra());
+            assert_eq!(input, case["expected"], "{}", case["name"]);
+        }
+    }
 }
