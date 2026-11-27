@@ -6,13 +6,17 @@
 //! - Module `bridge` : yeux et mains via le SDK (`SdkEvaluator`,
 //!   `JsInteraction`, `EvalDomInspector`) pour piloter l'app desktop
 //!   WebKitGTK sans CDP.
+//! - Module `elements` : `BridgeElementInspector`, références `e<n>` par un script
+//!   JS synchrone (expérimental, ADR-0074).
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 
 mod bridge;
+mod elements;
 
 pub use bridge::{EvalDomInspector, JsInteraction, SdkEvaluator};
+pub use elements::{BridgeElementInspector, BRIDGE_TARGET_KIND, SCRIPT as ELEMENTS_BRIDGE_SCRIPT};
 
 use async_trait::async_trait;
 use serde::Deserialize;

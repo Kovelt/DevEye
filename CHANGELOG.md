@@ -6,6 +6,39 @@ Le format suit [Keep a Changelog 1.1.0](https://keepachangelog.com/fr/1.1.0/) et
 
 ## [Non publié]
 
+## [1.2.0] - 2026-11-27
+
+Version mineure « Désigner par référence » : un agent désigne un élément par une référence stable (`w:<id>` sur les cibles natives, `e<n>` sur le pont JS WebKitGTK) et gagne les modificateurs d'entrée. Aucun changement cassant de la surface stable ([`docs/stability.md`](docs/stability.md)) ; le protocole du SDK reste en version 1.0. **Surface expérimentale, hors promesse semver** ([ADR-0069](docs/adr/0069-surface-experimentale-par-features-unstable.md)) : la feature `unstable-elements` de `deveye-core` et `deveye-ports`, les outils MCP `snapshot` et `act`, la section `observe` `elements` et le champ `target_info.elements`.
+
+### Added
+
+- Modificateurs d'entrée ([ADR-0075](docs/adr/0075-modificateurs-d-entree-withmodifiers-et-keyhold-borne.md)) : `Modifier`, `InteractionCommand::WithModifiers` (décorateur validé aussi à la désérialisation) et `KeyHold` borné dans `deveye-core` ; paramètre `modifiers` sur huit outils MCP et nouvel outil stable `key_hold` ; implémentés par les cibles `x11`, `kwin-eis` (relâchement garanti), CDP et le pont JS (événements synthétiques ; `key_hold` y est refusé).
+- Feature `unstable-elements` (`deveye-core` : module `elements`, `RefTable` ; `deveye-ports` : port `ElementInspector`, `ElementError`) ([ADR-0072](docs/adr/0072-references-d-elements-stables-et-outils-snapshot-act.md)). **Expérimental, hors promesse semver.**
+- Outils MCP expérimentaux `snapshot` (arbre compact d'éléments avec références `w:<id>` ou `e<n>`) et `act` (clic, double-clic, clic droit, survol, saisie, défilement sur une référence, position remesurée à l'action), section `observe` `elements` et champ `target_info.elements` ([ADR-0073](docs/adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)). Erreurs typées `stale_ref` (avec `candidates`), `stale_tree`, `unknown_ref`, `ambiguous_ref`, `obscured`, `offscreen`, `disabled`. **Expérimental, hors promesse semver.**
+- Pont JS d'éléments pour WebKitGTK (cibles `sdk` et `auto`), sans CDP, évalué par la pompe `document::eval` du SDK : références `e<n>` stables, jamais réutilisées, périmées par un rechargement ([ADR-0074](docs/adr/0074-pont-js-d-elements-pour-webkitgtk.md)). Un attribut `data-deveye-secret` marque les champs dont la valeur ne doit jamais sortir.
+- `ElementLocation::disabled`, `ElementError::Ambiguous` et `ElementError::StaleTree` (feature `unstable-elements`) ; `act` répond `stale_tree` quand l'app ne republie plus son arbre `ui.widgets` depuis plus de 10 s.
+
+### Changed
+
+- Descriptions MCP de `snapshot` (portée, sélecteur CSS), `act` (`obscured` non produit par les widgets natifs) et `target_info` (champ expérimental `elements`) ; `observe` accepte la section expérimentale `elements` (message de section inconnue allongé).
+- `deveye-server doctor` signale en avertissement les identifiants synthétisés du format legacy de `ui.widgets` (les références `w:<id>` n'y seraient pas stables d'une relance à l'autre) ; les identifiants dupliqués restent un échec.
+- Sur les cibles `sdk` et `auto`, `click`, `hover` et `double_click` atteignent les éléments des shadow roots ouverts (le script évalué traverse les hôtes) ; comportement inchangé hors shadow DOM.
+
+### Fixed
+
+- `act` refuse un widget dont un ancêtre est invisible ou rogné ; un identifiant synthétisé dont le rôle ou le nom a changé répond `stale_ref` au lieu de cliquer un voisin.
+- Le texte de `snapshot` échappe le nom des éléments : un libellé piégé ne peut plus forger une référence ou un état.
+- Le script du pont JS ne coupe plus un libellé en pleine paire de substitution (emoji) ; il ne classe plus `tabindex="0"` ou vide en cliquable (tabindex strictement positif seulement) ; un simple recouvrement ne fait plus défiler la page hors conteneur défilant.
+- `x11` ajuste le focus clavier avant l'appui d'un modificateur (Shift+clic sans gestionnaire de fenêtres).
+- `KeyHold` refuse une touche vide dès la désérialisation ; la désérialisation de `WithModifiers` est bornée aux cinq gestes de pointeur, sans récursion.
+- `parse_ref` refuse la référence `e0`, jamais émise par la table d'éléments ; `ElementLocation::center` sature au lieu de déborder et ignore une largeur ou une hauteur négative (feature `unstable-elements`).
+- Le pont JS traverse les shadow roots ouverts pour la saisie (`type` et `contenteditable`), le défilement, le glisser et les touches, et amène en vue un élément à moitié visible dont le centre est hors fenêtre.
+- `snapshot` borne sa sortie à 50 niveaux (au-delà, `truncated`) : un DOM très profond ne fait plus échouer le décodage ; `max_depth: 0` vaut 1 sur toutes les cibles.
+
+### Security
+
+- `snapshot` et `observe` `elements` ne rendent pas la valeur d'un champ web reconnu comme secret (type `password`, `autocomplete` sensible, nom ou libellé évoquant un secret, attribut `data-deveye-secret`) ; filet heuristique, limites dans [`SECURITY.md`](SECURITY.md).
+
 ## [1.1.0] - 2026-11-27
 
 Version mineure « Perception structurée » : contrat des widgets natifs figé, réponses MCP typées et lisibles par machine, logs poussés par le SDK. Aucun changement cassant de la surface stable ([`docs/stability.md`](docs/stability.md)) ; le protocole du SDK reste en version 1.0, les ajouts additifs se découvrent par `capabilities` ([ADR-0068](docs/adr/0068-capacites-additives-et-version-du-protocole.md)). Aucune surface expérimentale n'est ajoutée en 1.1 : la règle des features `unstable-*`, hors promesse semver, est posée pour les versions suivantes ([ADR-0069](docs/adr/0069-surface-experimentale-par-features-unstable.md)).
@@ -149,7 +182,8 @@ Les versions `0.1.x` (juin 2026) n'ont pas été taguées ; leur contenu est ré
 
 - **0.1.x (2026-06-02 au 2026-07-03)** : mise en place du workspace hexagonal ; première capture et premières interactions via CDP ; pont natif du SDK quand CDP est indisponible ; audit CI (offline-first) et `cargo deny` ; wire protocol formalisé ; jalons M0 à M7 (réconciliation du SDK, capture KWin ScreenShot2, clic droit, filtre de cible CDP configurable, outils de scénarios `wait_*`, `assert_*` et `drag_drop`, `list_windows`, interaction OS-level Wayland via KWin EIS, domaine d'orchestration, `justfile` et repli plein écran) ; audit qualité du 25 juin et durcissements.
 
-[Non publié]: https://github.com/Kovelt/DevEye/compare/v1.1.0...HEAD
+[Non publié]: https://github.com/Kovelt/DevEye/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Kovelt/DevEye/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Kovelt/DevEye/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Kovelt/DevEye/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/Kovelt/DevEye/releases/tag/v0.2.0

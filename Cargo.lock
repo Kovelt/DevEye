@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adapter-cdp-webview"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-clipboard-wayland"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "deveye-ports",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-commands-http"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "deveye-core",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-composite"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "deveye-core",
@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-dioxus-signals"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "deveye-core",
@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-interaction-kwin-eis"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "deveye-core",
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-logs-tracing"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "deveye-core",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-mcp-server"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-screencap-kwin"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "deveye-core",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-screencap-xcap"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "deveye-core",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-x11"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "deveye-core",
@@ -845,7 +845,7 @@ checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 
 [[package]]
 name = "deveye-conformance"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "chrono",
  "clap",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "deveye-core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "chrono",
  "schemars",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "deveye-ports"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "deveye-core",
@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "deveye-sdk"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "axum",
  "chrono",
@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "deveye-sdk-client"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "deveye-ports",
  "reqwest",
@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "deveye-server"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "adapter-cdp-webview",
  "adapter-clipboard-wayland",

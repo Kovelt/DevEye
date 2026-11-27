@@ -13,8 +13,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::{info, warn};
 
+use deveye_core::elements::{ElementLocation, ElementSnapshot, SnapshotQuery};
 use deveye_core::{DomTree, InteractionCommand, Screenshot, Size, StateDump};
-use deveye_ports::{AppInspector, InteractionSink, JsEvaluator, PortError, PortResult, Renderer};
+use deveye_ports::{
+    AppInspector, ElementError, ElementInspector, ElementResult, InteractionSink, JsEvaluator,
+    PortError, PortResult, Renderer,
+};
 
 // ── Predicat de repli ─────────────────────────────────────────────────────────
 
@@ -175,6 +179,58 @@ fallback_port! {
     }
 }
 
+/// Repli par appel pour les éléments : le primaire d'abord, le repli seulement si la
+/// **liaison** manque (`ElementError::Port(PortError::Network)`). Une référence périmée,
+/// inconnue ou ambiguë n'est jamais rejouée sur l'autre backend : ses références ne
+/// désignent pas les mêmes nœuds, ce serait un rebind silencieux (ADR-0072).
+///
+/// Pas encore câblé : `sdk` et `auto` composent le pont JS directement sur leur
+/// évaluateur (ADR-0074) ; ce repli attend le primaire CDP (arbre d'accessibilité).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct FallbackElementInspector {
+    pub(crate) primary: Arc<dyn ElementInspector>,
+    pub(crate) fallback: Arc<dyn ElementInspector>,
+    pub(crate) state: Arc<FallbackState>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn is_element_liaison_error(error: &ElementError) -> bool {
+    matches!(error, ElementError::Port(port) if is_liaison_error(port))
+}
+
+#[async_trait]
+impl ElementInspector for FallbackElementInspector {
+    async fn snapshot(&self, query: &SnapshotQuery) -> ElementResult<ElementSnapshot> {
+        match self.primary.snapshot(query).await {
+            Err(e) if is_element_liaison_error(&e) => {
+                if let ElementError::Port(cause) = &e {
+                    self.state.mark_fallback(cause);
+                }
+                self.fallback.snapshot(query).await
+            }
+            other => {
+                self.state.mark_primary();
+                other
+            }
+        }
+    }
+
+    async fn locate(&self, reference: &str) -> ElementResult<ElementLocation> {
+        match self.primary.locate(reference).await {
+            Err(e) if is_element_liaison_error(&e) => {
+                if let ElementError::Port(cause) = &e {
+                    self.state.mark_fallback(cause);
+                }
+                self.fallback.locate(reference).await
+            }
+            other => {
+                self.state.mark_primary();
+                other
+            }
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -301,5 +357,72 @@ mod tests {
         assert_eq!(state.label(), "sdk");
         state.mark_primary();
         assert_eq!(state.label(), "cdp");
+    }
+
+    // ----- éléments par référence -----
+
+    struct ScriptedElements(ElementResult<()>);
+
+    #[async_trait]
+    impl ElementInspector for ScriptedElements {
+        async fn snapshot(&self, _: &SnapshotQuery) -> ElementResult<ElementSnapshot> {
+            match &self.0 {
+                Ok(()) => Ok(ElementSnapshot::new(0, "fallback", Vec::new())),
+                Err(ElementError::Port(PortError::Network(m))) => {
+                    Err(PortError::Network(m.clone()).into())
+                }
+                Err(_) => Err(ElementError::UnknownRef("x".to_string())),
+            }
+        }
+
+        async fn locate(&self, reference: &str) -> ElementResult<ElementLocation> {
+            match &self.0 {
+                Ok(()) => Ok(ElementLocation::new(reference, [0, 0, 2, 2])),
+                Err(ElementError::Port(PortError::Network(m))) => {
+                    Err(PortError::Network(m.clone()).into())
+                }
+                Err(_) => Err(ElementError::Stale {
+                    reference: reference.to_string(),
+                    candidates: Vec::new(),
+                }),
+            }
+        }
+    }
+
+    fn element_fallback(
+        primary: ElementResult<()>,
+        state: &Arc<FallbackState>,
+    ) -> FallbackElementInspector {
+        FallbackElementInspector {
+            primary: Arc::new(ScriptedElements(primary)),
+            fallback: Arc::new(ScriptedElements(Ok(()))),
+            state: state.clone(),
+        }
+    }
+
+    /// Une liaison coupée bascule sur le repli, y compris pour la relocalisation.
+    #[tokio::test]
+    async fn element_fallback_triggers_on_a_dead_link() {
+        let state = Arc::new(FallbackState::new(true));
+        let inspector = element_fallback(
+            Err(ElementError::Port(PortError::Network("down".to_string()))),
+            &state,
+        );
+        let snapshot = inspector.snapshot(&SnapshotQuery::new()).await.unwrap();
+        assert_eq!(snapshot.target_kind, "fallback");
+        assert_eq!(state.label(), "sdk");
+        assert!(inspector.locate("e1").await.is_ok());
+    }
+
+    /// Une référence périmée n'est jamais rejouée sur l'autre backend.
+    #[tokio::test]
+    async fn element_fallback_never_replays_a_stale_reference() {
+        let state = Arc::new(FallbackState::new(true));
+        let inspector = element_fallback(Err(ElementError::UnknownRef(String::new())), &state);
+        let err = inspector.locate("e1").await.unwrap_err();
+        assert!(matches!(err, ElementError::Stale { .. }), "{err:?}");
+        assert_eq!(state.label(), "cdp");
+        let err = inspector.snapshot(&SnapshotQuery::new()).await.unwrap_err();
+        assert!(matches!(err, ElementError::UnknownRef(_)), "{err:?}");
     }
 }

@@ -28,6 +28,8 @@ fn command_kind(command: &InteractionCommand) -> &'static str {
         InteractionCommand::HandleDialog { .. } => "handle-dialog",
         InteractionCommand::UploadFile { .. } => "upload-file",
         InteractionCommand::Resize { .. } => "resize",
+        InteractionCommand::WithModifiers { .. } => "with-modifiers",
+        InteractionCommand::KeyHold { .. } => "key-hold",
         // `InteractionCommand` est `#[non_exhaustive]`.
         _ => "inconnue",
     }
@@ -38,6 +40,11 @@ fn command_kind(command: &InteractionCommand) -> &'static str {
 /// ecran via `origin` (x, y). Fonction libre, testable sans session KWin ni
 /// thread worker (`dispatch` l'appelle apres avoir lu `self.origin()`).
 fn to_action(command: InteractionCommand, origin: (i32, i32)) -> Result<EisAction, PortError> {
+    // Invariants du domaine avant toute resolution (les champs de variante sont
+    // publics : un litteral peut contourner les constructeurs).
+    command
+        .validate()
+        .map_err(|e| PortError::Interaction(e.to_string()))?;
     let (ox, oy) = origin;
     let to_abs = |p: Position| ((p.x + ox) as f64, (p.y + oy) as f64);
 
@@ -81,6 +88,14 @@ fn to_action(command: InteractionCommand, origin: (i32, i32)) -> Result<EisActio
                 "upload_file nécessite CDP ; indisponible en kwin-eis".to_string(),
             ));
         }
+        InteractionCommand::WithModifiers { modifiers, command } => EisAction::WithModifiers {
+            modifiers,
+            inner: Box::new(to_action(*command, origin)?),
+        },
+        InteractionCommand::KeyHold { key, duration_ms } => EisAction::KeyHold {
+            key,
+            duration: std::time::Duration::from_millis(u64::from(duration_ms)),
+        },
         InteractionCommand::Type { text } => EisAction::Type { text },
         InteractionCommand::KeyPress { key } => EisAction::KeyPress { key },
         InteractionCommand::KeyCombo { modifiers, key } => EisAction::KeyCombo { modifiers, key },
@@ -301,5 +316,60 @@ mod tests {
             EisAction::KeyPress { key } => assert_eq!(key, "Return"),
             _ => panic!("attendu EisAction::KeyPress"),
         }
+    }
+
+    /// Un geste decore devient un `WithModifiers` dont le geste interne est
+    /// converti en absolu ecran.
+    #[test]
+    fn with_modifiers_wraps_the_converted_gesture() {
+        use deveye_core::Modifier;
+        let command = InteractionCommand::with_modifiers(
+            vec![Modifier::Shift],
+            InteractionCommand::click(Position::new(5, 5)),
+        )
+        .unwrap();
+        match to_action(command, ORIGIN).unwrap() {
+            EisAction::WithModifiers { modifiers, inner } => {
+                assert_eq!(modifiers, vec![Modifier::Shift]);
+                assert!(matches!(*inner, EisAction::Click { abs, .. } if abs == (15.0, 25.0)));
+            }
+            _ => panic!("attendu EisAction::WithModifiers"),
+        }
+    }
+
+    #[test]
+    fn key_hold_keeps_the_duration() {
+        let command = InteractionCommand::key_hold("Shift_L", 300).unwrap();
+        match to_action(command, ORIGIN).unwrap() {
+            EisAction::KeyHold { key, duration } => {
+                assert_eq!(key, "Shift_L");
+                assert_eq!(duration, std::time::Duration::from_millis(300));
+            }
+            _ => panic!("attendu EisAction::KeyHold"),
+        }
+    }
+
+    /// Les litteraux qui contournent les constructeurs sont refuses avant toute
+    /// conversion : plafond de KeyHold, geste non enveloppable.
+    #[test]
+    fn invalid_literals_are_refused_before_conversion() {
+        use deveye_core::Modifier;
+        let too_long = InteractionCommand::KeyHold {
+            key: "a".into(),
+            duration_ms: 60_000,
+        };
+        assert!(matches!(
+            to_action(too_long, ORIGIN),
+            Err(PortError::Interaction(_))
+        ));
+        let typed = InteractionCommand::WithModifiers {
+            modifiers: vec![Modifier::Ctrl],
+            command: Box::new(InteractionCommand::type_text("x")),
+        };
+        assert!(to_action(typed, ORIGIN).is_err());
+        assert_eq!(
+            command_kind(&InteractionCommand::key_hold("a", 1).unwrap()),
+            "key-hold"
+        );
     }
 }

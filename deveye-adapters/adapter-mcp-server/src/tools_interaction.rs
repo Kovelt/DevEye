@@ -1,7 +1,7 @@
 //! Outils de la famille **interaction** : `click`, `right_click`,
 //! `double_click`, `hover`, `type_text`, `press_key`, `key_combo`,
 //! `navigate`, `drag_drop`, `scroll`, `handle_dialog`, `upload_file`,
-//! `click_selector`, `click_text` — les « mains » de DevEye. Scinde de
+//! `click_selector`, `click_text`, `key_hold` — les « mains » de DevEye. Scinde de
 //! `lib.rs` (H1) : la logique et les schemas d'outils sont inchanges, seul
 //! l'emplacement du code bouge.
 
@@ -10,7 +10,7 @@ use super::*;
 #[tool_router(router = interaction_router, vis = "pub(crate)")]
 impl DeveyeMcpServer {
     #[tool(
-        description = "Effectue un clic sur le viewport de l'app cible aux coordonnées absolues fournies. `button` optionnel (E6) : \"left\" (défaut), \"right\", \"middle\". Les coordonnées sont validées avant le dispatch : négatives, ou hors du viewport quand sa taille est connue, elles donnent une erreur `invalid_params` (même garde pour right_click, double_click, hover, drag_drop et l'ancrage de scroll).",
+        description = "Effectue un clic sur le viewport de l'app cible aux coordonnées absolues fournies. `button` optionnel (E6) : \"left\" (défaut), \"right\", \"middle\". Les coordonnées sont validées avant le dispatch : négatives, ou hors du viewport quand sa taille est connue, elles donnent une erreur `invalid_params` (même garde pour right_click, double_click, hover, drag_drop et l'ancrage de scroll). Paramètre optionnel `modifiers` (ctrl, shift, alt, meta) : maintient ces touches pendant le geste (Shift+clic pour étendre une sélection). Sans eux, comportement inchangé ; un nom inconnu donne `invalid_params` sans rien émettre. En x11 et kwin-eis les modificateurs sont de vraies touches OS-level ; en cdp ils renseignent le masque `modifiers` des événements souris (aucun keydown n'est émis) ; via le pont sdk ce sont les booleens `ctrlKey`/`shiftKey`/`altKey`/`metaKey` d'événements synthétiques (`isTrusted` faux).",
         output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
@@ -23,18 +23,22 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<ClickParams>,
     ) -> Result<CallToolResult, McpError> {
+        let modifiers = parse_modifier_names(p.modifiers.as_deref())?;
         let _serial = self.acquire_gate("click").await;
         let button = parse_mouse_button(p.button.as_deref())?;
         self.ensure_in_viewport(&[(p.x, p.y)]).await?;
-        let cmd = InteractionCommand::Click {
-            position: Position::new(p.x, p.y),
-            button,
-        };
+        let cmd = decorate(
+            InteractionCommand::Click {
+                position: Position::new(p.x, p.y),
+                button,
+            },
+            &modifiers,
+        )?;
         ok_or_unsupported(self.interaction.dispatch(cmd).await)
     }
 
     #[tool(
-        description = "Effectue un clic DROIT (menu contextuel) sur le viewport de l'app cible aux coordonnées absolues fournies. Déclenche button=right (contextmenu) — ouvre les menus contextuels des UI qui les écoutent. Conservé pour compatibilité ; équivalent à click(button: \"right\").",
+        description = "Effectue un clic DROIT (menu contextuel) sur le viewport de l'app cible aux coordonnées absolues fournies. Déclenche button=right (contextmenu) — ouvre les menus contextuels des UI qui les écoutent. Conservé pour compatibilité ; équivalent à click(button: \"right\"). Paramètre optionnel `modifiers` (ctrl, shift, alt, meta) : maintient ces touches pendant le geste (Shift+clic pour étendre une sélection). Sans eux, comportement inchangé ; un nom inconnu donne `invalid_params` sans rien émettre. En x11 et kwin-eis les modificateurs sont de vraies touches OS-level ; en cdp ils renseignent le masque `modifiers` des événements souris (aucun keydown n'est émis) ; via le pont sdk ce sont les booleens `ctrlKey`/`shiftKey`/`altKey`/`metaKey` d'événements synthétiques (`isTrusted` faux).",
         output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
@@ -47,15 +51,19 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<PositionParams>,
     ) -> Result<CallToolResult, McpError> {
-        let cmd = InteractionCommand::Click {
-            position: Position::new(p.x, p.y),
-            button: MouseButton::Right,
-        };
+        let modifiers = parse_modifier_names(p.modifiers.as_deref())?;
+        let cmd = decorate(
+            InteractionCommand::Click {
+                position: Position::new(p.x, p.y),
+                button: MouseButton::Right,
+            },
+            &modifiers,
+        )?;
         self.dispatch_at_ok(cmd, &[(p.x, p.y)]).await
     }
 
     #[tool(
-        description = "Double-clic gauche aux coordonnées (x, y) : édition inline, sélection de mot, ouverture d'item de liste. Émet un vrai `dblclick` (clickCount=2 en CDP). Plus fiable que deux `click` MCP successifs (intervalle imprévisible).",
+        description = "Double-clic gauche aux coordonnées (x, y) : édition inline, sélection de mot, ouverture d'item de liste. Émet un vrai `dblclick` (clickCount=2 en CDP). Plus fiable que deux `click` MCP successifs (intervalle imprévisible). Paramètre optionnel `modifiers` (ctrl, shift, alt, meta) : maintient ces touches pendant le geste (Shift+clic pour étendre une sélection). Sans eux, comportement inchangé ; un nom inconnu donne `invalid_params` sans rien émettre. En x11 et kwin-eis les modificateurs sont de vraies touches OS-level ; en cdp ils renseignent le masque `modifiers` des événements souris (aucun keydown n'est émis) ; via le pont sdk ce sont les booleens `ctrlKey`/`shiftKey`/`altKey`/`metaKey` d'événements synthétiques (`isTrusted` faux).",
         output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
@@ -68,11 +76,12 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<PositionParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.dispatch_at_ok(
+        let modifiers = parse_modifier_names(p.modifiers.as_deref())?;
+        let cmd = decorate(
             InteractionCommand::double_click(Position::new(p.x, p.y)),
-            &[(p.x, p.y)],
-        )
-        .await
+            &modifiers,
+        )?;
+        self.dispatch_at_ok(cmd, &[(p.x, p.y)]).await
     }
 
     #[tool(
@@ -159,7 +168,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Déplace le pointeur à (x, y) sans presser — déclenche mouseover/mouseenter (utile pour révéler des éléments au hover).",
+        description = "Déplace le pointeur à (x, y) sans presser — déclenche mouseover/mouseenter (utile pour révéler des éléments au hover). Paramètre optionnel `modifiers` (ctrl, shift, alt, meta) : maintient ces touches pendant le geste (Shift+clic pour étendre une sélection). Sans eux, comportement inchangé ; un nom inconnu donne `invalid_params` sans rien émettre. En x11 et kwin-eis les modificateurs sont de vraies touches OS-level ; en cdp ils renseignent le masque `modifiers` des événements souris (aucun keydown n'est émis) ; via le pont sdk ce sont les booleens `ctrlKey`/`shiftKey`/`altKey`/`metaKey` d'événements synthétiques (`isTrusted` faux).",
         output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
@@ -172,15 +181,16 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<PositionParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.dispatch_at_ok(
+        let modifiers = parse_modifier_names(p.modifiers.as_deref())?;
+        let cmd = decorate(
             InteractionCommand::hover(Position::new(p.x, p.y)),
-            &[(p.x, p.y)],
-        )
-        .await
+            &modifiers,
+        )?;
+        self.dispatch_at_ok(cmd, &[(p.x, p.y)]).await
     }
 
     #[tool(
-        description = "Clique sur le premier élément matchant un sélecteur CSS, par vrais événements souris CDP (hover + press au centre de l'élément — le focus clavier suit). Robuste aux déplacements de coordonnées et aux animations.",
+        description = "Clique sur le premier élément matchant un sélecteur CSS, par vrais événements souris CDP (hover + press au centre de l'élément — le focus clavier suit). Robuste aux déplacements de coordonnées et aux animations. Paramètre optionnel `modifiers` (ctrl, shift, alt, meta) : maintient ces touches pendant le geste (Shift+clic pour étendre une sélection). Sans eux, comportement inchangé ; un nom inconnu donne `invalid_params` sans rien émettre. En x11 et kwin-eis les modificateurs sont de vraies touches OS-level ; en cdp ils renseignent le masque `modifiers` des événements souris (aucun keydown n'est émis) ; via le pont sdk ce sont les booleens `ctrlKey`/`shiftKey`/`altKey`/`metaKey` d'événements synthétiques (`isTrusted` faux).",
         output_schema = output_schema::<ClickAck>(),
         annotations(
             read_only_hint = false,
@@ -193,16 +203,17 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<ClickSelectorParams>,
     ) -> Result<CallToolResult, McpError> {
+        let modifiers = parse_modifier_names(p.modifiers.as_deref())?;
         let _serial = self.gate.lock().await;
         let snippet = format!(
             "(function(){{ const el = document.querySelector({selector}); {LOCATE_CENTER} }})()",
             selector = js_string(&p.selector),
         );
-        self.click_located(&snippet).await
+        self.click_located(&snippet, &modifiers).await
     }
 
     #[tool(
-        description = "Clique sur le premier élément interactif (button, a, label, summary, role=button/tab/menuitem/option/switch/checkbox) dont le texte (après trim) correspond exactement — par vrais événements souris CDP (le focus clavier suit).",
+        description = "Clique sur le premier élément interactif (button, a, label, summary, role=button/tab/menuitem/option/switch/checkbox) dont le texte (après trim) correspond exactement — par vrais événements souris CDP (le focus clavier suit). Paramètre optionnel `modifiers` (ctrl, shift, alt, meta) : maintient ces touches pendant le geste (Shift+clic pour étendre une sélection). Sans eux, comportement inchangé ; un nom inconnu donne `invalid_params` sans rien émettre. En x11 et kwin-eis les modificateurs sont de vraies touches OS-level ; en cdp ils renseignent le masque `modifiers` des événements souris (aucun keydown n'est émis) ; via le pont sdk ce sont les booleens `ctrlKey`/`shiftKey`/`altKey`/`metaKey` d'événements synthétiques (`isTrusted` faux).",
         output_schema = output_schema::<ClickAck>(),
         annotations(
             read_only_hint = false,
@@ -215,6 +226,7 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<ClickTextParams>,
     ) -> Result<CallToolResult, McpError> {
+        let modifiers = parse_modifier_names(p.modifiers.as_deref())?;
         let _serial = self.gate.lock().await;
         let snippet = format!(
             "(function(){{ const target = {text}; \
@@ -223,13 +235,17 @@ impl DeveyeMcpServer {
              {LOCATE_CENTER} }})()",
             text = js_string(&p.text),
         );
-        self.click_located(&snippet).await
+        self.click_located(&snippet, &modifiers).await
     }
 
     /// Évalue un snippet « localisateur » (contrat : renvoie `{{ok, x, y}}`
     /// ou `{{ok: false, reason}}`) puis clique au centre trouvé par vrais
     /// événements souris CDP — mêmes événements qu'un humain, focus compris.
-    async fn click_located(&self, snippet: &str) -> Result<CallToolResult, McpError> {
+    async fn click_located(
+        &self,
+        snippet: &str,
+        modifiers: &[Modifier],
+    ) -> Result<CallToolResult, McpError> {
         let value = match unsupported_aware(self.evaluator.evaluate(snippet).await) {
             Ok(v) => v,
             Err(issue) => return issue,
@@ -242,18 +258,15 @@ impl DeveyeMcpServer {
         }
         let x = value.get("x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let y = value.get("y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-        match unsupported_aware(
-            self.interaction
-                .dispatch(InteractionCommand::click(Position::new(x, y)))
-                .await,
-        ) {
+        let cmd = decorate(InteractionCommand::click(Position::new(x, y)), modifiers)?;
+        match unsupported_aware(self.interaction.dispatch(cmd).await) {
             Ok(()) => Ok(structured_ok(&ClickAck { ok: true, x, y })),
             Err(issue) => issue,
         }
     }
 
     #[tool(
-        description = "Glisse-dépose de (from_x, from_y) vers (to_x, to_y). En CDP : séquence souris native (press/déplacements/release) ; via le pont SDK : PointerEvent JS (support selon le framework de l'app).",
+        description = "Glisse-dépose de (from_x, from_y) vers (to_x, to_y). En CDP : séquence souris native (press/déplacements/release) ; via le pont SDK : PointerEvent JS (support selon le framework de l'app). Paramètre optionnel `modifiers` (ctrl, shift, alt, meta) : maintient ces touches pendant le geste (Shift+clic pour étendre une sélection). Sans eux, comportement inchangé ; un nom inconnu donne `invalid_params` sans rien émettre. En x11 et kwin-eis les modificateurs sont de vraies touches OS-level ; en cdp ils renseignent le masque `modifiers` des événements souris (aucun keydown n'est émis) ; via le pont sdk ce sont les booleens `ctrlKey`/`shiftKey`/`altKey`/`metaKey` d'événements synthétiques (`isTrusted` faux).",
         output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
@@ -266,10 +279,14 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<DragDropParams>,
     ) -> Result<CallToolResult, McpError> {
-        let cmd = InteractionCommand::drag_drop(
-            Position::new(p.from_x, p.from_y),
-            Position::new(p.to_x, p.to_y),
-        );
+        let modifiers = parse_modifier_names(p.modifiers.as_deref())?;
+        let cmd = decorate(
+            InteractionCommand::drag_drop(
+                Position::new(p.from_x, p.from_y),
+                Position::new(p.to_x, p.to_y),
+            ),
+            &modifiers,
+        )?;
         self.dispatch_at_ok(cmd, &[(p.from_x, p.from_y), (p.to_x, p.to_y)])
             .await
     }
@@ -330,7 +347,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Défile de (dx, dy) pixels — `dy > 0` vers le bas. Ancré en (x, y) ou, par défaut, au centre du viewport. En CDP, l'ancrage cible le bon conteneur scrollable (mouseWheel) ; via le pont SDK, le conteneur scrollable sous le point est privilégié (sinon window) ; en kwin-eis, le défilement va à la fenêtre focus. Indispensable pour les listes/grilles en kwin-eis (eval_js indisponible).",
+        description = "Défile de (dx, dy) pixels — `dy > 0` vers le bas. Ancré en (x, y) ou, par défaut, au centre du viewport. En CDP, l'ancrage cible le bon conteneur scrollable (mouseWheel) ; via le pont SDK, le conteneur scrollable sous le point est privilégié (sinon window) ; en kwin-eis, le défilement va à la fenêtre focus. Indispensable pour les listes/grilles en kwin-eis (eval_js indisponible). Paramètre optionnel `modifiers` (ctrl, shift, alt, meta) : maintient ces touches pendant le geste (Shift+clic pour étendre une sélection). Sans eux, comportement inchangé ; un nom inconnu donne `invalid_params` sans rien émettre. En x11 et kwin-eis les modificateurs sont de vraies touches OS-level ; en cdp ils renseignent le masque `modifiers` des événements souris (aucun keydown n'est émis) ; via le pont sdk ce sont les booleens `ctrlKey`/`shiftKey`/`altKey`/`metaKey` d'événements synthétiques (`isTrusted` faux).",
         output_schema = output_schema::<Ack>(),
         annotations(
             read_only_hint = false,
@@ -343,6 +360,7 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<ScrollParams>,
     ) -> Result<CallToolResult, McpError> {
+        let modifiers = parse_modifier_names(p.modifiers.as_deref())?;
         let _serial = self.gate.lock().await;
         let dx = p.dx.unwrap_or(0);
         let dy = p.dy.unwrap_or(0);
@@ -364,10 +382,25 @@ impl DeveyeMcpServer {
             (0, 0)
         };
         let anchor = Position::new(p.x.unwrap_or(cx), p.y.unwrap_or(cy));
-        ok_or_unsupported(
-            self.interaction
-                .dispatch(InteractionCommand::scroll(anchor, dx, dy))
-                .await,
+        let cmd = decorate(InteractionCommand::scroll(anchor, dx, dy), &modifiers)?;
+        ok_or_unsupported(self.interaction.dispatch(cmd).await)
+    }
+
+    #[tool(
+        description = "Maintient une touche enfoncée `duration_ms` millisecondes (0 à 10 000) puis la relâche, en un seul appel : jamais de touche collante entre deux appels. Pour tester un comportement « tant que la touche est tenue » (Shift pour un mode, Espace pour le pan). Le serveur est occupé pendant la durée : les autres gestes attendent. Disponible en x11 et kwin-eis (événements clavier OS-level) ; en cdp et sdk, résultat isError structuré `{ reason: \"unsupported\" }`. Touche inconnue ou durée au-delà du plafond : `invalid_params` sans rien émettre. En kwin-eis, la touche part vers la fenêtre ACTIVE (appeler `focus_window` avant, ADR-0045). Pour un geste de pointeur avec modificateur, préférer le paramètre `modifiers` des outils de souris.",
+        output_schema = output_schema::<Ack>(),
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
         )
+    )]
+    pub(crate) async fn key_hold(
+        &self,
+        Parameters(p): Parameters<KeyHoldParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let cmd = validate_key_hold(&p.key, p.duration_ms)?;
+        self.dispatch_ok(cmd).await
     }
 }

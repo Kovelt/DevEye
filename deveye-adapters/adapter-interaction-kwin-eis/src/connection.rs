@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use zbus::Connection as ZbusConn;
 
-use deveye_core::MouseButton;
+use deveye_core::{Modifier, MouseButton};
 use deveye_ports::PortError;
 
 use crate::error::EisError;
@@ -137,6 +137,16 @@ pub(crate) enum EisAction {
     DoubleClick {
         abs: (f64, f64),
     },
+    /// Geste de pointeur avec modificateurs maintenus.
+    WithModifiers {
+        modifiers: Vec<Modifier>,
+        inner: Box<EisAction>,
+    },
+    /// Touche maintenue `duration` puis relachee.
+    KeyHold {
+        key: String,
+        duration: Duration,
+    },
 }
 
 /// Un travail soumis au worker : l'action + le canal de réponse.
@@ -257,14 +267,12 @@ fn spawn_worker(mut rx: mpsc::Receiver<Job>) -> Result<(), EisError> {
 
 async fn run_action(session: &mut EisSession, action: EisAction) -> Result<(), EisError> {
     match action {
-        EisAction::Click { abs, button } => session.click(abs, button).await,
-        EisAction::Hover { abs } => session.hover(abs).await,
-        EisAction::Drag { from, to } => session.drag(from, to).await,
         EisAction::Type { text } => session.type_text(&text).await,
         EisAction::KeyPress { key } => session.key_press(&key).await,
         EisAction::KeyCombo { modifiers, key } => session.key_combo(&modifiers, &key).await,
-        EisAction::Scroll { dx, dy } => session.scroll(dx, dy).await,
-        EisAction::DoubleClick { abs } => session.double_click(abs).await,
+        EisAction::WithModifiers { modifiers, inner } => session.with_modifiers(&modifiers, *inner),
+        EisAction::KeyHold { key, duration } => session.key_hold(&key, duration).await,
+        gesture => session.emit_gesture(gesture),
     }
 }
 

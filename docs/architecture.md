@@ -84,7 +84,9 @@ DevEye/
 │       ├── snapshot.rs         # Screenshot, DomTree, StateDump, Position, Size
 │       ├── command.rs          # InteractionCommand (Click, Hover, Type, KeyPress, KeyCombo,
 │       │                       # Navigate, DragDrop, Scroll, DoubleClick, HandleDialog, UploadFile,
-│       │                       # Resize), MouseButton, CommandDescriptor
+│       │                       # Resize, WithModifiers, KeyHold), MouseButton, CommandDescriptor
+│       ├── modifier.rs         # Modifier (Ctrl, Shift, Alt, Meta), MAX_KEY_HOLD_MS
+│       ├── elements.rs         # (unstable-elements) ElementSnapshot, ElementNode, RefTable, parse_ref
 │       ├── wait_condition.rs   # WaitPredicate, WaitOutcome
 │       ├── console_error.rs    # ConsoleError, ConsoleLevel
 │       ├── window_info.rs      # WindowInfo
@@ -104,20 +106,21 @@ DevEye/
 │       ├── window_lister.rs         # trait WindowLister
 │       ├── window_manager.rs        # trait WindowManager
 │       ├── clipboard.rs             # trait Clipboard
-│       └── window_geometry.rs       # trait WindowGeometry
+│       ├── window_geometry.rs       # trait WindowGeometry
+│       └── element_inspector.rs     # (unstable-elements) trait ElementInspector, ElementError
 │
 ├── deveye-adapters/                       ← IMPLÉMENTATIONS (un crate par adapter)
 │   ├── adapter-cdp-webview/               # Renderer + InteractionSink + AppInspector + JsEvaluator + WindowLister via CDP
 │   ├── adapter-screencap-xcap/            # Renderer OS-level (xcap — X11 / XWayland / Wayland non-KDE)
 │   ├── adapter-screencap-kwin/            # Renderer + WindowManager + WindowGeometry + WindowLister KDE Wayland (KWin D-Bus)
-│   ├── adapter-dioxus-signals/            # AppInspector + pont natif (JsEvaluator/InteractionSink) via SDK
+│   ├── adapter-dioxus-signals/            # AppInspector + pont natif (JsEvaluator/InteractionSink) via SDK ; BridgeElementInspector (elements_bridge.js, ElementInspector par script JS)
 │   ├── adapter-logs-tracing/              # LogSource via le buffer tracing du SDK opt-in
 │   ├── adapter-commands-http/             # CommandRouter via POST /devtools/command + GET /devtools/commands
 │   ├── adapter-interaction-kwin-eis/      # InteractionSink OS-level Wayland natif (KWin EIS)
 │   ├── adapter-clipboard-wayland/         # Clipboard OS-level via wl-copy / wl-paste (Wayland)
 │   ├── adapter-x11/                       # Renderer + InteractionSink + WindowLister + WindowGeometry + WindowManager sur un serveur X privé (x11rb pur Rust, XTEST)
-│   ├── adapter-composite/                 # WaitCondition + ConsoleErrorSource + AppInspector composites (sans I/O propre) ; RouteDomInspector (DOM par route de commande)
-│   └── adapter-mcp-server/               # consomme les 12 ports, expose au Model Context Protocol
+│   ├── adapter-composite/                 # WaitCondition + ConsoleErrorSource + AppInspector composites (sans I/O propre) ; RouteDomInspector (DOM par route de commande) ; RouteWidgetsElements (ElementInspector sur la route `ui.widgets`)
+│   └── adapter-mcp-server/               # consomme les 12 ports stables (+ 1 expérimental), expose au Model Context Protocol
 │
 ├── deveye-sdk/                 ← micro-lib opt-in à intégrer dans l'app cible (cfg debug), MIT
 ├── deveye-sdk-client/          ← client HTTP partagé (timeouts, URL par défaut, version du protocole) des adapters qui parlent au SDK, MIT
@@ -135,7 +138,21 @@ Les quatre crates MIT sont ceux qu'une app embarque ou qu'un tiers réutilise ; 
 
 ---
 
-## Les 12 ports en détail
+## Port expérimental : `ElementInspector`
+
+Derrière la feature `unstable-elements` de `deveye-ports` et `deveye-core` (hors promesse semver, [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md)), un 13ᵉ port désigne les éléments d'une cible par une référence stable : `snapshot(&SnapshotQuery)` rend un arbre compact (`ElementSnapshot`), `locate(&str)` remesure un élément au moment de l'action. Les références sont `e<n>` (DOM, attribuées par la `RefTable` pure du domaine, jamais réutilisées) ou `w:<id>` (widgets natifs, identifiant fourni par l'app). Son erreur `ElementError` (référence périmée avec candidats, inconnue, ambiguë, couverte, arbre périmé, non prise en charge) est distincte de `PortError`. Décision : [ADR-0072](adr/0072-references-d-elements-stables-et-outils-snapshot-act.md).
+
+Les outils MCP expérimentaux `snapshot` et `act` (`adapter-mcp-server`, `tools_perception.rs`) le consomment ; ils ne font qu'enchaîner `locate` puis une `InteractionCommand` existante (aucune variante nouvelle, aucune obligation pour les adapters d'interaction). Implémentations, par famille de cible ([ADR-0073](adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)) :
+
+| Famille | Cibles | Inspecteur | Références | Fraîcheur |
+|---|---|---|---|---|
+| Widgets natifs | `x11`, `kwin-eis` | `RouteWidgetsElements` (`adapter-composite`) sur la route `ui.widgets` | `w:<id>` (id fourni par l'app) | sans cache : chaque `snapshot` et chaque `act` relisent la route ; mémoire des seuls identifiants déjà vus, pour distinguer périmé et inconnu et proposer des candidats |
+| Webview sans CDP (pont WebKitGTK) | `sdk`, `auto` | `BridgeElementInspector` (`adapter-dioxus-signals`) : script JS synchrone évalué par un `JsEvaluator` (pompe SDK ; en `auto`, l'évaluateur de repli, CDP puis pompe) | `e<n>` (`RefTable`, clé `<epoch>:<n>` du script ; [ADR-0074](adr/0074-pont-js-d-elements-pour-webkitgtk.md)) | `WeakMap` élément vers numéro et `Map` numéro vers `WeakRef` dans la page ; epoch nouvelle à chaque chargement de page (un rechargement invalide les références, une bascule de backend sur la même page les conserve) |
+| Webview CDP | `cdp` | pas encore câblé : `unsupported` avec une marche à suivre | `e<n>` | arbre d'accessibilité CDP, après le pont |
+
+`FallbackElementInspector` (`deveye-server`) suit le patron des autres replis : il ne bascule que sur une panne de **liaison** (`PortError::Network`), jamais sur une référence périmée, inconnue ou ambiguë (ce serait un rebind silencieux) ; il est réservé à l'arbre d'accessibilité CDP, qui deviendra le primaire du pont. En attendant, `auto` compose le pont sur l'évaluateur de repli : un changement de backend sur la même page garde le même script, donc la même epoch et les mêmes références ; seul un rechargement de page change d'epoch, donc de génération.
+
+## Les 12 ports stables en détail
 
 ### 1. `Renderer`
 
@@ -189,9 +206,11 @@ Variantes de `InteractionCommand` (`deveye-core/src/command.rs`) :
 - `HandleDialog { accept, prompt_text }` — répond à une boîte de dialogue JS (`alert`/`confirm`/`prompt`). CDP-only : le moteur JS est suspendu pendant un dialog, `eval_js` y est impossible.
 - `UploadFile { selector, paths }` — renseigne les fichiers d'un `input[type=file]`. CDP-only (`DOM.setFileInputFiles`) : le verrou de sécurité navigateur interdit de setter `.value` depuis JS.
 
+- `WithModifiers { modifiers, command }` — décorateur (depuis 1.2) : exécute un geste de pointeur (`Click`, `DoubleClick`, `Hover`, `DragDrop`, `Scroll`, jamais une imbrication ni un `KeyHold`) avec des `Modifier` (`Ctrl`, `Shift`, `Alt`, `Meta`) maintenus. Vérifié à la construction, à la désérialisation et par `validate()`, que chaque adapter appelle avant d'émettre. x11 et kwin-eis pressent de vraies touches autour du geste et relâchent toujours en ordre inverse ; CDP renseigne le masque `modifiers` des événements souris ; le pont SDK pose `ctrlKey`/`shiftKey`/`altKey`/`metaKey` sur des événements synthétiques non fiables (ADR-0075).
+- `KeyHold { key, duration_ms }` — touche maintenue puis relâchée en un seul appel, au plus `MAX_KEY_HOLD_MS` (10 000). x11 et kwin-eis seulement ; `Unsupported` en CDP et via le pont SDK (ADR-0075).
 - `Resize { width, height }` — émule un viewport de `width` x `height` pixels CSS (`Emulation.setDeviceMetricsOverride`, `deviceScaleFactor: 0` pour garder l'échelle réelle de l'écran). Émulation du moteur de rendu : la fenêtre de l'OS n'est pas redimensionnée ; `0` x `0` retire l'émulation. CDP-only : toutes les autres cibles répondent `Unsupported` (ADR-0019).
 
-Adapters : `adapter-x11` (XTEST `FakeInput` sur un serveur X privé — gestes interpolés, clavier du serveur, remappage temporaire des caractères absents ; `Navigate`/`HandleDialog`/`UploadFile`/`Resize` → `Unsupported`), `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`, toutes variantes), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK ; `Navigate`/`HandleDialog`/`UploadFile`/`Resize` y renvoient `PortError::Unsupported`, sémantique applicative ou WebView impossible OS-level).
+Adapters : `adapter-x11` (XTEST `FakeInput` sur un serveur X privé — gestes interpolés, clavier du serveur, remappage temporaire des caractères absents ; `Navigate`/`HandleDialog`/`UploadFile`/`Resize` → `Unsupported` ; `plan_modifiers` et `plan_hold` pour `WithModifiers` et `KeyHold`), `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`, toutes variantes), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK ; `Navigate`/`HandleDialog`/`UploadFile`/`Resize` y renvoient `PortError::Unsupported`, sémantique applicative ou WebView impossible OS-level).
 
 ### 4. `JsEvaluator`
 
@@ -309,7 +328,7 @@ Lit la géométrie écran (position + taille) d'une fenêtre de l'app cible. Mot
 
 ## Sorties structurées des outils MCP
 
-`adapter-mcp-server` publie, pour 28 outils à petite sortie (`target_info`, `wait_*`, `assert_selector`, `assert_state`, `window_geometry`, `focus_window`, les acquittements), un `outputSchema` dans `tools/list` et un `structuredContent` dans le résultat, **à côté** d'un texte inchangé depuis la 1.0. Un même type (`responses.rs`, ou `deveye-core` avec la feature `schema` pour `WaitOutcome` et `WindowRect`) produit le texte, le `structuredContent` et le schéma : la dérive est impossible par construction. Les erreurs sémantiques `unsupported`, `sdk_unavailable` et `interaction_failed` passent par un type unique, `ToolError { ok, reason, detail, hint?, candidates? }`. Les sorties à racine tableau ou arbitraire (`logs_tail`, `list_windows`, `find_element`, `eval_js`, `dom`, `state`, `invoke_command`) et les captures restent en texte seul pour leurs succès (leurs erreurs typées portent le même `structuredContent` `ToolError`, courtes, doublon assumé). Le texte est protégé par des golden files (`adapter-mcp-server/tests/golden/`) capturés avant le changement, et un test de contrat vérifie chaque branche des outils qui déclarent un schéma. `state` porte sa fraîcheur et sa provenance dans `_meta`. Décision, mesure sur Claude Code et risques : [ADR-0067](adr/0067-sorties-structurees-mcp-palier-a.md).
+`adapter-mcp-server` publie, pour 29 outils à petite sortie (`target_info`, `wait_*`, `assert_selector`, `assert_state`, `window_geometry`, `focus_window`, les acquittements dont `key_hold`), un `outputSchema` dans `tools/list` et un `structuredContent` dans le résultat, **à côté** d'un texte inchangé depuis la 1.0. Un même type (`responses.rs`, ou `deveye-core` avec la feature `schema` pour `WaitOutcome` et `WindowRect`) produit le texte, le `structuredContent` et le schéma : la dérive est impossible par construction. Les erreurs sémantiques `unsupported`, `sdk_unavailable` et `interaction_failed` passent par un type unique, `ToolError { ok, reason, detail, hint?, candidates? }`. Les sorties à racine tableau ou arbitraire (`logs_tail`, `list_windows`, `find_element`, `eval_js`, `dom`, `state`, `invoke_command`) et les captures restent en texte seul pour leurs succès (leurs erreurs typées portent le même `structuredContent` `ToolError`, courtes, doublon assumé). Le texte est protégé par des golden files (`adapter-mcp-server/tests/golden/`) capturés avant le changement, et un test de contrat vérifie chaque branche des outils qui déclarent un schéma. `state` porte sa fraîcheur et sa provenance dans `_meta`. Décision, mesure sur Claude Code et risques : [ADR-0067](adr/0067-sorties-structurees-mcp-palier-a.md).
 
 ## Disponibilité du CDP selon la webview
 

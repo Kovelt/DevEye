@@ -26,12 +26,14 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::protocol::xtest::ConnectionExt as _;
 
-use deveye_core::{InteractionCommand, MouseButton, Position};
+use deveye_core::{InteractionCommand, Modifier, MouseButton, Position};
 
 use crate::conn::Session;
 use crate::error::X11Error;
 use crate::keys::{self, KeyAction, Keymap};
 
+/// Delai entre l'appui des modificateurs d'un geste et le geste lui-meme.
+const MODIFIER_SETTLE: Duration = Duration::from_millis(20);
 /// Delai entre le placement du pointeur et l'appui (une frame egui).
 const SETTLE: Duration = Duration::from_millis(30);
 /// Intervalle entre deux deplacements d'un glisser (~1 frame a 60 Hz).
@@ -74,6 +76,16 @@ pub enum Step {
     Combo {
         modifiers: Vec<String>,
         key: String,
+    },
+    /// Appui (`press`) ou relachement des modificateurs d'un geste de pointeur.
+    Modifiers {
+        modifiers: Vec<Modifier>,
+        press: bool,
+    },
+    /// Touche maintenue `duration` entre l'appui et le relachement.
+    Hold {
+        key: String,
+        duration: Duration,
     },
 }
 
@@ -125,6 +137,8 @@ pub fn command_kind(command: &InteractionCommand) -> &'static str {
         InteractionCommand::HandleDialog { .. } => "handle-dialog",
         InteractionCommand::UploadFile { .. } => "upload-file",
         InteractionCommand::Resize { .. } => "resize",
+        InteractionCommand::WithModifiers { .. } => "with-modifiers",
+        InteractionCommand::KeyHold { .. } => "key-hold",
         // `InteractionCommand` est `#[non_exhaustive]`.
         _ => "inconnue",
     }
@@ -144,6 +158,17 @@ pub fn check_supported(command: &InteractionCommand) -> Result<(), X11Error> {
         InteractionCommand::HandleDialog { .. } => unsupported("handle_dialog"),
         InteractionCommand::UploadFile { .. } => unsupported("upload_file"),
         InteractionCommand::Resize { .. } => unsupported("resize"),
+        // Invariants du domaine (geste enveloppable, plafond de KeyHold) : les
+        // champs sont publics, donc un litteral peut les contourner.
+        InteractionCommand::WithModifiers { command: inner, .. } => {
+            command
+                .validate()
+                .map_err(|e| X11Error::Invalid(e.to_string()))?;
+            check_supported(inner)
+        }
+        InteractionCommand::KeyHold { .. } => command
+            .validate()
+            .map_err(|e| X11Error::Invalid(e.to_string())),
         _ => Ok(()),
     }
 }
@@ -248,6 +273,26 @@ pub fn to_steps(command: InteractionCommand, origin: (i32, i32)) -> Result<Vec<S
         InteractionCommand::KeyCombo { modifiers, key } => {
             steps.push(Step::Combo { modifiers, key })
         }
+        InteractionCommand::WithModifiers { modifiers, command } => {
+            let inner = to_steps(*command, origin)?;
+            if modifiers.is_empty() {
+                return Ok(inner);
+            }
+            steps.push(Step::Modifiers {
+                modifiers: modifiers.clone(),
+                press: true,
+            });
+            steps.push(Step::Pause(MODIFIER_SETTLE));
+            steps.extend(inner);
+            steps.push(Step::Modifiers {
+                modifiers,
+                press: false,
+            });
+        }
+        InteractionCommand::KeyHold { key, duration_ms } => steps.push(Step::Hold {
+            key,
+            duration: Duration::from_millis(u64::from(duration_ms)),
+        }),
         // Navigate, HandleDialog et UploadFile sont déjà refuses par
         // `check_supported` ; toute commande future sans traduction X11 l'est ici.
         other => {
@@ -282,6 +327,13 @@ pub fn lower(keymap: &Keymap, steps: &[Step]) -> Result<Vec<Action>, X11Error> {
             Step::Key(key) => from_keys(keys::plan_key(keymap, key)?, &mut out),
             Step::Combo { modifiers, key } => {
                 from_keys(keys::plan_combo(keymap, modifiers, key)?, &mut out)
+            }
+            Step::Modifiers { modifiers, press } => {
+                let (down, up) = keys::plan_modifiers(keymap, modifiers)?;
+                from_keys(if *press { down } else { up }, &mut out)
+            }
+            Step::Hold { key, duration } => {
+                from_keys(keys::plan_hold(keymap, key, *duration)?, &mut out)
             }
         }
     }
@@ -455,9 +507,16 @@ pub(crate) fn run_steps(session: &Session, steps: &[Step]) -> Result<(), X11Erro
 /// `true` si les pas contiennent du clavier (le focus clavier est alors
 /// ajuste avant l'emission).
 pub fn needs_keyboard(steps: &[Step]) -> bool {
-    steps
-        .iter()
-        .any(|s| matches!(s, Step::Type(_) | Step::Key(_) | Step::Combo { .. }))
+    steps.iter().any(|s| {
+        matches!(
+            s,
+            Step::Type(_)
+                | Step::Key(_)
+                | Step::Combo { .. }
+                | Step::Hold { .. }
+                | Step::Modifiers { .. }
+        )
+    })
 }
 
 #[cfg(test)]
@@ -679,6 +738,12 @@ mod tests {
         .unwrap();
         assert!(needs_keyboard(&s));
         assert!(!needs_keyboard(&[Step::Pause(SETTLE)]));
+        // Les modificateurs d'un Shift+clic sont des touches : le focus clavier
+        // doit suivre, sinon le KeyPress part vers la fenetre sous le pointeur.
+        assert!(needs_keyboard(&[Step::Modifiers {
+            modifiers: vec![Modifier::Shift],
+            press: true,
+        }]));
     }
 
     #[test]
@@ -881,5 +946,171 @@ mod tests {
             .filter(|e| matches!(e, Ev::Key(..)))
             .collect();
         assert_eq!(keys.len(), 4);
+    }
+
+    // ---- modificateurs et touche maintenue ----------------------------------
+
+    fn with_mods(mods: &[Modifier], inner: InteractionCommand) -> InteractionCommand {
+        InteractionCommand::with_modifiers(mods.to_vec(), inner).unwrap()
+    }
+
+    #[test]
+    fn shift_click_presses_the_modifier_around_the_click() {
+        let steps = to_steps(
+            with_mods(&[Modifier::Shift], InteractionCommand::click(pos(1, 1))),
+            (0, 0),
+        )
+        .unwrap();
+        let mut fake = Fake::default();
+        run(&steps, &mut fake).unwrap();
+        let events: Vec<&Ev> = fake
+            .log
+            .iter()
+            .filter(|e| matches!(e, Ev::Key(..) | Ev::Button(..)))
+            .collect();
+        // Shift_L = keycode 9 : appui, bouton enfonce puis relache, relachement.
+        assert_eq!(
+            events,
+            vec![
+                &Ev::Key(9, true),
+                &Ev::Button(1, true),
+                &Ev::Button(1, false),
+                &Ev::Key(9, false),
+            ]
+        );
+        assert_eq!(held(&fake.log), (vec![], vec![]));
+    }
+
+    #[test]
+    fn ctrl_drag_keeps_the_modifier_down_for_every_motion() {
+        let steps = to_steps(
+            with_mods(
+                &[Modifier::Ctrl],
+                InteractionCommand::drag_drop(pos(0, 0), pos(40, 40)),
+            ),
+            (0, 0),
+        )
+        .unwrap();
+        let mut fake = Fake::default();
+        run(&steps, &mut fake).unwrap();
+        let first_motion = fake
+            .log
+            .iter()
+            .position(|e| matches!(e, Ev::Motion(..)))
+            .unwrap();
+        let last_motion = fake
+            .log
+            .iter()
+            .rposition(|e| matches!(e, Ev::Motion(..)))
+            .unwrap();
+        let down = fake
+            .log
+            .iter()
+            .position(|e| *e == Ev::Key(10, true))
+            .unwrap();
+        let up = fake
+            .log
+            .iter()
+            .position(|e| *e == Ev::Key(10, false))
+            .unwrap();
+        assert!(down < first_motion && last_motion < up, "{:?}", fake.log);
+    }
+
+    #[test]
+    fn empty_modifier_list_is_the_bare_gesture() {
+        let bare = to_steps(InteractionCommand::click(pos(2, 2)), (0, 0)).unwrap();
+        let wrapped =
+            to_steps(with_mods(&[], InteractionCommand::click(pos(2, 2))), (0, 0)).unwrap();
+        assert_eq!(bare, wrapped);
+    }
+
+    #[test]
+    fn unknown_modifier_in_the_keyboard_emits_nothing() {
+        // Le keymap de test n'a pas Alt_L : refus avant la moindre emission.
+        let steps = to_steps(
+            with_mods(
+                &[Modifier::Shift, Modifier::Alt],
+                InteractionCommand::click(pos(1, 1)),
+            ),
+            (0, 0),
+        )
+        .unwrap();
+        let mut fake = Fake::default();
+        assert!(run(&steps, &mut fake).is_err());
+        assert!(fake.log.is_empty(), "{:?}", fake.log);
+    }
+
+    #[test]
+    fn error_mid_modified_gesture_releases_modifiers_and_buttons() {
+        let steps = to_steps(
+            with_mods(
+                &[Modifier::Ctrl, Modifier::Shift],
+                InteractionCommand::drag_drop(pos(0, 0), pos(30, 30)),
+            ),
+            (0, 0),
+        )
+        .unwrap();
+        for fail_at in 1..=23 {
+            let mut fake = Fake {
+                fail_at: Some(fail_at),
+                ..Fake::default()
+            };
+            assert!(run(&steps, &mut fake).is_err(), "fail_at={fail_at}");
+            assert_eq!(held(&fake.log), (vec![], vec![]), "fail_at={fail_at}");
+        }
+    }
+
+    #[test]
+    fn invalid_wrappers_are_refused_before_any_step() {
+        let nested = InteractionCommand::WithModifiers {
+            modifiers: vec![Modifier::Ctrl],
+            command: Box::new(InteractionCommand::type_text("x")),
+        };
+        assert!(check_supported(&nested).is_err());
+        assert!(to_steps(nested, (0, 0)).is_err());
+        // Un wrapper valide autour d'une commande refusee par la cible l'est aussi.
+        let literal = InteractionCommand::WithModifiers {
+            modifiers: vec![Modifier::Ctrl],
+            command: Box::new(InteractionCommand::navigate("x")),
+        };
+        assert!(to_steps(literal, (0, 0)).is_err());
+    }
+
+    #[test]
+    fn key_hold_pauses_between_press_and_release_and_is_capped() {
+        let cmd = InteractionCommand::key_hold("Shift_L", 300).unwrap();
+        let steps = to_steps(cmd, (0, 0)).unwrap();
+        assert!(needs_keyboard(&steps));
+        let actions = lower(&keymap(), &steps).unwrap();
+        assert_eq!(
+            actions,
+            vec![
+                Action::Key(KeyAction::Press(9)),
+                Action::Pause(Duration::from_millis(300)),
+                Action::Key(KeyAction::Release(9)),
+            ]
+        );
+        // Un litteral au-dela du plafond est refuse avant toute emission.
+        let too_long = InteractionCommand::KeyHold {
+            key: "Shift_L".into(),
+            duration_ms: 20_000,
+        };
+        assert!(to_steps(too_long, (0, 0)).is_err());
+    }
+
+    #[test]
+    fn error_during_key_hold_releases_the_key() {
+        let steps = to_steps(
+            InteractionCommand::key_hold("Control_L", 50).unwrap(),
+            (0, 0),
+        )
+        .unwrap();
+        let mut fake = Fake {
+            fail_at: Some(2),
+            ..Fake::default()
+        };
+        // 1re emission = l'appui ; la 2e = le relachement normal, qui echoue.
+        assert!(run(&steps, &mut fake).is_err());
+        assert_eq!(held(&fake.log), (vec![], vec![]));
     }
 }

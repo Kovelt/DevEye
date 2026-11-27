@@ -29,6 +29,15 @@ fn registered_tools() -> BTreeSet<String> {
         .collect()
 }
 
+/// Outils stables : les enregistrés moins les expérimentaux (ADR-0069), seuls
+/// promis par la liste du README et par les nombres annoncés.
+fn stable_tools() -> BTreeSet<String> {
+    registered_tools()
+        .into_iter()
+        .filter(|name| !EXPERIMENTAL_TOOLS.contains(&name.as_str()))
+        .collect()
+}
+
 /// Segments entre backticks d'une ligne (les segments d'indice impair).
 fn backticked(line: &str) -> Vec<&str> {
     line.split('`').skip(1).step_by(2).collect()
@@ -51,12 +60,12 @@ fn readme_lists_exactly_the_registered_tools() {
             );
         }
     }
-    let registered = registered_tools();
+    let registered = stable_tools();
     let missing: Vec<_> = registered.difference(&documented).collect();
     let unknown: Vec<_> = documented.difference(&registered).collect();
     assert!(
         missing.is_empty() && unknown.is_empty(),
-        "README et outils enregistrés divergent : absents du README {missing:?}, inconnus du code {unknown:?}"
+        "README et outils stables divergent : absents du README {missing:?}, inconnus du code {unknown:?}"
     );
 }
 
@@ -85,8 +94,9 @@ fn usage_documents_each_registered_tool() {
 
 #[test]
 fn announced_tool_counts_match_the_code() {
-    let registered = registered_tools().len();
-    assert_eq!(registered, EXPECTED_TOOL_COUNT);
+    assert_eq!(registered_tools().len(), EXPECTED_TOOL_COUNT);
+    let registered = stable_tools().len();
+    assert_eq!(registered, STABLE_TOOL_COUNT);
     for file in ["README.md", "docs/usage.md", "docs/migration-1.0.md"] {
         let text = read(file);
         let mut seen = 0;
@@ -103,12 +113,50 @@ fn announced_tool_counts_match_the_code() {
             assert_eq!(
                 word,
                 registered.to_string(),
-                "{file} annonce « {word} outils » : le code en enregistre {registered}"
+                "{file} annonce « {word} outils » : le code en enregistre {registered} stables"
             );
         }
         assert!(
             seen > 0 || file == "docs/migration-1.0.md",
             "{file} n'annonce aucun nombre d'outils"
+        );
+    }
+}
+
+/// Les outils expérimentaux portent leur statut dans leur description, sont
+/// documentés dans `docs/usage.md` comme hors promesse et listés par
+/// `docs/stability.md` (ADR-0069).
+#[test]
+fn experimental_tools_are_flagged_and_documented_as_such() {
+    let tools = DeveyeMcpServer::tool_router().list_all();
+    let stability = read("docs/stability.md");
+    let usage = read("docs/usage.md");
+    for name in EXPERIMENTAL_TOOLS {
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == *name)
+            .unwrap_or_else(|| panic!("l'outil expérimental `{name}` n'est pas enregistré"));
+        let description = tool.description.as_deref().unwrap_or_default();
+        assert!(
+            description.starts_with(EXPERIMENTAL_PREFIX),
+            "la description de `{name}` doit commencer par {EXPERIMENTAL_PREFIX}"
+        );
+        assert!(
+            stability.contains(&format!("`{name}`")),
+            "docs/stability.md doit lister l'outil expérimental `{name}`"
+        );
+        assert!(
+            usage.contains(&format!("#### `{name}`")),
+            "docs/usage.md doit documenter `{name}`"
+        );
+    }
+    for tool in &tools {
+        let description = tool.description.as_deref().unwrap_or_default();
+        assert_eq!(
+            description.starts_with(EXPERIMENTAL_PREFIX),
+            EXPERIMENTAL_TOOLS.contains(&tool.name.as_ref()),
+            "`{}` : le préfixe {EXPERIMENTAL_PREFIX} et EXPERIMENTAL_TOOLS doivent concorder",
+            tool.name
         );
     }
 }
@@ -281,4 +329,34 @@ fn every_adr_is_indexed_with_its_title_and_status() {
         numbers, expected,
         "la numérotation des ADR doit être continue, sans trou"
     );
+}
+
+/// Le nombre d'outils du palier A (ADR-0067) annoncé dans la doc suit le code.
+#[test]
+fn tier_a_count_matches_documentation() {
+    let count = DeveyeMcpServer::tool_router()
+        .list_all()
+        .iter()
+        .filter(|t| t.output_schema.is_some())
+        .count();
+    for (file, needle) in [
+        (
+            "docs/stability.md",
+            format!("({count} outils à petite sortie"),
+        ),
+        (
+            "docs/architecture.md",
+            format!("pour {count} outils à petite sortie"),
+        ),
+    ] {
+        assert!(
+            read(file).contains(&needle),
+            "{file} doit annoncer {count} outils à petite sortie"
+        );
+    }
+    let usage_word = match count {
+        29 => "vingt-neuf",
+        n => panic!("mettre à jour le mot de docs/usage.md pour {n} outils"),
+    };
+    assert!(read("docs/usage.md").contains(&format!("{usage_word} outils à petite sortie")));
 }

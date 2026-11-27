@@ -9,9 +9,12 @@
 //! le contourne. Le texte libre des messages de log et les valeurs issues du DOM
 //! ne sont pas filtrés, comme pour les outils qu'il compose.
 
+use deveye_core::elements::SnapshotQuery;
 use deveye_core::ConsoleLevel;
+use deveye_ports::ElementError;
 
 use super::imaging::{encode_capture, CaptureOptions};
+use super::tools_perception::render_snapshot_text;
 use super::*;
 
 /// Largeur maximale par défaut de la capture d'`observe` (px) : l'outil vise
@@ -44,15 +47,30 @@ enum Section {
     State,
     Console,
     Logs,
+    /// Références `snapshot` (expérimental, ADR-0073) : sur demande seulement.
+    Elements,
 }
 
 impl Section {
-    const ALL: [Section; 5] = [
+    /// Sections produites quand `include` est absent : celles de la 1.0, dans
+    /// l'ordre où elles sont produites. `elements` n'en fait pas partie, pour que
+    /// la sortie par défaut d'`observe` reste celle de la 1.0.
+    const DEFAULT: [Section; 5] = [
         Section::Screenshot,
         Section::Dom,
         Section::State,
         Section::Console,
         Section::Logs,
+    ];
+
+    /// Toutes les sections connues, dans l'ordre de production.
+    const KNOWN: [Section; 6] = [
+        Section::Screenshot,
+        Section::Dom,
+        Section::State,
+        Section::Console,
+        Section::Logs,
+        Section::Elements,
     ];
 
     fn name(self) -> &'static str {
@@ -62,18 +80,19 @@ impl Section {
             Section::State => "state",
             Section::Console => "console",
             Section::Logs => "logs",
+            Section::Elements => "elements",
         }
     }
 
     fn parse(raw: &str) -> Result<Section, McpError> {
         let wanted = raw.trim().to_ascii_lowercase();
-        Section::ALL
+        Section::KNOWN
             .into_iter()
             .find(|s| s.name() == wanted)
             .ok_or_else(|| {
                 McpError::invalid_params(
                     format!(
-                        "section inconnue : {raw:?} (attendu : screenshot, dom, state, console, logs)"
+                        "section inconnue : {raw:?} (attendu : screenshot, dom, state, console, logs, elements)"
                     ),
                     None,
                 )
@@ -289,7 +308,7 @@ fn summarize_tree(tree: &serde_json::Value, max_nodes: usize, max_depth: usize) 
 #[tool_router(router = observe_router, vis = "pub(crate)")]
 impl DeveyeMcpServer {
     #[tool(
-        description = "Observe l'app en UN appel (remplace 4 à 5 appels) : capture (image MCP, 1024 px de large max par défaut ; options `max_width`, `format`, `quality` comme `screenshot`), résumé borné de l'arbre DOM/widgets (outline, `max_dom_nodes` 60, `max_dom_depth` 6), état SDK (aperçu des clés), erreurs et avertissements console récents, derniers logs (`max_events` 20, les plus récents). Renvoie l'image (si capturée) puis un bloc texte JSON `{ sections: { screenshot, dom, state, console, logs }, skipped }` ; chaque section porte `available: true` et ses données, ou `available: false` avec `reason` et `detail` (« indisponible pour cette cible ») sans faire échouer les autres. `include`/`exclude` choisissent les sections. DRAINE les buffers de logs et de console (comme `logs_tail`/`collect_console_errors`) : seuls les messages console error/warning sont restitués, les autres niveaux drainés sont comptés dans `ignored_lower_levels`. L'état et les champs de logs passent par le masquage des secrets du SDK. Pour le détail d'une section, utiliser l'outil dédié (`dom`, `state`, `logs_tail`, `find_element`).",
+        description = "Observe l'app en UN appel (remplace 4 à 5 appels) : capture (image MCP, 1024 px de large max par défaut ; options `max_width`, `format`, `quality` comme `screenshot`), résumé borné de l'arbre DOM/widgets (outline, `max_dom_nodes` 60, `max_dom_depth` 6), état SDK (aperçu des clés), erreurs et avertissements console récents, derniers logs (`max_events` 20, les plus récents). Renvoie l'image (si capturée) puis un bloc texte JSON `{ sections: { screenshot, dom, state, console, logs }, skipped }` ; chaque section porte `available: true` et ses données, ou `available: false` avec `reason` et `detail` (« indisponible pour cette cible ») sans faire échouer les autres. `include`/`exclude` choisissent les sections ; `include: [\"elements\"]` ajoute (expérimental, ADR-0073) l'arbre d'éléments de `snapshot` (`tree` texte compact avec les références, borné par `max_dom_nodes`), absent par défaut. DRAINE les buffers de logs et de console (comme `logs_tail`/`collect_console_errors`) : seuls les messages console error/warning sont restitués, les autres niveaux drainés sont comptés dans `ignored_lower_levels`. L'état et les champs de logs passent par le masquage des secrets du SDK. Pour le détail d'une section, utiliser l'outil dédié (`dom`, `state`, `logs_tail`, `find_element`).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -311,7 +330,7 @@ impl DeveyeMcpServer {
                 .iter()
                 .map(|n| Section::parse(n))
                 .collect::<Result<_, _>>()?,
-            _ => Section::ALL.to_vec(),
+            _ => Section::DEFAULT.to_vec(),
         };
         let excluded: Vec<Section> = p
             .exclude
@@ -340,7 +359,7 @@ impl DeveyeMcpServer {
         let mut sections = serde_json::Map::new();
         let mut image_block = None;
 
-        for section in Section::ALL.into_iter().filter(|s| wanted.contains(s)) {
+        for section in Section::KNOWN.into_iter().filter(|s| wanted.contains(s)) {
             let value = match section {
                 Section::Screenshot => match self.renderer.screenshot().await {
                     Ok(shot) => match encode_capture(&shot.bytes, &capture) {
@@ -422,6 +441,30 @@ impl DeveyeMcpServer {
                     }
                     Err(e) => unavailable(&e),
                 },
+                Section::Elements => {
+                    let query = SnapshotQuery::new().with_max_nodes(max_nodes);
+                    match self.elements.snapshot(&query).await {
+                        Ok(snapshot) => serde_json::json!({
+                            "available": true,
+                            "target_kind": snapshot.target_kind,
+                            "total_nodes": snapshot.count(),
+                            "truncated": snapshot.truncated,
+                            "focus": snapshot.focus,
+                            "tree": render_snapshot_text(&snapshot),
+                        }),
+                        Err(ElementError::Unsupported { hint }) => serde_json::json!({
+                            "available": false,
+                            "reason": "unsupported",
+                            "detail": format!("indisponible pour cette cible : {hint}"),
+                        }),
+                        Err(ElementError::Port(port)) => unavailable(&port),
+                        Err(other) => serde_json::json!({
+                            "available": false,
+                            "reason": "error",
+                            "detail": format!("indisponible : {other}"),
+                        }),
+                    }
+                }
                 Section::Logs => match self.log_source.poll().await {
                     Ok(events) => {
                         let (kept, truncated, total) = truncate_recent(events, max_events);
@@ -438,7 +481,8 @@ impl DeveyeMcpServer {
             sections.insert(section.name().to_string(), value);
         }
 
-        let skipped: Vec<&str> = Section::ALL
+        // `elements`, sur demande seulement, n'est jamais « sauté » : son absence est le défaut.
+        let skipped: Vec<&str> = Section::DEFAULT
             .into_iter()
             .filter(|s| !wanted.contains(s))
             .map(Section::name)

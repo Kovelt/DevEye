@@ -153,6 +153,20 @@ pub(crate) enum ErrorReason {
     SdkUnavailable,
     /// L'interaction a échoué côté cible (ex. aucun champ éditable au focus).
     InteractionFailed,
+    /// La référence d'élément a existé mais l'élément a disparu (`act`).
+    StaleRef,
+    /// L'app n'a pas republié son arbre d'éléments depuis trop longtemps (`act`).
+    StaleTree,
+    /// La référence n'a jamais été émise ou n'a pas une forme connue (`act`).
+    UnknownRef,
+    /// Plusieurs éléments portent la même référence : agir serait un pari.
+    AmbiguousRef,
+    /// Un autre élément recouvre le centre de la cible.
+    Obscured,
+    /// L'élément est hors de la zone visible, ou sans surface.
+    Offscreen,
+    /// L'élément refuse les interactions (désactivé).
+    Disabled,
 }
 
 /// Erreur sémantique d'un outil (`isError = true`) : `{ ok: false, reason,
@@ -166,6 +180,9 @@ pub(crate) enum ErrorReason {
 /// validation, sans perte de l'`isError` (risque documenté dans l'ADR).
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub(crate) struct ToolError {
+    /// Référence de l'élément qui en recouvre un autre (`reason: obscured`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    by: Option<String>,
     /// Candidats proposés pour corriger l'appel (ex. noms valides).
     #[serde(skip_serializing_if = "Option::is_none")]
     candidates: Option<Vec<String>>,
@@ -177,26 +194,39 @@ pub(crate) struct ToolError {
     /// Toujours `false`.
     ok: bool,
     reason: ErrorReason,
+    /// Référence d'élément en cause (`snapshot` et `act`).
+    #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
+    reference: Option<String>,
 }
 
 impl ToolError {
     pub(crate) fn new(reason: ErrorReason, detail: impl Into<String>) -> Self {
         Self {
+            by: None,
             candidates: None,
             detail: Some(detail.into()),
             hint: None,
             ok: false,
             reason,
+            reference: None,
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn with_reference(mut self, reference: impl Into<String>) -> Self {
+        self.reference = Some(reference.into());
+        self
+    }
+
+    pub(crate) fn with_covered_by(mut self, by: impl Into<String>) -> Self {
+        self.by = Some(by.into());
+        self
+    }
+
     pub(crate) fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn with_candidates(mut self, candidates: Vec<String>) -> Self {
         self.candidates = Some(candidates);
         self

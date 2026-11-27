@@ -606,24 +606,49 @@ fn decide_ui(n: Need, p: &Probes) -> (Level, String, Option<String>) {
                 "arbre ui.widgets invalide, {} écart(s) : {shown}{tail}",
                 errors.len()
             ),
-            "corriger l'arbre publié : ids uniques et non vides, parents connus, focus connu",
+            "corriger l'arbre publié : ids uniques et non vides (les références `w:<id>` de snapshot et act en dépendent), parents connus, focus connu",
         );
     }
     let warnings = issues.len();
-    if warnings > 0 {
-        return problem(
-            Need::Useful,
-            format!(
-                "arbre de {} widget(s), {warnings} avertissement(s) : {}",
-                tree.widgets.len(),
+    // Un id synthétisé (format legacy sans `id`) change avec l'ordre des widgets : la
+    // référence `w:<id>` de `snapshot` et `act` ne survit pas à une relance (ADR-0072).
+    let synthesized = tree.widgets.iter().filter(|w| w.id_ephemeral).count();
+    if warnings > 0 || synthesized > 0 {
+        let mut parts = Vec::new();
+        if warnings > 0 {
+            parts.push(format!(
+                "{warnings} avertissement(s) : {}",
                 issues
                     .iter()
                     .take(UI_ISSUES_SHOWN)
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(" ; ")
+            ));
+        }
+        if synthesized > 0 {
+            parts.push(format!(
+                "{synthesized} identifiant(s) synthétisé(s) : les références `w:<id>` de \
+                 snapshot et act ne sont pas stables d'une relance à l'autre"
+            ));
+        }
+        let mut advice = Vec::new();
+        if warnings > 0 {
+            advice.push(
+                "un widget hors fenêtre est légitime pour un contenu défilant ; sinon vérifier les rects (pixels de capture)",
+            );
+        }
+        if synthesized > 0 {
+            advice.push("donner à chaque widget un `id` déterministe (deveye_sdk::ui::builder)");
+        }
+        return problem(
+            Need::Useful,
+            format!(
+                "arbre de {} widget(s), {}",
+                tree.widgets.len(),
+                parts.join(" ; ")
             ),
-            "un widget hors fenêtre est légitime pour un contenu défilant ; sinon vérifier les rects (pixels de capture)",
+            advice.join(" ; "),
         );
     }
     ok(format!(
@@ -1029,6 +1054,22 @@ mod tests {
         assert_eq!(r.exit_code(), 1);
         let text = r.render("t");
         assert!(text.contains("dup"), "{text}");
+    }
+
+    #[test]
+    fn ui_check_warns_about_synthesized_ids_without_failing() {
+        let legacy = serde_json::json!({
+            "widgets": [
+                { "kind": "button", "text": "OK", "rect": [0, 0, 10, 10] },
+                { "id": "stable", "kind": "button", "text": "Fixe", "rect": [0, 20, 10, 10] }
+            ]
+        });
+        let r = evaluate(TargetMode::Sdk, &ui_probes(legacy));
+        assert_eq!(level_of(&r, UI_NAME), Level::Warn, "{}", r.render("t"));
+        assert_eq!(r.exit_code(), 0);
+        let text = r.render("t");
+        assert!(text.contains("1 identifiant(s) synthétisé(s)"), "{text}");
+        assert!(text.contains("id` déterministe"), "{text}");
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! Ports DevEye — traits asynchrones consommés par le binaire orchestrateur
 //! et le serveur MCP, implémentés par les crates `deveye-adapters/*`.
 //!
-//! 12 ports définis :
+//! 12 ports stables définis (plus `ElementInspector` derrière la feature
+//! expérimentale `unstable-elements`, hors promesse semver) :
 //! - [`Clipboard`] — lecture/écriture du presse-papiers de session
 //! - [`CommandRouter`] — envoi de commandes à l'app cible
 //! - [`ConsoleErrorSource`] — drain des erreurs console webview
@@ -24,6 +25,8 @@
 pub mod clipboard;
 pub mod command_router;
 pub mod console_error_source;
+#[cfg(feature = "unstable-elements")]
+pub mod element_inspector;
 pub mod errors;
 pub mod inspector;
 pub mod interaction;
@@ -38,6 +41,8 @@ pub mod window_manager;
 pub use clipboard::Clipboard;
 pub use command_router::CommandRouter;
 pub use console_error_source::ConsoleErrorSource;
+#[cfg(feature = "unstable-elements")]
+pub use element_inspector::{ElementError, ElementInspector, ElementResult};
 pub use errors::{PortError, PortResult};
 pub use inspector::AppInspector;
 pub use interaction::InteractionSink;

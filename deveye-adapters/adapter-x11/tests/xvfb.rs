@@ -19,7 +19,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use adapter_x11::{X11Config, X11Target};
-use deveye_core::{InteractionCommand, MouseButton, Position};
+use deveye_core::{InteractionCommand, Modifier, MouseButton, Position};
 use deveye_ports::{
     InteractionSink, PortError, Renderer, WindowGeometry, WindowLister, WindowManager,
 };
@@ -590,4 +590,161 @@ async fn no_server_is_a_network_error() {
     .unwrap();
     let err = t.screenshot().await.unwrap_err();
     assert!(matches!(err, PortError::Network(_)), "{err:?}");
+}
+
+/// `state` (masque de modificateurs) de l'evenement, en entier brut.
+fn state_of(e: &Event) -> Option<u16> {
+    match e {
+        Event::ButtonPress(b) => Some(u16::from(b.state)),
+        Event::MotionNotify(m) => Some(u16::from(m.state)),
+        _ => None,
+    }
+}
+
+const SHIFT_MASK: u16 = 1;
+const CONTROL_MASK: u16 = 4;
+
+#[tokio::test]
+#[ignore = "demarre un Xvfb prive"]
+async fn modified_gestures_carry_the_modifier_masks() {
+    let x = Xvfb::start();
+    let probe = Probe::new(&x.display());
+    let t = target(&x, Some(TITLE));
+    let _ = probe.events();
+
+    // Sans modificateur : state sans Shift (controle negatif).
+    t.dispatch(InteractionCommand::click(pos(100, 80)))
+        .await
+        .unwrap();
+    let plain = probe.events();
+    let state = plain.iter().find_map(|e| match e {
+        Event::ButtonPress(_) => state_of(e),
+        _ => None,
+    });
+    assert_eq!(state.map(|s| s & SHIFT_MASK), Some(0), "{plain:?}");
+
+    // Shift+clic : le ButtonPress porte ShiftMask.
+    t.dispatch(
+        InteractionCommand::with_modifiers(
+            vec![Modifier::Shift],
+            InteractionCommand::click(pos(100, 80)),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let ev = probe.events();
+    let press = ev
+        .iter()
+        .find(|e| matches!(e, Event::ButtonPress(_)))
+        .unwrap_or_else(|| panic!("pas de ButtonPress : {ev:?}"));
+    assert_eq!(state_of(press).unwrap() & SHIFT_MASK, SHIFT_MASK, "{ev:?}");
+    assert!(
+        probe.pressed_keys().is_empty(),
+        "un modificateur est reste enfonce"
+    );
+
+    // Ctrl+glisser : les MotionNotify portent ControlMask (et le bouton 1).
+    t.dispatch(
+        InteractionCommand::with_modifiers(
+            vec![Modifier::Ctrl],
+            InteractionCommand::drag_drop(pos(20, 20), pos(220, 120)),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let ev = probe.events();
+    let motions: Vec<u16> = ev
+        .iter()
+        .filter(|e| matches!(e, Event::MotionNotify(_)))
+        .filter_map(state_of)
+        .collect();
+    assert!(motions.len() >= 10, "{ev:?}");
+    assert!(
+        motions
+            .iter()
+            .skip(1)
+            .all(|s| s & CONTROL_MASK == CONTROL_MASK),
+        "{motions:?}"
+    );
+    assert!(probe.pressed_keys().is_empty());
+}
+
+#[tokio::test]
+#[ignore = "demarre un Xvfb prive"]
+async fn unknown_or_invalid_modifier_requests_emit_nothing() {
+    let x = Xvfb::start();
+    let probe = Probe::new(&x.display());
+    let t = target(&x, Some(TITLE));
+    let _ = probe.events();
+
+    // Litteral qui contourne les constructeurs : imbrication interdite.
+    let nested = InteractionCommand::WithModifiers {
+        modifiers: vec![Modifier::Shift],
+        command: Box::new(
+            InteractionCommand::with_modifiers(
+                vec![Modifier::Ctrl],
+                InteractionCommand::click(pos(5, 5)),
+            )
+            .unwrap(),
+        ),
+    };
+    assert!(t.dispatch(nested).await.is_err());
+    // KeyHold au-dela du plafond.
+    let too_long = InteractionCommand::KeyHold {
+        key: "Shift_L".into(),
+        duration_ms: 20_000,
+    };
+    assert!(t.dispatch(too_long).await.is_err());
+    // Touche inconnue.
+    assert!(t
+        .dispatch(InteractionCommand::key_hold("touche_inconnue", 10).unwrap())
+        .await
+        .is_err());
+    let ev = probe.events();
+    assert!(
+        !ev.iter().any(|e| matches!(
+            e,
+            Event::KeyPress(_) | Event::ButtonPress(_) | Event::MotionNotify(_)
+        )),
+        "rien ne doit etre emis : {ev:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "demarre un Xvfb prive"]
+async fn key_hold_spaces_press_and_release_by_the_requested_duration() {
+    let x = Xvfb::start();
+    let probe = Probe::new(&x.display());
+    let t = target(&x, Some(TITLE));
+    let _ = probe.events();
+
+    let started = Instant::now();
+    t.dispatch(InteractionCommand::key_hold("Shift_L", 300).unwrap())
+        .await
+        .unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(300));
+
+    // Les evenements sont recus par la sonde (focus fixe sur la fenetre cible) ;
+    // l'ecart entre l'appui et le relachement se lit sur les horodatages serveur.
+    let ev = probe.events();
+    let press = ev.iter().find_map(|e| match e {
+        Event::KeyPress(k) => Some(k.time),
+        _ => None,
+    });
+    let release = ev.iter().find_map(|e| match e {
+        Event::KeyRelease(k) => Some(k.time),
+        _ => None,
+    });
+    let (press, release) = (
+        press.unwrap_or_else(|| panic!("pas de KeyPress : {ev:?}")),
+        release.unwrap_or_else(|| panic!("pas de KeyRelease : {ev:?}")),
+    );
+    assert!(
+        release.wrapping_sub(press) >= 300,
+        "ecart de {} ms",
+        release.wrapping_sub(press)
+    );
+    assert!(probe.pressed_keys().is_empty());
 }

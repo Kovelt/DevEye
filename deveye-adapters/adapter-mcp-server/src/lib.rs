@@ -2,7 +2,9 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Quarante-quatre outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Quarante-quatre outils stables, plus deux outils **expérimentaux** (`snapshot` et
+//! `act`, hors promesse semver, ADR-0069 et ADR-0073), sont publiés à Claude (ou à
+//! n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `screenshot_region` : capture puis recadre sur (x, y, width, height)
 //! - `screenshot_element` : capture recadrée sur le rect d'un sélecteur CSS
@@ -25,6 +27,7 @@
 //! - `type_text` : saisit du texte au focus courant
 //! - `press_key` : presse une touche unique (Enter, Tab, Escape, ArrowDown…)
 //! - `key_combo` : combinaison avec modificateurs (Ctrl+S, Ctrl+Shift+P…)
+//! - `key_hold` : touche maintenue pendant une durée bornée
 //! - `navigate` : navigue vers une route logique (routeur du SDK opt-in)
 //! - `scroll` : défile de (dx, dy) pixels, ancré (centre par défaut)
 //! - `resize` : émule un viewport `width` x `height` (CDP ; `Unsupported` ailleurs)
@@ -72,9 +75,14 @@
 //! - `wait_ready` : attend que l'app publie un state non vide (app prête)
 //! - `target_info` : décrit la cible active et ses capacités (eval_js, dom…)
 //! - `observe` : outil composite — capture bornée, résumé de l'arbre, état,
-//!   erreurs console et logs récents en un appel (ADR-0029)
+//!   erreurs console et logs récents en un appel (ADR-0029) ; la section
+//!   `elements` (références `snapshot`) s'y ajoute sur demande
+//! - `snapshot` **(expérimental)** : arbre compact d'éléments avec références
+//!   stables (`w:<id>` pour les widgets natifs), texte par défaut, JSON sur demande
+//! - `act` **(expérimental)** : agit sur un élément par sa référence (position
+//!   remesurée au moment de l'action, jamais de relocalisation silencieuse)
 //!
-//! **Sorties structurées (ADR-0067)** : 28 outils à petite sortie déclarent un
+//! **Sorties structurées (ADR-0067)** : 29 outils à petite sortie déclarent un
 //! `outputSchema` et renvoient `structuredContent` en plus d'un texte inchangé
 //! (voir `responses`) ; les autres restent en texte seul. `state` porte sa
 //! fraîcheur et sa provenance dans `_meta`.
@@ -128,11 +136,14 @@ use responses::{
     ToolError,
 };
 
-use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, StateDump, WaitPredicate};
+use deveye_core::{
+    InteractionCommand, LogLevel, Modifier, MouseButton, Position, StateDump, WaitPredicate,
+    MAX_KEY_HOLD_MS,
+};
 use deveye_ports::{
-    AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
-    LogSource, PortError, PortResult, Renderer, WaitCondition, WindowGeometry, WindowLister,
-    WindowManager,
+    AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, ElementInspector, InteractionSink,
+    JsEvaluator, LogSource, PortError, PortResult, Renderer, WaitCondition, WindowGeometry,
+    WindowLister, WindowManager,
 };
 
 // H1 : les outils `#[tool]` sont répartis par famille dans ces sous-modules
@@ -145,6 +156,7 @@ mod tools_capture;
 mod tools_inspect;
 mod tools_interaction;
 mod tools_observe;
+mod tools_perception;
 mod tools_wait;
 
 #[cfg(test)]
@@ -164,7 +176,19 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 /// crate et le test de bout en bout du binaire (`deveye-server/tests/e2e_mcp.rs`)
 /// l'exigent tous deux, de sorte qu'ajouter ou retirer un outil impose de
 /// mettre à jour ce nombre, la classification et la documentation.
-pub const EXPECTED_TOOL_COUNT: usize = 44;
+pub const EXPECTED_TOOL_COUNT: usize = 47;
+
+/// Outils expérimentaux : hors de la promesse semver sur les noms, paramètres et
+/// formes de réponse (ADR-0069). Leur description commence par
+/// [`EXPERIMENTAL_PREFIX`] ; ils ne comptent pas dans les « 45 outils » annoncés
+/// par la documentation.
+pub const EXPERIMENTAL_TOOLS: &[&str] = &["snapshot", "act"];
+
+/// Nombre d'outils stables : [`EXPECTED_TOOL_COUNT`] moins les expérimentaux.
+pub const STABLE_TOOL_COUNT: usize = EXPECTED_TOOL_COUNT - EXPERIMENTAL_TOOLS.len();
+
+/// Préfixe de la description d'un outil expérimental.
+pub const EXPERIMENTAL_PREFIX: &str = "[expérimental]";
 
 /// E4 : timeout par defaut partage par tous les outils `wait_*` a boucle de
 /// polling explicite, quand `timeout_ms` est omis par l'appelant. Une seule
@@ -269,6 +293,10 @@ pub struct TargetInfo {
     pub window_manager: String,
     /// `clipboard_get`/`clipboard_set` disponibles (Wayland ; jamais en x11) ?
     pub clipboard: bool,
+    /// `snapshot` et `act` (expérimentaux) peuvent désigner des éléments sur cette
+    /// cible ? Absent de la réponse quand c'est faux, pour garder la forme de la 1.1.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub elements: bool,
     /// Outils qui exigent un moteur JS (webview CDP ou pompe SDK) et répondent
     /// `Unsupported` quand `eval_js` est faux.
     pub js_dependent_tools: Vec<String>,
@@ -293,6 +321,8 @@ pub struct DeveyePorts {
     pub window_manager: Arc<dyn WindowManager>,
     pub window_geometry: Arc<dyn WindowGeometry>,
     pub clipboard: Arc<dyn Clipboard>,
+    /// Éléments désignables par référence (`snapshot`, `act`, expérimentaux).
+    pub elements: Arc<dyn ElementInspector>,
     pub target_info: TargetInfo,
     /// Sonde du backend effectif (mode `auto`) ; `None` : celui de `target_info` fait foi.
     pub effective_backend: Option<EffectiveBackendProbe>,
@@ -316,6 +346,7 @@ pub struct DeveyeMcpServer {
     window_manager: Arc<dyn WindowManager>,
     window_geometry: Arc<dyn WindowGeometry>,
     clipboard: Arc<dyn Clipboard>,
+    elements: Arc<dyn ElementInspector>,
     target_info: TargetInfo,
     effective_backend: Option<EffectiveBackendProbe>,
     /// Racine hors de laquelle `assert_visual` ne lit ni n'écrit (ADR-0049).
@@ -348,16 +379,25 @@ impl Drop for GateGuard<'_> {
     }
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Coordonnées seules — `hover`/`right_click`/`double_click` (le bouton y est
 /// implicite ou fixe). Distincte de [`ClickParams`] (E6 : `click` seul a un
 /// paramètre `button`) pour ne pas faire apparaître un champ sans effet dans
-/// le schéma MCP des trois autres outils.
+/// le schéma MCP des trois autres outils ; tous quatre portent `modifiers`.
 #[derive(Debug, Deserialize, JsonSchema)]
 struct PositionParams {
     /// Abscisse en pixels logiques depuis le coin haut-gauche du viewport.
     x: i32,
     /// Ordonnée en pixels logiques depuis le coin haut-gauche du viewport.
     y: i32,
+    /// Modificateurs maintenus pendant le geste (insensibles à la casse) :
+    /// `ctrl`/`control`, `shift`, `alt`, `meta`/`super`/`cmd`. Un nom inconnu est
+    /// refusé (`invalid_params`) sans émettre le geste. Absent ou vide : geste nu.
+    #[serde(default)]
+    modifiers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -374,6 +414,11 @@ struct ClickParams {
     /// `middle_click` dédié.
     #[serde(default)]
     button: Option<String>,
+    /// Modificateurs maintenus pendant le geste (insensibles à la casse) :
+    /// `ctrl`/`control`, `shift`, `alt`, `meta`/`super`/`cmd`. Un nom inconnu est
+    /// refusé (`invalid_params`) sans émettre le geste. Absent ou vide : geste nu.
+    #[serde(default)]
+    modifiers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -442,12 +487,22 @@ const CLICKABLES: &str = "'button, a, label, summary, [role=button], [role=tab],
 struct ClickSelectorParams {
     /// Sélecteur CSS du premier élément à cliquer (ex. `button.btn-primary`).
     selector: String,
+    /// Modificateurs maintenus pendant le geste (insensibles à la casse) :
+    /// `ctrl`/`control`, `shift`, `alt`, `meta`/`super`/`cmd`. Un nom inconnu est
+    /// refusé (`invalid_params`) sans émettre le geste. Absent ou vide : geste nu.
+    #[serde(default)]
+    modifiers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ClickTextParams {
     /// Texte exact (après `trim`) de l'élément à cliquer.
     text: String,
+    /// Modificateurs maintenus pendant le geste (insensibles à la casse) :
+    /// `ctrl`/`control`, `shift`, `alt`, `meta`/`super`/`cmd`. Un nom inconnu est
+    /// refusé (`invalid_params`) sans émettre le geste. Absent ou vide : geste nu.
+    #[serde(default)]
+    modifiers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -534,6 +589,11 @@ struct DragDropParams {
     to_x: i32,
     /// Ordonnée d'arrivée.
     to_y: i32,
+    /// Modificateurs maintenus pendant le geste (insensibles à la casse) :
+    /// `ctrl`/`control`, `shift`, `alt`, `meta`/`super`/`cmd`. Un nom inconnu est
+    /// refusé (`invalid_params`) sans émettre le geste. Absent ou vide : geste nu.
+    #[serde(default)]
+    modifiers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -550,6 +610,20 @@ struct ScrollParams {
     /// Défilement vertical en pixels (positif = bas). Défaut 0.
     #[serde(default)]
     dy: Option<i32>,
+    /// Modificateurs maintenus pendant le geste (insensibles à la casse) :
+    /// `ctrl`/`control`, `shift`, `alt`, `meta`/`super`/`cmd`. Un nom inconnu est
+    /// refusé (`invalid_params`) sans émettre le geste. Absent ou vide : geste nu.
+    #[serde(default)]
+    modifiers: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct KeyHoldParams {
+    /// Touche à maintenir (par exemple `Shift_L`). Noms comme `press_key` : XKB
+    /// en kwin-eis, noms X11 en x11.
+    key: String,
+    /// Durée du maintien en millisecondes, de 0 à 10 000.
+    duration_ms: u32,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -797,6 +871,7 @@ impl DeveyeMcpServer {
             window_manager: ports.window_manager,
             window_geometry: ports.window_geometry,
             clipboard: ports.clipboard,
+            elements: ports.elements,
             target_info: ports.target_info,
             effective_backend: ports.effective_backend,
             baseline_root: tools_capture::default_baseline_root(),
@@ -823,6 +898,7 @@ impl DeveyeMcpServer {
             + Self::inspect_router()
             + Self::wait_router()
             + Self::observe_router()
+            + Self::perception_router()
     }
 
     /// Lance le serveur MCP en stdio. Bloque jusqu'à la fermeture du client.
@@ -930,16 +1006,17 @@ impl ServerHandler for DeveyeMcpServer {
              Outils : screenshot, screenshot_region, screenshot_element, \
              assert_visual, click, double_click, right_click, hover, \
              click_selector, click_text, eval_js, type_text, press_key, \
-             key_combo, navigate, scroll, resize, handle_dialog, upload_file, \
+             key_combo, key_hold, navigate, scroll, resize, handle_dialog, upload_file, \
              focus_window, window_geometry, clipboard_get, clipboard_set, dom, \
              state, assert_state, logs_tail, logs_wait, invoke_command, list_commands, \
              wait_for_selector, wait_for_text, find_element, assert_selector, \
              drag_drop, collect_console_errors, list_windows, wait_condition, \
              wait_for_log, wait_screenshot_region, wait_target_alive, \
-             wait_ready, target_info, observe. \
+             wait_ready, target_info, observe ; expérimentaux : snapshot, act. \
              Appeler target_info en premier pour connaitre les capacites de la \
              cible (eval_js/dom indisponibles en kwin-eis). observe resume \
-             l'app en un appel (capture reduite, arbre, état, console, logs)."
+             l'app en un appel (capture reduite, arbre, état, console, logs). \
+             snapshot liste les éléments avec des références, act agit dessus."
                 .to_string(),
         );
         info
@@ -1072,6 +1149,38 @@ fn ok_or_unsupported(result: PortResult<()>) -> Result<CallToolResult, McpError>
         Ok(()) => Ok(ok_result()),
         Err(issue) => issue,
     }
+}
+
+/// Parse le paramètre `modifiers` optionnel d'un outil de pointeur. Un nom
+/// inconnu est une erreur protocolaire explicite (-32602 `invalid_params`) :
+/// jamais un geste émis sans le modificateur demandé.
+fn parse_modifier_names(names: Option<&[String]>) -> Result<Vec<Modifier>, McpError> {
+    deveye_core::parse_modifiers(names.unwrap_or_default())
+        .map_err(|e| McpError::invalid_params(format!("modifiers invalide : {e}"), None))
+}
+
+/// Enveloppe `command` d'un décorateur `WithModifiers` quand des modificateurs
+/// sont demandés ; sans modificateur, la commande part inchangée (aucun
+/// changement de comportement pour les appels existants).
+fn decorate(
+    command: InteractionCommand,
+    modifiers: &[Modifier],
+) -> Result<InteractionCommand, McpError> {
+    if modifiers.is_empty() {
+        return Ok(command);
+    }
+    InteractionCommand::with_modifiers(modifiers.to_vec(), command)
+        .map_err(|e| McpError::invalid_params(e.to_string(), None))
+}
+
+/// `key_hold` : touche non vide et durée sous le plafond, avant tout dispatch.
+fn validate_key_hold(key: &str, duration_ms: u32) -> Result<InteractionCommand, McpError> {
+    InteractionCommand::key_hold(key, duration_ms).map_err(|e| {
+        McpError::invalid_params(
+            format!("{e} (durée de 0 à {MAX_KEY_HOLD_MS} ms, touche non vide)"),
+            None,
+        )
+    })
 }
 
 /// E6 : parse le parametre `button` optionnel de `click` (insensible a la
@@ -1698,6 +1807,27 @@ mod dispatch_tests {
         }
     }
 
+    struct NoopElements;
+    #[async_trait]
+    impl ElementInspector for NoopElements {
+        async fn snapshot(
+            &self,
+            _query: &deveye_core::elements::SnapshotQuery,
+        ) -> deveye_ports::ElementResult<deveye_core::elements::ElementSnapshot> {
+            Err(deveye_ports::ElementError::Unsupported {
+                hint: "mock".to_string(),
+            })
+        }
+        async fn locate(
+            &self,
+            _reference: &str,
+        ) -> deveye_ports::ElementResult<deveye_core::elements::ElementLocation> {
+            Err(deveye_ports::ElementError::Unsupported {
+                hint: "mock".to_string(),
+            })
+        }
+    }
+
     pub(crate) fn base_ports() -> DeveyePorts {
         DeveyePorts {
             renderer: Arc::new(NoopRenderer),
@@ -1712,6 +1842,7 @@ mod dispatch_tests {
             window_manager: Arc::new(NoopWindowManager),
             window_geometry: Arc::new(NoopWindowGeometry),
             clipboard: Arc::new(NoopClipboard),
+            elements: Arc::new(NoopElements),
             target_info: TargetInfo {
                 target: "test".to_string(),
                 eyes: "mock".to_string(),
@@ -1725,6 +1856,7 @@ mod dispatch_tests {
                 focus_window: true,
                 window_manager: "test".to_string(),
                 clipboard: true,
+                elements: false,
                 js_dependent_tools: vec!["eval_js".to_string()],
                 effective_backend: Some("test".to_string()),
                 server: ServerVersion::new("9.9.9", Some("abc1234".to_string()), "1.0"),
@@ -1818,6 +1950,207 @@ mod dispatch_tests {
         }
     }
 
+    fn mods(names: &[&str]) -> Option<Vec<String>> {
+        Some(names.iter().map(|n| (*n).to_string()).collect())
+    }
+
+    #[tokio::test]
+    async fn modifiers_decorate_the_pointer_gestures_of_the_eight_tools() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(spy.clone());
+            ports.evaluator =
+                Arc::new(FixedEval(serde_json::json!({ "ok": true, "x": 5, "y": 6 })));
+        });
+        let m = || mods(&["Shift", "control"]);
+        let pos = |modifiers| PositionParams {
+            x: 1,
+            y: 1,
+            modifiers,
+        };
+        server
+            .click(Parameters(ClickParams {
+                x: 1,
+                y: 1,
+                button: None,
+                modifiers: m(),
+            }))
+            .await
+            .unwrap();
+        server.right_click(Parameters(pos(m()))).await.unwrap();
+        server.double_click(Parameters(pos(m()))).await.unwrap();
+        server.hover(Parameters(pos(m()))).await.unwrap();
+        server
+            .drag_drop(Parameters(DragDropParams {
+                from_x: 1,
+                from_y: 1,
+                to_x: 1,
+                to_y: 1,
+                modifiers: m(),
+            }))
+            .await
+            .unwrap();
+        server
+            .scroll(Parameters(ScrollParams {
+                x: Some(1),
+                y: Some(1),
+                dx: None,
+                dy: Some(100),
+                modifiers: m(),
+            }))
+            .await
+            .unwrap();
+        server
+            .click_selector(Parameters(ClickSelectorParams {
+                selector: "#a".into(),
+                modifiers: m(),
+            }))
+            .await
+            .unwrap();
+        server
+            .click_text(Parameters(ClickTextParams {
+                text: "a".into(),
+                modifiers: m(),
+            }))
+            .await
+            .unwrap();
+        let calls = spy.calls.lock().unwrap();
+        assert_eq!(calls.len(), 8);
+        for call in calls.iter() {
+            match call {
+                InteractionCommand::WithModifiers { modifiers, command } => {
+                    assert_eq!(modifiers, &vec![Modifier::Shift, Modifier::Ctrl]);
+                    assert!(command.accepts_modifiers(), "{command:?}");
+                }
+                other => panic!("commande non decoree : {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn absent_or_empty_modifiers_keep_the_bare_command() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| ports.interaction = Arc::new(spy.clone()));
+        for modifiers in [None, Some(vec![])] {
+            server
+                .hover(Parameters(PositionParams {
+                    x: 1,
+                    y: 1,
+                    modifiers,
+                }))
+                .await
+                .unwrap();
+        }
+        let calls = spy.calls.lock().unwrap();
+        assert!(calls
+            .iter()
+            .all(|c| matches!(c, InteractionCommand::Hover { .. })));
+        assert_eq!(calls.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_modifier_is_invalid_params_and_nothing_is_dispatched() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(spy.clone());
+            ports.evaluator =
+                Arc::new(FixedEval(serde_json::json!({ "ok": true, "x": 5, "y": 6 })));
+        });
+        let invalid = rmcp::model::ErrorCode::INVALID_PARAMS;
+        let bad = || mods(&["ctrl", "hyper"]);
+        let pos = || PositionParams {
+            x: 1,
+            y: 1,
+            modifiers: bad(),
+        };
+        let errors = [
+            server
+                .click(Parameters(ClickParams {
+                    x: 1,
+                    y: 1,
+                    button: None,
+                    modifiers: bad(),
+                }))
+                .await
+                .unwrap_err(),
+            server.right_click(Parameters(pos())).await.unwrap_err(),
+            server.double_click(Parameters(pos())).await.unwrap_err(),
+            server.hover(Parameters(pos())).await.unwrap_err(),
+            server
+                .drag_drop(Parameters(DragDropParams {
+                    from_x: 1,
+                    from_y: 1,
+                    to_x: 1,
+                    to_y: 1,
+                    modifiers: bad(),
+                }))
+                .await
+                .unwrap_err(),
+            server
+                .scroll(Parameters(ScrollParams {
+                    x: None,
+                    y: None,
+                    dx: None,
+                    dy: Some(1),
+                    modifiers: bad(),
+                }))
+                .await
+                .unwrap_err(),
+            server
+                .click_selector(Parameters(ClickSelectorParams {
+                    selector: "#a".into(),
+                    modifiers: bad(),
+                }))
+                .await
+                .unwrap_err(),
+            server
+                .click_text(Parameters(ClickTextParams {
+                    text: "a".into(),
+                    modifiers: bad(),
+                }))
+                .await
+                .unwrap_err(),
+        ];
+        for e in &errors {
+            assert_eq!(e.code, invalid, "{e:?}");
+        }
+        assert!(spy.calls.lock().unwrap().is_empty(), "rien ne doit partir");
+    }
+
+    #[tokio::test]
+    async fn key_hold_dispatches_within_the_cap_and_refuses_beyond() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| ports.interaction = Arc::new(spy.clone()));
+        let ok = server
+            .key_hold(Parameters(KeyHoldParams {
+                key: "Shift_L".into(),
+                duration_ms: 300,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(ok.is_error, Some(false));
+        let invalid = rmcp::model::ErrorCode::INVALID_PARAMS;
+        for (key, duration_ms) in [
+            ("Shift_L", 20_000),
+            ("Shift_L", MAX_KEY_HOLD_MS + 1),
+            ("  ", 10),
+        ] {
+            let err = server
+                .key_hold(Parameters(KeyHoldParams {
+                    key: key.into(),
+                    duration_ms,
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(err.code, invalid, "{key} {duration_ms}");
+        }
+        let calls = spy.calls.lock().unwrap();
+        assert_eq!(
+            calls.as_slice(),
+            [InteractionCommand::key_hold("Shift_L", 300).unwrap()]
+        );
+    }
+
     #[tokio::test]
     async fn click_selector_is_error_when_element_absent_and_never_dispatches() {
         let spy = DispatchSpy::default();
@@ -1831,6 +2164,7 @@ mod dispatch_tests {
         let result = server
             .click_selector(Parameters(ClickSelectorParams {
                 selector: ".missing".to_string(),
+                modifiers: None,
             }))
             .await
             .expect("pas d'erreur protocolaire");
@@ -1855,6 +2189,7 @@ mod dispatch_tests {
         let result = server
             .click_selector(Parameters(ClickSelectorParams {
                 selector: ".present".to_string(),
+                modifiers: None,
             }))
             .await
             .expect("pas d'erreur protocolaire");
@@ -1905,7 +2240,12 @@ mod dispatch_tests {
     }
 
     fn click_params(x: i32, y: i32) -> ClickParams {
-        ClickParams { x, y, button: None }
+        ClickParams {
+            x,
+            y,
+            button: None,
+            modifiers: None,
+        }
     }
 
     #[tokio::test]
@@ -1937,7 +2277,11 @@ mod dispatch_tests {
             ports.renderer = Arc::new(SizedRenderer(Some(Size::new(800, 600))));
         });
         let invalid = rmcp::model::ErrorCode::INVALID_PARAMS;
-        let position = |x, y| PositionParams { x, y };
+        let position = |x, y| PositionParams {
+            x,
+            y,
+            modifiers: None,
+        };
         // Dernier pixel valide : 799 x 599 ; 800 ou 600 est déjà dehors.
         assert_eq!(
             server
@@ -1976,6 +2320,7 @@ mod dispatch_tests {
             from_y: 10,
             to_x: 801,
             to_y: 10,
+            modifiers: None,
         };
         assert_eq!(
             server.drag_drop(Parameters(drag)).await.unwrap_err().code,
@@ -1986,6 +2331,7 @@ mod dispatch_tests {
             y: Some(700),
             dx: None,
             dy: Some(100),
+            modifiers: None,
         };
         assert_eq!(
             server.scroll(Parameters(scroll)).await.unwrap_err().code,
@@ -2027,6 +2373,7 @@ mod dispatch_tests {
                 x: 10,
                 y: 20,
                 button: Some("right".to_string()),
+                modifiers: None,
             }))
             .await
             .expect("pas d'erreur protocolaire");
@@ -2049,6 +2396,7 @@ mod dispatch_tests {
                 x: 0,
                 y: 0,
                 button: Some("nope".to_string()),
+                modifiers: None,
             }))
             .await;
         assert!(
@@ -2945,6 +3293,10 @@ mod dispatch_tests {
         ("wait_for_log", true, false, false, false),
         ("wait_condition", true, false, false, false),
         ("observe", true, false, false, false),
+        // Expérimentaux (ADR-0073) : `snapshot` observe sans rien changer ; `act`
+        // écrit sans rien détruire, deux appels identiques peuvent différer.
+        ("snapshot", true, false, true, false),
+        ("act", false, false, false, false),
         // Modifie l'app de façon non destructive.
         ("screenshot_element", false, false, true, false),
         ("hover", false, false, true, false),
@@ -2963,6 +3315,8 @@ mod dispatch_tests {
         // Potentiellement destructif (écrase, quitte, exécute du code arbitraire).
         ("assert_visual", false, true, false, false),
         ("key_combo", false, true, false, false),
+        // Appui maintenu : touche tenue jusqu'à 10 s, effet non borné par DevEye (ADR-0075).
+        ("key_hold", false, true, false, false),
         ("navigate", false, true, true, false),
         ("upload_file", false, true, true, false),
         ("clipboard_set", false, true, true, false),

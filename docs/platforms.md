@@ -34,6 +34,8 @@ Les cinq capacités sont celles de `target_info` et des outils MCP : **yeux** (c
 | **Windows** | non supporté | non supporté | non supporté | non supporté | non supporté | **Non supporté** : `deveye-server` ne compile pas hors Linux | aucun |
 | **macOS** | non supporté | non supporté | non supporté | non supporté | non supporté | **Non supporté** : `deveye-server` ne compile pas hors Linux | aucun |
 
+Les outils expérimentaux `snapshot` et `act` désignent un élément par référence : `w:<id>` sur `x11` et `kwin-eis` (route `ui.widgets` du SDK), `e<n>` par le pont JS sur `sdk`/`auto` (webview WebKitGTK comprise) ; voir [Désigner un élément par référence](usage.md#désigner-un-élément-par-référence-expérimental).
+
 Lectures utiles :
 
 - **Le SDK et le CDP ne dépendent pas du compositeur** : une webview Chromium ou une app avec SDK se pilote de la même façon sous X11, sous Wayland KDE et sous Wayland GNOME pour le DOM, l'état et les commandes. Ce qui varie, ce sont les **yeux** et les **mains** natifs, qui passent par le système d'affichage. C'est pourquoi GNOME Wayland est classé non supporté : le pilotage complet d'une app native n'y a pas de voie.

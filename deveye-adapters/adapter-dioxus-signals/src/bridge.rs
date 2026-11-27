@@ -16,7 +16,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use deveye_core::{DomTree, InteractionCommand, MouseButton, Position, StateDump};
+use deveye_core::{DomTree, InteractionCommand, Modifier, MouseButton, Position, StateDump};
 use deveye_ports::{AppInspector, InteractionSink, JsEvaluator, PortError, PortResult};
 
 /// `JsEvaluator` parlant au SDK opt-in (`POST /devtools/eval`).
@@ -139,6 +139,19 @@ fn js_string(s: &str) -> String {
     serde_json::Value::from(s).to_string()
 }
 
+/// Élément sous le point, shadow roots ouverts traversés : `elementFromPoint` du
+/// document s'arrête à l'hôte, et un clic sur l'hôte n'atteint pas le bouton du
+/// shadow DOM (le pont d'éléments désigne aussi ces éléments).
+const DEEP_AT: &str = "const deepAt = (e, x, y) => { \
+     while (e && e.shadowRoot) { const d = e.shadowRoot.elementFromPoint(x, y); \
+     if (!d || d === e) break; e = d; } return e; };";
+
+/// Élément actif, shadow roots ouverts traversés : `document.activeElement` s'arrête
+/// à l'hôte du shadow root, qui n'est ni un champ ni l'élément qui a le focus.
+const DEEP_ACTIVE: &str = "const deepActive = () => { let a = document.activeElement; \
+     while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; \
+     return a; };";
+
 /// `None` pour un bouton inconnu (`MouseButton` est `#[non_exhaustive]`).
 fn button_code(button: MouseButton) -> Option<u8> {
     match button {
@@ -149,7 +162,27 @@ fn button_code(button: MouseButton) -> Option<u8> {
     }
 }
 
-fn click_snippet(position: Position, button: MouseButton) -> PortResult<String> {
+/// Fragment d'objet d'options JS portant les booleens de modificateurs
+/// (`ctrlKey: true, ...`), a inserer dans les options d'un `MouseEvent`.
+/// Vide sans modificateur : les options d'evenement ne changent pas. (Les scripts
+/// eux-memes traversent desormais les shadow roots ouverts, ADR-0074.)
+fn modifier_flags(modifiers: &[Modifier]) -> String {
+    let mut flags = String::new();
+    for (modifier, key) in [
+        (Modifier::Ctrl, "ctrlKey"),
+        (Modifier::Shift, "shiftKey"),
+        (Modifier::Alt, "altKey"),
+        (Modifier::Meta, "metaKey"),
+    ] {
+        if modifiers.contains(&modifier) {
+            flags.push_str(key);
+            flags.push_str(": true, ");
+        }
+    }
+    flags
+}
+
+fn click_snippet(position: Position, button: MouseButton, mods: &str) -> PortResult<String> {
     let b = button_code(button).ok_or_else(|| {
         PortError::Unsupported(format!(
             "bouton de souris {button:?} non géré par le pont SDK"
@@ -163,9 +196,9 @@ fn click_snippet(position: Position, button: MouseButton) -> PortResult<String> 
         _ => "el.dispatchEvent(new MouseEvent('click', opts));",
     };
     Ok(format!(
-        "(function(){{ const el = document.elementFromPoint({x}, {y}); \
+        "(function(){{ {DEEP_AT} const el = deepAt(document.elementFromPoint({x}, {y}), {x}, {y}); \
          if (!el) return {{ ok: false, reason: 'aucun élément à ({x}, {y})' }}; \
-         const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, \
+         const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, {mods}\
                          clientX: {x}, clientY: {y}, button: {b}, buttons: 1 }}; \
          el.dispatchEvent(new PointerEvent('pointerover', opts)); \
          el.dispatchEvent(new MouseEvent('mouseover', opts)); \
@@ -181,12 +214,12 @@ fn click_snippet(position: Position, button: MouseButton) -> PortResult<String> 
     ))
 }
 
-fn hover_snippet(position: Position) -> String {
+fn hover_snippet(position: Position, mods: &str) -> String {
     let (x, y) = (position.x, position.y);
     format!(
-        "(function(){{ const el = document.elementFromPoint({x}, {y}); \
+        "(function(){{ {DEEP_AT} const el = deepAt(document.elementFromPoint({x}, {y}), {x}, {y}); \
          if (!el) return {{ ok: false, reason: 'aucun élément à ({x}, {y})' }}; \
-         const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, \
+         const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, {mods}\
                          clientX: {x}, clientY: {y} }}; \
          el.dispatchEvent(new PointerEvent('pointerover', opts)); \
          el.dispatchEvent(new MouseEvent('mouseover', opts)); \
@@ -201,8 +234,17 @@ fn type_snippet(text: &str) -> String {
     // Setter natif du prototype : les frameworks réactifs interceptent la
     // propriété `value` de l'instance — passer par le prototype garantit que
     // l'événement `input` voit la nouvelle valeur.
+    // Champ de formulaire (y compris dans un shadow root ouvert) ou zone
+    // `contenteditable` : `execCommand('insertText')` insere au curseur comme une
+    // frappe ; a defaut, ajout en fin de contenu.
     format!(
-        "(function(){{ const el = document.activeElement; const text = {text}; \
+        "(function(){{ {DEEP_ACTIVE} const el = deepActive(); const text = {text}; \
+         if (el && el.isContentEditable && !('value' in el)) {{ \
+           let done = false; \
+           try {{ done = document.execCommand('insertText', false, text); }} catch (e) {{}} \
+           if (!done) {{ el.textContent = (el.textContent ?? '') + text; \
+             el.dispatchEvent(new InputEvent('input', {{ bubbles: true, data: text, inputType: 'insertText' }})); }} \
+           return {{ ok: true }}; }} \
          if (!el || !('value' in el)) return {{ ok: false, reason: 'aucun champ éditable au focus' }}; \
          const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value'); \
          const next = (el.value ?? '') + text; \
@@ -215,7 +257,7 @@ fn type_snippet(text: &str) -> String {
 fn keypress_snippet(key: &str) -> String {
     let key = js_string(key);
     format!(
-        "(function(){{ const el = document.activeElement || document.body; \
+        "(function(){{ {DEEP_ACTIVE} const el = deepActive() || document.body; \
          const opts = {{ key: {key}, bubbles: true, cancelable: true }}; \
          el.dispatchEvent(new KeyboardEvent('keydown', opts)); \
          el.dispatchEvent(new KeyboardEvent('keyup', opts)); \
@@ -241,7 +283,7 @@ fn keycombo_snippet(modifiers: &[String], key: &str) -> String {
     // vrai event OS (les raccourcis du moteur ne se declenchent pas), mais
     // suffisant pour les handlers applicatifs.
     format!(
-        "(function(){{ const el = document.activeElement || document.body; \
+        "(function(){{ {DEEP_ACTIVE} const el = deepActive() || document.body; \
          const opts = {{ key: {key}, ctrlKey: {ctrl}, shiftKey: {shift}, altKey: {alt}, metaKey: {meta}, \
                          bubbles: true, cancelable: true }}; \
          el.dispatchEvent(new KeyboardEvent('keydown', opts)); \
@@ -250,13 +292,13 @@ fn keycombo_snippet(modifiers: &[String], key: &str) -> String {
     )
 }
 
-fn doubleclick_snippet(position: Position) -> String {
+fn doubleclick_snippet(position: Position, mods: &str) -> String {
     let (x, y) = (position.x, position.y);
     // Deux clicks + un dblclick synthetiques sur l'element sous le point.
     format!(
-        "(function(){{ const el = document.elementFromPoint({x}, {y}); \
+        "(function(){{ {DEEP_AT} const el = deepAt(document.elementFromPoint({x}, {y}), {x}, {y}); \
          if (!el) return {{ ok: false, reason: 'aucun élément à ({x}, {y})' }}; \
-         const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, \
+         const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, {mods}\
                          clientX: {x}, clientY: {y}, button: 0, buttons: 1 }}; \
          for (let i = 0; i < 2; i++) {{ \
            el.dispatchEvent(new MouseEvent('mousedown', opts)); \
@@ -268,19 +310,34 @@ fn doubleclick_snippet(position: Position) -> String {
     )
 }
 
-fn scroll_snippet(position: Position, dx: i32, dy: i32) -> String {
+/// Avec modificateurs, un `WheelEvent` les portant part d'abord sur l'element
+/// (zoom a la molette, defilement lateral...) ; le defilement natif n'a lieu
+/// que si aucun handler n'a appele `preventDefault`. Sans modificateur, le
+/// script est celui d'avant (aucun evenement `wheel`).
+fn scroll_snippet(position: Position, dx: i32, dy: i32, mods: &str) -> String {
     let (x, y) = (position.x, position.y);
+    let wheel = if mods.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "const target = n || document.body; \
+             const ev = new WheelEvent('wheel', {{ bubbles: true, cancelable: true, composed: true, \
+               view: window, {mods}clientX: {x}, clientY: {y}, deltaX: {dx}, deltaY: {dy} }}); \
+             if (!target.dispatchEvent(ev)) return {{ ok: true }}; "
+        )
+    };
     // Piege connu (usage.md) : le scroll de l'app vit souvent dans un conteneur
     // (.shell__content), pas dans window. On remonte les ancetres a la recherche
-    // du premier element reellement scrollable sous le point ; sinon window.
+    // du premier element reellement scrollable sous le point, en sortant des shadow
+    // roots par leur hote ; sinon window.
     format!(
-        "(function(){{ let n = document.elementFromPoint({x}, {y}); \
+        "(function(){{ {DEEP_AT} let n = deepAt(document.elementFromPoint({x}, {y}), {x}, {y}); \
          const scrollable = (e) => {{ while (e && e !== document.body && e !== document.documentElement) {{ \
            const s = getComputedStyle(e); \
            if (/(auto|scroll)/.test((s.overflowY || '') + (s.overflowX || '')) \
                && (e.scrollHeight > e.clientHeight || e.scrollWidth > e.clientWidth)) return e; \
-           e = e.parentElement; }} return null; }}; \
-         const t = scrollable(n); \
+           e = e.parentElement || (e.getRootNode && e.getRootNode().host) || null; }} return null; }}; \
+         {wheel}const t = scrollable(n); \
          if (t) t.scrollBy({dx}, {dy}); else window.scrollBy({dx}, {dy}); \
          return {{ ok: true }}; }})()"
     )
@@ -300,16 +357,16 @@ fn navigate_snippet(route: &str) -> String {
 /// Glisser-déposer en événements pointer/souris synthétiques (fallback SDK,
 /// sans CDP). Moins fidèle que la séquence souris native CDP — un widget qui
 /// n'écoute que le drag-drop HTML5 natif (`dragstart`/`drop`) ne réagira pas.
-fn dragdrop_snippet(from: Position, to: Position) -> String {
+fn dragdrop_snippet(from: Position, to: Position, mods: &str) -> String {
     let (fx, fy, tx, ty) = (from.x, from.y, to.x, to.y);
     format!(
-        "(function(){{ const src = document.elementFromPoint({fx}, {fy}); \
+        "(function(){{ {DEEP_AT} const src = deepAt(document.elementFromPoint({fx}, {fy}), {fx}, {fy}); \
          if (!src) return {{ ok: false, reason: 'aucun élément source à ({fx}, {fy})' }}; \
-         const o = (x, y) => ({{ bubbles: true, cancelable: true, composed: true, view: window, \
+         const o = (x, y) => ({{ bubbles: true, cancelable: true, composed: true, view: window, {mods}\
                                  clientX: x, clientY: y, pointerId: 1, isPrimary: true, button: 0, buttons: 1 }}); \
          src.dispatchEvent(new PointerEvent('pointerdown', o({fx}, {fy}))); \
          src.dispatchEvent(new MouseEvent('mousedown', o({fx}, {fy}))); \
-         const dst = document.elementFromPoint({tx}, {ty}) || src; \
+         const dst = deepAt(document.elementFromPoint({tx}, {ty}), {tx}, {ty}) || src; \
          dst.dispatchEvent(new PointerEvent('pointermove', o({tx}, {ty}))); \
          dst.dispatchEvent(new MouseEvent('mousemove', o({tx}, {ty}))); \
          dst.dispatchEvent(new PointerEvent('pointerup', o({tx}, {ty}))); \
@@ -321,11 +378,26 @@ fn dragdrop_snippet(from: Position, to: Position) -> String {
 #[async_trait]
 impl InteractionSink for JsInteraction {
     async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
+        // Invariants du domaine avant toute evaluation (les champs de variante
+        // sont publics : un litteral peut contourner les constructeurs).
+        command
+            .validate()
+            .map_err(|e| PortError::Interaction(e.to_string()))?;
+        // Geste decore : memes scripts, avec les booleens de modificateurs dans
+        // les evenements synthetiques (isTrusted reste faux, ADR-0075).
+        let (mods, command) = match command {
+            InteractionCommand::WithModifiers { modifiers, command } => {
+                (modifier_flags(&modifiers), *command)
+            }
+            other => (String::new(), other),
+        };
         match command {
             InteractionCommand::Click { position, button } => {
-                self.run(click_snippet(position, button)?).await
+                self.run(click_snippet(position, button, &mods)?).await
             }
-            InteractionCommand::Hover { position } => self.run(hover_snippet(position)).await,
+            InteractionCommand::Hover { position } => {
+                self.run(hover_snippet(position, &mods)).await
+            }
             InteractionCommand::Type { text } => self.run(type_snippet(&text)).await,
             InteractionCommand::KeyPress { key } => self.run(keypress_snippet(&key)).await,
             InteractionCommand::KeyCombo { modifiers, key } => {
@@ -335,12 +407,14 @@ impl InteractionSink for JsInteraction {
                 // Meme contrat que le chemin CDP : le hook routeur du SDK.
                 self.run(navigate_snippet(&route)).await
             }
-            InteractionCommand::DragDrop { from, to } => self.run(dragdrop_snippet(from, to)).await,
+            InteractionCommand::DragDrop { from, to } => {
+                self.run(dragdrop_snippet(from, to, &mods)).await
+            }
             InteractionCommand::Scroll { position, dx, dy } => {
-                self.run(scroll_snippet(position, dx, dy)).await
+                self.run(scroll_snippet(position, dx, dy, &mods)).await
             }
             InteractionCommand::DoubleClick { position } => {
-                self.run(doubleclick_snippet(position)).await
+                self.run(doubleclick_snippet(position, &mods)).await
             }
             // CDP-only : un dialog JS suspend la pompe eval (eval_js impossible),
             // et la securite navigateur interdit de remplir un input fichier en
@@ -353,6 +427,13 @@ impl InteractionSink for JsInteraction {
             InteractionCommand::UploadFile { .. } => Err(PortError::Unsupported(
                 "upload_file nécessite CDP (DOM.setFileInputFiles) ; la sécurité \
                  navigateur interdit de remplir un input fichier en JS"
+                    .to_string(),
+            )),
+            // Un appui maintenu n'a pas d'equivalent honnete en evenements
+            // synthetiques (pas d'auto-repetition, pas d'etat clavier reel).
+            InteractionCommand::KeyHold { .. } => Err(PortError::Unsupported(
+                "key_hold nécessite des événements clavier OS-level (x11, kwin-eis) ; \
+                 indisponible via le pont SDK"
                     .to_string(),
             )),
             // Les métriques du moteur de rendu ne se règlent pas depuis la page.
@@ -544,8 +625,89 @@ mod tests {
     }
 
     #[test]
+    fn modifier_flags_listent_les_booleens_demandes() {
+        assert_eq!(modifier_flags(&[]), "");
+        assert_eq!(
+            modifier_flags(&[Modifier::Shift, Modifier::Ctrl]),
+            "ctrlKey: true, shiftKey: true, "
+        );
+        assert!(modifier_flags(&[Modifier::Alt, Modifier::Meta]).contains("metaKey: true"));
+    }
+
+    #[test]
+    fn snippets_sans_modificateur_n_ajoutent_ni_booleen_ni_wheel() {
+        let p = Position::new(3, 4);
+        assert!(!click_snippet(p, MouseButton::Left, "")
+            .unwrap()
+            .contains("shiftKey"));
+        assert!(!scroll_snippet(p, 0, 10, "").contains("WheelEvent"));
+    }
+
+    #[test]
+    fn snippets_avec_modificateurs_portent_les_booleens() {
+        let p = Position::new(3, 4);
+        let m = modifier_flags(&[Modifier::Shift]);
+        assert!(click_snippet(p, MouseButton::Left, &m)
+            .unwrap()
+            .contains("shiftKey: true"));
+        assert!(hover_snippet(p, &m).contains("shiftKey: true"));
+        assert!(doubleclick_snippet(p, &m).contains("shiftKey: true"));
+        assert!(dragdrop_snippet(p, p, &m).contains("shiftKey: true"));
+        let wheel = scroll_snippet(p, 0, 10, &m);
+        assert!(wheel.contains("new WheelEvent") && wheel.contains("shiftKey: true"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_refuse_key_hold_et_les_commandes_invalides_sans_evaluer() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Compteur(Arc<AtomicUsize>);
+        #[async_trait]
+        impl JsEvaluator for Compteur {
+            async fn evaluate(&self, _e: &str) -> PortResult<serde_json::Value> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(serde_json::json!({ "ok": true }))
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sink = JsInteraction::new(Arc::new(Compteur(calls.clone())));
+        let hold = InteractionCommand::key_hold("Shift_L", 100).unwrap();
+        assert!(matches!(
+            sink.dispatch(hold).await,
+            Err(PortError::Unsupported(_))
+        ));
+        let nested = InteractionCommand::WithModifiers {
+            modifiers: vec![Modifier::Ctrl],
+            command: Box::new(InteractionCommand::type_text("x")),
+        };
+        assert!(sink.dispatch(nested).await.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "rien ne doit etre evalue");
+        // Un geste valide est evalue une fois.
+        let ok = InteractionCommand::with_modifiers(
+            vec![Modifier::Shift],
+            InteractionCommand::click(Position::new(1, 1)),
+        )
+        .unwrap();
+        sink.dispatch(ok).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn tous_les_gestes_traversent_les_shadow_roots_ouverts() {
+        let p = Position::new(3, 4);
+        assert!(scroll_snippet(p, 0, 10, "").contains("deepAt("));
+        assert!(scroll_snippet(p, 0, 10, "").contains("getRootNode().host"));
+        let drag = dragdrop_snippet(p, p, "");
+        assert_eq!(drag.matches("deepAt(document.elementFromPoint").count(), 2);
+        assert!(type_snippet("x").contains("deepActive()"));
+        assert!(type_snippet("x").contains("isContentEditable"));
+        assert!(keypress_snippet("a").contains("deepActive()"));
+        assert!(keycombo_snippet(&[], "a").contains("deepActive()"));
+    }
+
+    #[test]
     fn click_snippet_gauche_active_par_click() {
-        let js = click_snippet(Position::new(10, 20), MouseButton::Left).unwrap();
+        let js = click_snippet(Position::new(10, 20), MouseButton::Left, "").unwrap();
         assert!(js.contains("elementFromPoint(10, 20)"));
         assert!(js.contains("new MouseEvent('click'"));
         assert!(js.contains("el.focus()"));
@@ -553,7 +715,7 @@ mod tests {
 
     #[test]
     fn click_snippet_droit_active_par_contextmenu() {
-        let js = click_snippet(Position::new(1, 2), MouseButton::Right).unwrap();
+        let js = click_snippet(Position::new(1, 2), MouseButton::Right, "").unwrap();
         assert!(js.contains("contextmenu"));
         assert!(!js.contains("new MouseEvent('click'"));
     }
@@ -566,7 +728,7 @@ mod tests {
 
     #[test]
     fn dragdrop_snippet_source_et_cible() {
-        let js = dragdrop_snippet(Position::new(10, 20), Position::new(100, 200));
+        let js = dragdrop_snippet(Position::new(10, 20), Position::new(100, 200), "");
         assert!(js.contains("elementFromPoint(10, 20)"));
         assert!(js.contains("elementFromPoint(100, 200)"));
         assert!(js.contains("pointerdown"));
@@ -575,7 +737,7 @@ mod tests {
 
     #[test]
     fn hover_snippet_contient_coordonnees_et_evenements() {
-        let js = hover_snippet(Position::new(42, 77));
+        let js = hover_snippet(Position::new(42, 77), "");
         assert!(js.contains("elementFromPoint(42, 77)"));
         assert!(js.contains("pointerover"));
         assert!(js.contains("mouseover"));
@@ -603,7 +765,7 @@ mod tests {
 
     #[test]
     fn doubleclick_snippet_emet_deux_clicks_et_un_dblclick() {
-        let js = doubleclick_snippet(Position::new(12, 34));
+        let js = doubleclick_snippet(Position::new(12, 34), "");
         assert!(js.contains("elementFromPoint(12, 34)"));
         assert!(js.contains("'click'"));
         assert!(js.contains("'dblclick'"));
@@ -613,7 +775,7 @@ mod tests {
 
     #[test]
     fn scroll_snippet_cible_le_conteneur_scrollable_sinon_window() {
-        let js = scroll_snippet(Position::new(42, 77), 0, 600);
+        let js = scroll_snippet(Position::new(42, 77), 0, 600, "");
         assert!(js.contains("elementFromPoint(42, 77)"));
         assert!(js.contains("scrollBy(0, 600)"));
         assert!(js.contains("window.scrollBy(0, 600)"));

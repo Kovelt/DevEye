@@ -91,7 +91,7 @@ DevEye/
   README.md, CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md   vitrine, contribution, sécurité, conduite
 ```
 
-**Sources de vérité** : `docs/architecture.md` (conception), `docs/usage.md` (utilisation et référence des 44 outils), `docs/wire-protocol.md` (contrat HTTP du SDK), `docs/platforms.md` (plateformes supportées), `SECURITY.md` (modèle de menace).
+**Sources de vérité** : `docs/architecture.md` (conception), `docs/usage.md` (utilisation et référence des 45 outils), `docs/wire-protocol.md` (contrat HTTP du SDK), `docs/platforms.md` (plateformes supportées), `SECURITY.md` (modèle de menace).
 
 **Documentation vérifiée par des tests** (`adapter-mcp-server`, module `docs_tests`, ADR-0048) : la liste des outils du README (entre `<!-- outils:debut -->` et `<!-- outils:fin -->`) et les titres d'outils de `docs/usage.md` doivent égaler les outils enregistrés ; les nombres d'outils annoncés égalent `EXPECTED_TOOL_COUNT` ; les liens relatifs et les ancres des fichiers Markdown (hors `docs/historique/`) doivent exister ; chaque ADR figure à l'index avec son titre et son statut. Ajouter ou retirer un outil impose donc de mettre à jour `EXPECTED_TOOL_COUNT`, la classification des annotations, le README et `docs/usage.md`.
 

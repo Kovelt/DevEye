@@ -25,15 +25,15 @@ DevEye est un serveur [MCP](https://modelcontextprotocol.io) (Model Context Prot
 **1. `cargo install` depuis GitHub** (compile le binaire, version épinglée) :
 
 ```bash
-cargo install --git https://github.com/Kovelt/DevEye --tag v1.1.0 deveye-server --locked
+cargo install --git https://github.com/Kovelt/DevEye --tag v1.2.0 deveye-server --locked
 ```
 
-**2. Archive de release** : télécharger `deveye-server-v1.1.0-x86_64-unknown-linux-gnu.tar.gz` et `SHA256SUMS` depuis les [versions GitHub](https://github.com/Kovelt/DevEye/releases), puis :
+**2. Archive de release** : télécharger `deveye-server-v1.2.0-x86_64-unknown-linux-gnu.tar.gz` et `SHA256SUMS` depuis les [versions GitHub](https://github.com/Kovelt/DevEye/releases), puis :
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf deveye-server-v1.1.0-x86_64-unknown-linux-gnu.tar.gz
-install -Dm755 deveye-server-v1.1.0-x86_64-unknown-linux-gnu/deveye-server ~/.local/bin/deveye-server
+tar -xzf deveye-server-v1.2.0-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 deveye-server-v1.2.0-x86_64-unknown-linux-gnu/deveye-server ~/.local/bin/deveye-server
 ```
 
 L'archive contient le binaire, `LICENSE` (AGPL-3.0), `LICENSE-MIT`, ce README et le CHANGELOG.
@@ -79,18 +79,20 @@ Pour donner à l'agent l'état, les logs et les commandes de votre app Rust, int
 ## Les outils MCP
 
 <!-- outils:debut -->
-### 44 outils MCP, en sept familles
+### 45 outils MCP, en sept familles
 
 | Famille | Outils |
 |---|---|
 | **Capture** | `screenshot`, `screenshot_region`, `screenshot_element`, `assert_visual` |
-| **Interaction** | `click`, `double_click`, `right_click`, `hover`, `drag_drop`, `click_selector`, `click_text`, `type_text`, `press_key`, `key_combo`, `scroll`, `resize`, `navigate`, `handle_dialog`, `upload_file`, `focus_window`, `clipboard_get`, `clipboard_set` |
+| **Interaction** | `click`, `double_click`, `right_click`, `hover`, `drag_drop`, `click_selector`, `click_text`, `type_text`, `press_key`, `key_combo`, `key_hold`, `scroll`, `resize`, `navigate`, `handle_dialog`, `upload_file`, `focus_window`, `clipboard_get`, `clipboard_set` |
 | **Inspection DOM et état** | `dom`, `find_element`, `assert_selector`, `assert_state`, `eval_js`, `state`, `collect_console_errors`, `list_windows`, `window_geometry`, `target_info` |
 | **Logs** | `logs_tail`, `logs_wait` |
 | **Attente** | `wait_for_selector`, `wait_for_text`, `wait_condition`, `wait_for_log`, `wait_screenshot_region`, `wait_target_alive`, `wait_ready` |
 | **Commandes logiques** | `list_commands`, `invoke_command` |
 | **Composite** | `observe` |
 <!-- outils:fin -->
+
+Deux outils **expérimentaux**, hors de la promesse de stabilité, s'y ajoutent : `snapshot` (arbre compact d'éléments avec références) et `act` (agir sur une référence). Ils désignent les widgets natifs par `w:<id>` sur les cibles `x11` et `kwin-eis`, et les éléments d'une page par `e<n>` (pont JS) sur `sdk`/`auto`, donc pour les apps Dioxus WebKitGTK ; voir [Désigner un élément par référence](docs/usage.md#désigner-un-élément-par-référence-expérimental).
 
 Un test échoue si cette liste diffère des outils réellement enregistrés par le serveur. Paramètres, retours et disponibilité par cible : [docs/usage.md](docs/usage.md#les-outils-mcp).
 
@@ -126,7 +128,7 @@ Client MCP (Claude Code)
         ▼
   deveye-server  ── compose les adapters selon --target
         │
-  adapter-mcp-server ── expose les 44 outils, consomme les 12 ports (deveye-ports)
+  adapter-mcp-server ── expose les 45 outils, consomme les 12 ports stables (deveye-ports) et le port expérimental `ElementInspector`
         │
   ┌─────┴───────────────┬───────────────────┬──────────────────┐
   adapter-cdp-webview   adapter-screencap-*  adapter-interaction-kwin-eis   adapter-x11
@@ -135,7 +137,7 @@ Client MCP (Claude Code)
   deveye-sdk (HTTP 127.0.0.1:31337, embarqué dans l'app, debug seulement)
 ```
 
-Architecture hexagonale : un domaine pur, 12 ports (traits Rust), un adapter par technologie, un binaire qui compose le tout ([ADR-0041](docs/adr/0041-architecture-hexagonale-ports-et-adapters.md)). Détail : [docs/architecture.md](docs/architecture.md).
+Architecture hexagonale : un domaine pur, 12 ports stables (traits Rust, plus un port expérimental pour `snapshot` et `act`), un adapter par technologie, un binaire qui compose le tout ([ADR-0041](docs/adr/0041-architecture-hexagonale-ports-et-adapters.md)). Détail : [docs/architecture.md](docs/architecture.md).
 
 ## Structure du dépôt
 
@@ -149,7 +151,7 @@ Architecture hexagonale : un domaine pur, 12 ports (traits Rust), un adapter par
 | `deveye-sdk-client` | client HTTP du SDK, partagé par les adapters | MIT |
 | `deveye-server` | binaire orchestrateur : compose les adapters, sert le MCP | AGPL-3.0-or-later |
 | `deveye-conformance` | suite de conformité boîte noire du wire protocol | AGPL-3.0-or-later |
-| `adapter-mcp-server` | expose les 44 outils MCP (rmcp, stdio) | AGPL-3.0-or-later |
+| `adapter-mcp-server` | expose les 45 outils MCP (rmcp, stdio) | AGPL-3.0-or-later |
 | `adapter-cdp-webview` | yeux, mains, DOM et JS par CDP | AGPL-3.0-or-later |
 | `adapter-screencap-kwin` | capture, fenêtres, géométrie et focus par KWin | AGPL-3.0-or-later |
 | `adapter-screencap-xcap` | capture OS (X11, XWayland, Wayland non KDE) | AGPL-3.0-or-later |
@@ -173,7 +175,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Les tests de la cible x11 et de la session MCP de bout en bout démarrent **leur propre `Xvfb` privé** ; ils sont `#[ignore]` mais bloquants en CI (`just x11`, `just e2e`). Les tests `live_*` des adapters KWin exigent une session KDE réelle et se lancent à la main. La CI est dans `.github/workflows/ci.yml`.
+Les tests de la cible x11 et de la session MCP de bout en bout démarrent **leur propre `Xvfb` privé** ; ils sont `#[ignore]` mais bloquants en CI (`just x11`, `just e2e`) ; le pont d'éléments et les modificateurs sont aussi exercés dans un Chromium headless (`just chromium`, Chrome ou Brave installé, `DEVEYE_TEST_CHROMIUM` pour choisir). Les tests `live_*` des adapters KWin exigent une session KDE réelle et se lancent à la main. La CI est dans `.github/workflows/ci.yml`.
 
 ## Contribuer, sécurité, conduite
 

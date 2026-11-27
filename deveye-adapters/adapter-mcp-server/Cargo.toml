@@ -1,6 +1,6 @@
 [package]
 name = "adapter-mcp-server"
-version = "1.1.0"
+version = "1.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,8 +16,10 @@ workspace = true
 [dependencies]
 # `schema` : dérive JsonSchema sur les types de domaine renvoyés tels quels par
 # les outils MCP (WaitOutcome, WindowRect), source de leur outputSchema (ADR-0067).
-deveye-core = { path = "../../deveye-core", version = "1.1.0", features = ["schema"] }
-deveye-ports = { path = "../../deveye-ports", version = "1.1.0" }
+# `unstable-elements` : port et types des éléments par référence, outils `snapshot` et `act`
+# expérimentaux, hors promesse semver (ADR-0069, ADR-0072).
+deveye-core = { path = "../../deveye-core", version = "1.2.0", features = ["schema", "unstable-elements"] }
+deveye-ports = { path = "../../deveye-ports", version = "1.2.0", features = ["unstable-elements"] }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

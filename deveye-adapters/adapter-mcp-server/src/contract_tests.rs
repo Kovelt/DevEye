@@ -118,7 +118,11 @@ pub(crate) struct Scenario {
 }
 
 fn pos() -> PositionParams {
-    PositionParams { x: 1, y: 1 }
+    PositionParams {
+        x: 1,
+        y: 1,
+        modifiers: None,
+    }
 }
 
 fn ok(r: Result<CallToolResult, McpError>) -> CallToolResult {
@@ -342,7 +346,8 @@ pub(crate) async fn scenarios() -> Vec<Scenario> {
         s.click(Parameters(ClickParams {
             x: 1,
             y: 1,
-            button: None
+            button: None,
+            modifiers: None
         }))
     );
     push!(
@@ -379,6 +384,14 @@ pub(crate) async fn scenarios() -> Vec<Scenario> {
         }))
     );
     push!(
+        "key_hold_ok",
+        "key_hold",
+        s.key_hold(Parameters(KeyHoldParams {
+            key: "Shift_L".to_string(),
+            duration_ms: 300,
+        }))
+    );
+    push!(
         "navigate_ok",
         "navigate",
         s.navigate(Parameters(NavigateParams {
@@ -393,6 +406,7 @@ pub(crate) async fn scenarios() -> Vec<Scenario> {
             from_y: 0,
             to_x: 1,
             to_y: 1,
+            modifiers: None,
         }))
     );
     push!(
@@ -403,6 +417,7 @@ pub(crate) async fn scenarios() -> Vec<Scenario> {
             y: None,
             dx: Some(0),
             dy: Some(10),
+            modifiers: None,
         }))
     );
     push!(
@@ -451,7 +466,8 @@ pub(crate) async fn scenarios() -> Vec<Scenario> {
         s.click(Parameters(ClickParams {
             x: 1,
             y: 1,
-            button: None
+            button: None,
+            modifiers: None
         }))
     );
     push!(
@@ -484,14 +500,16 @@ pub(crate) async fn scenarios() -> Vec<Scenario> {
         "click_selector_ok",
         "click_selector",
         s.click_selector(Parameters(ClickSelectorParams {
-            selector: "#go".to_string()
+            selector: "#go".to_string(),
+            modifiers: None
         }))
     );
     push!(
         "click_text_ok",
         "click_text",
         s.click_text(Parameters(ClickTextParams {
-            text: "Go".to_string()
+            text: "Go".to_string(),
+            modifiers: None
         }))
     );
     let s = server(|p| {
@@ -503,7 +521,8 @@ pub(crate) async fn scenarios() -> Vec<Scenario> {
         "click_selector_not_found",
         "click_selector",
         s.click_selector(Parameters(ClickSelectorParams {
-            selector: "#nope".to_string()
+            selector: "#nope".to_string(),
+            modifiers: None
         }))
     );
 
@@ -644,6 +663,7 @@ const TIER_A: &[&str] = &[
     "handle_dialog",
     "hover",
     "key_combo",
+    "key_hold",
     "navigate",
     "press_key",
     "resize",

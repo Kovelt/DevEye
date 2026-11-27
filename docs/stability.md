@@ -10,13 +10,13 @@ Tant que la version majeure ne change pas, ces éléments ne cassent pas.
 
 | Élément | Ce qui est couvert |
 |---|---|
-| `deveye-core` | types publics du domaine (commandes, prédicats, snapshots, niveaux de log, descripteurs) ; module `ui` (arbre `deveye.ui/1`, depuis 1.1) et feature optionnelle `schema` (dérive `schemars::JsonSchema`, désactivée par défaut) |
+| `deveye-core` | types publics du domaine (commandes, prédicats, snapshots, niveaux de log, descripteurs) ; module `ui` (arbre `deveye.ui/1`, depuis 1.1) et feature optionnelle `schema` (dérive `schemars::JsonSchema`, désactivée par défaut) ; modificateurs d'entrée depuis 1.2 (`Modifier`, `UnknownModifier`, `parse_modifiers`, `MAX_KEY_HOLD_MS`, `InvalidCommand`, variantes `InteractionCommand::WithModifiers` et `KeyHold`, méthodes `validate`, `with_modifiers`, `key_hold`, `kind_name`, `accepts_modifiers`, [ADR-0075](adr/0075-modificateurs-d-entree-withmodifiers-et-keyhold-borne.md)) |
 | `deveye-ports` | traits des ports, `PortError`, `PortResult` |
 | `deveye-sdk` | API publique embarquée dans l'app cible (`init`, `Config`, `set_state`, `expose_route`, `take_eval_requests`, constantes publiques) ; push de logs depuis 1.1 (`log`, `log_with`, `LogLevel`, `try_install_tracing_layer`, `TracingInstallError`, `layer`, `DeveyeLayer`, sans feature : `default-features = false` reste sans effet comme en 1.0, ADR-0070 ; `DeveyeLayer` expose `tracing_subscriber::Layer` 0.3 : candidat à la 2.0, ADR-0066) ; module `ui` depuis 1.1 (`publish`, `is_observed`, `builder`, constantes `ROUTE` et `CAPABILITY`, réexport des types `deveye.ui/1`) |
 | `deveye-sdk-client` | client HTTP et constantes partagés avec les adapters |
 | **Schéma `deveye.ui/1`** (depuis 1.1) | forme de la réponse de la route `ui.widgets` ([usage.md](usage.md), `docs/schemas/ui-widgets-1.json`, [ADR-0062](adr/0062-schema-deveye-ui-1-de-la-route-ui-widgets.md)) : champs et sémantique actuels figés ; une évolution mineure n'ajoute que des champs optionnels, une rupture publie `deveye.ui/2` lu en plus de `/1` ; le rôle d'un widget est une chaîne ouverte, son vocabulaire recommandé n'est pas une énumération fermée |
 | **Wire protocol v1** | endpoints, formes JSON et en-têtes décrits dans [wire-protocol.md](wire-protocol.md), dont `X-DevEye-Protocol-Version: 1.0` (une rupture change le numéro ; un ajout additif ne le change pas et se découvre par `capabilities`, [ADR-0068](adr/0068-capacites-additives-et-version-du-protocole.md)) |
-| **Outils MCP** | le nom de chaque outil, le nom et le type de chaque paramètre, la forme de chaque réponse ; depuis 1.1, le **texte** des réponses reste celui de la 1.0 et les champs `structuredContent`, `outputSchema` et `_meta` s'y ajoutent (28 outils à petite sortie déclarent un `outputSchema`, la liste exacte est dans l'ADR-0067) ; le champ `reason` d'une erreur est une liste ouverte ([ADR-0067](adr/0067-sorties-structurees-mcp-palier-a.md)) |
+| **Outils MCP** | le nom de chaque outil, le nom et le type de chaque paramètre, la forme de chaque réponse ; depuis 1.1, le **texte** des réponses reste celui de la 1.0 et les champs `structuredContent`, `outputSchema` et `_meta` s'y ajoutent (29 outils à petite sortie déclarent un `outputSchema`, la liste exacte est dans l'ADR-0067) ; le champ `reason` d'une erreur est une liste ouverte ([ADR-0067](adr/0067-sorties-structurees-mcp-palier-a.md)) ; depuis 1.2, paramètre optionnel `modifiers` sur les huit outils de pointeur et outil `key_hold` (45 outils stables, [ADR-0075](adr/0075-modificateurs-d-entree-withmodifiers-et-keyhold-borne.md)) |
 | **`deveye-server`** | les options (`--target`, `--display`, `--cdp-url`, `--sdk-url`, `--screencap-window`, etc.), leurs valeurs possibles, leurs valeurs par défaut et les combinaisons refusées ([ADR-0031](adr/0031-validation-des-flags-selon-la-cible.md)) ; `--version` ; la sous-commande `doctor` et ses codes de sortie (0 : prêt ou avertissements, 1 : prérequis bloquant manquant, 2 : erreur d'usage ; un arbre `ui.widgets` invalide alors que l'app annonce `ui.widgets/1` compte comme prérequis bloquant, même sur une cible où ce contrôle est étiqueté facultatif, [ADR-0065](adr/0065-helper-sdk-ui-lecture-serveur-et-controles.md)) — le texte du diagnostic n'est pas couvert |
 
 Les crates MIT (`deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`) sont les seuls destinés à être consommés comme bibliothèques ; ils ne dépendent jamais d'un crate AGPL ([ADR-0002](adr/0002-licences-agpl-outil-mit-bibliotheques.md)).
@@ -97,7 +97,20 @@ Une capacité qui n'est pas prête pour la promesse semver est livrée **hors pr
 - côté outils MCP, un outil expérimental est annoncé comme tel dans sa description (préfixe « [expérimental] »), signalé au CHANGELOG et exclu de la promesse sur les noms, paramètres et formes de réponse ;
 - toute surface expérimentale est signalée au CHANGELOG ; sa graduation vers la surface stable est une décision écrite (ADR) qui l'ajoute au tableau.
 
-Aucune surface expérimentale n'existe en 1.1. Décision : [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md).
+Surface expérimentale actuelle :
+
+| Feature | Crates | Contenu |
+|---|---|---|
+| `unstable-elements` | `deveye-core`, `deveye-ports` | éléments désignables par référence stable : module `elements` (`ElementNode`, `ElementSnapshot`, `RefTable`, `SnapshotQuery`, `ElementLocation`) et port `ElementInspector` avec son erreur `ElementError` ; la feature n'ajoute aucun élément à la surface stable et `cargo-semver-checks` passe avec et sans elle ([ADR-0072](adr/0072-references-d-elements-stables-et-outils-snapshot-act.md)) |
+
+Outils MCP expérimentaux actuels (hors des 45 outils stables ; description préfixée « [expérimental] » ; noms, paramètres et formes de réponse susceptibles de changer dans une version mineure ; graduation évaluée à la 1.5) :
+
+| Outil | Contenu |
+|---|---|
+| `snapshot` | arbre compact d'éléments avec références (`w:<id>` pour les widgets natifs, `e<n>` pour les pages web par le pont JS) ; la section `elements` d'`observe` (sur demande) et le champ `elements` de `target_info` (absent s'il est faux) en dépendent ([ADR-0073](adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)) |
+| `act` | action sur une référence, position remesurée au moment de l'action |
+
+Décision : [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md).
 
 ## Ce que la 1.0 ne promet pas
 

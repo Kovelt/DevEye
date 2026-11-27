@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::modifier::{Modifier, MAX_KEY_HOLD_MS};
 use crate::snapshot::Position;
 
 /// Bouton de souris pour les commandes de clic.
@@ -80,6 +81,127 @@ pub enum InteractionCommand {
     /// (`Emulation.setDeviceMetricsOverride`) : les cibles sans moteur
     /// pilotable répondent `PortError::Unsupported`.
     Resize { width: u32, height: u32 },
+    /// Décorateur : exécute `command` avec les `modifiers` maintenus enfoncés
+    /// (Shift+clic pour étendre une sélection, Ctrl+glisser, Alt+molette…).
+    /// N'enveloppe que les gestes de pointeur (`Click`, `DoubleClick`, `Hover`,
+    /// `DragDrop`, `Scroll`), jamais un autre `WithModifiers` ni `KeyHold`.
+    /// L'invariant est vérifié à la construction ([`Self::with_modifiers`]), à
+    /// la désérialisation et par [`Self::validate`], que chaque adapter appelle
+    /// avant d'émettre quoi que ce soit.
+    WithModifiers {
+        modifiers: Vec<Modifier>,
+        #[serde(deserialize_with = "deserialize_gesture")]
+        command: Box<InteractionCommand>,
+    },
+    /// Maintient `key` enfoncée `duration_ms` millisecondes puis la relâche,
+    /// dans un seul appel (jamais de touche collante entre deux appels).
+    /// `duration_ms` ne dépasse pas [`MAX_KEY_HOLD_MS`].
+    KeyHold {
+        #[serde(deserialize_with = "deserialize_hold_key")]
+        key: String,
+        #[serde(deserialize_with = "deserialize_hold_duration")]
+        duration_ms: u32,
+    },
+}
+
+/// Commande refusée avant toute émission : elle viole un invariant du domaine.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum InvalidCommand {
+    /// `WithModifiers` n'enveloppe que les gestes de pointeur.
+    #[error(
+        "WithModifiers n'enveloppe que click, double-click, hover, drag-drop et scroll, pas « {0} »"
+    )]
+    NotModifiable(&'static str),
+    /// `KeyHold` au-delà du plafond.
+    #[error("KeyHold de {requested} ms refusé : le plafond est de {max} ms")]
+    HoldTooLong { requested: u32, max: u32 },
+    /// `KeyHold` sans nom de touche.
+    #[error("KeyHold sans nom de touche")]
+    EmptyKey,
+}
+
+/// Les cinq gestes qu'un `WithModifiers` peut envelopper, et rien d'autre : la
+/// désérialisation du geste interne ne récurse donc jamais, quelle que soit la
+/// profondeur du JSON hostile (y compris via `from_value`, sans limite propre).
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum PointerGesture {
+    Click {
+        position: Position,
+        #[serde(default)]
+        button: MouseButton,
+    },
+    Hover {
+        position: Position,
+    },
+    DoubleClick {
+        position: Position,
+    },
+    DragDrop {
+        from: Position,
+        to: Position,
+    },
+    Scroll {
+        position: Position,
+        dx: i32,
+        dy: i32,
+    },
+    #[serde(other)]
+    Other,
+}
+
+fn deserialize_gesture<'de, D>(deserializer: D) -> Result<Box<InteractionCommand>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let command = match PointerGesture::deserialize(deserializer)? {
+        PointerGesture::Click { position, button } => {
+            InteractionCommand::Click { position, button }
+        }
+        PointerGesture::Hover { position } => InteractionCommand::Hover { position },
+        PointerGesture::DoubleClick { position } => InteractionCommand::DoubleClick { position },
+        PointerGesture::DragDrop { from, to } => InteractionCommand::DragDrop { from, to },
+        PointerGesture::Scroll { position, dx, dy } => {
+            InteractionCommand::Scroll { position, dx, dy }
+        }
+        PointerGesture::Other => {
+            return Err(serde::de::Error::custom(InvalidCommand::NotModifiable(
+                "autre commande",
+            )))
+        }
+    };
+    Ok(Box::new(command))
+}
+
+fn deserialize_hold_key<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let key = String::deserialize(deserializer)?;
+    if key.trim().is_empty() {
+        return Err(serde::de::Error::custom(InvalidCommand::EmptyKey));
+    }
+    Ok(key)
+}
+
+fn deserialize_hold_duration<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let duration_ms = u32::deserialize(deserializer)?;
+    check_hold(duration_ms).map_err(serde::de::Error::custom)?;
+    Ok(duration_ms)
+}
+
+fn check_hold(duration_ms: u32) -> Result<(), InvalidCommand> {
+    if duration_ms > MAX_KEY_HOLD_MS {
+        return Err(InvalidCommand::HoldTooLong {
+            requested: duration_ms,
+            max: MAX_KEY_HOLD_MS,
+        });
+    }
+    Ok(())
 }
 
 /// Description d'une commande logique exposée par l'app cible, listée par
@@ -108,6 +230,88 @@ impl CommandDescriptor {
 }
 
 impl InteractionCommand {
+    /// Nom court de la variante, sans ses champs : sûr pour les journaux et les
+    /// messages d'erreur (le texte tapé ou les chemins n'y ont pas leur place).
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Click { .. } => "click",
+            Self::Hover { .. } => "hover",
+            Self::Type { .. } => "type",
+            Self::KeyPress { .. } => "key-press",
+            Self::KeyCombo { .. } => "key-combo",
+            Self::Navigate { .. } => "navigate",
+            Self::DragDrop { .. } => "drag-drop",
+            Self::Scroll { .. } => "scroll",
+            Self::DoubleClick { .. } => "double-click",
+            Self::HandleDialog { .. } => "handle-dialog",
+            Self::UploadFile { .. } => "upload-file",
+            Self::Resize { .. } => "resize",
+            Self::WithModifiers { .. } => "with-modifiers",
+            Self::KeyHold { .. } => "key-hold",
+        }
+    }
+
+    /// Vrai pour les gestes de pointeur qu'un décorateur [`Self::WithModifiers`]
+    /// peut envelopper.
+    pub fn accepts_modifiers(&self) -> bool {
+        matches!(
+            self,
+            Self::Click { .. }
+                | Self::DoubleClick { .. }
+                | Self::Hover { .. }
+                | Self::DragDrop { .. }
+                | Self::Scroll { .. }
+        )
+    }
+
+    fn check_modifiable(&self) -> Result<(), InvalidCommand> {
+        if self.accepts_modifiers() {
+            Ok(())
+        } else {
+            Err(InvalidCommand::NotModifiable(self.kind_name()))
+        }
+    }
+
+    /// Vérifie les invariants du domaine. Les champs des variantes étant
+    /// publics, une commande peut être construite par littéral : chaque adapter
+    /// appelle donc cette méthode avant toute émission.
+    pub fn validate(&self) -> Result<(), InvalidCommand> {
+        match self {
+            Self::WithModifiers { command, .. } => command.check_modifiable(),
+            Self::KeyHold { key, duration_ms } => {
+                if key.trim().is_empty() {
+                    return Err(InvalidCommand::EmptyKey);
+                }
+                check_hold(*duration_ms)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Enveloppe un geste de pointeur avec des modificateurs maintenus. Une
+    /// liste vide est acceptée (équivalent au geste seul).
+    pub fn with_modifiers(
+        modifiers: Vec<Modifier>,
+        command: InteractionCommand,
+    ) -> Result<Self, InvalidCommand> {
+        command.check_modifiable()?;
+        Ok(Self::WithModifiers {
+            modifiers,
+            command: Box::new(command),
+        })
+    }
+
+    /// Maintient une touche `duration_ms` millisecondes (au plus
+    /// [`MAX_KEY_HOLD_MS`]).
+    pub fn key_hold(key: impl Into<String>, duration_ms: u32) -> Result<Self, InvalidCommand> {
+        let command = Self::KeyHold {
+            key: key.into(),
+            duration_ms,
+        };
+        command.validate()?;
+        Ok(command)
+    }
+
     pub fn click(position: Position) -> Self {
         Self::Click {
             position,
@@ -304,5 +508,140 @@ mod tests {
                 button: MouseButton::Right,
             }
         );
+    }
+
+    // ---- WithModifiers et KeyHold -------------------------------------------
+
+    fn shift_click() -> InteractionCommand {
+        InteractionCommand::with_modifiers(
+            vec![Modifier::Shift],
+            InteractionCommand::click(Position::new(1, 2)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn with_modifiers_wraps_every_pointer_gesture() {
+        let p = Position::new(0, 0);
+        for gesture in [
+            InteractionCommand::click(p),
+            InteractionCommand::double_click(p),
+            InteractionCommand::hover(p),
+            InteractionCommand::drag_drop(p, p),
+            InteractionCommand::scroll(p, 0, 10),
+        ] {
+            assert!(InteractionCommand::with_modifiers(vec![Modifier::Ctrl], gesture).is_ok());
+        }
+    }
+
+    #[test]
+    fn with_modifiers_refuses_everything_else() {
+        for other in [
+            InteractionCommand::type_text("x"),
+            InteractionCommand::key("a"),
+            InteractionCommand::navigate("r"),
+            InteractionCommand::resize(1, 1),
+            InteractionCommand::key_hold("Shift_L", 10).unwrap(),
+            shift_click(),
+        ] {
+            let err = InteractionCommand::with_modifiers(vec![Modifier::Alt], other).unwrap_err();
+            assert!(matches!(err, InvalidCommand::NotModifiable(_)));
+        }
+    }
+
+    #[test]
+    fn with_modifiers_round_trips_through_json() {
+        let cmd = shift_click();
+        let v = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(
+            v,
+            json!({
+                "kind": "with-modifiers",
+                "modifiers": ["shift"],
+                "command": { "kind": "click", "position": { "x": 1, "y": 2 }, "button": "left" }
+            })
+        );
+        let back: InteractionCommand = serde_json::from_value(v).unwrap();
+        assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn deserialization_refuses_hostile_json() {
+        // Imbrication.
+        let nested = json!({
+            "kind": "with-modifiers", "modifiers": ["ctrl"],
+            "command": {
+                "kind": "with-modifiers", "modifiers": ["shift"],
+                "command": { "kind": "click", "position": { "x": 1, "y": 2 } }
+            }
+        });
+        assert!(serde_json::from_value::<InteractionCommand>(nested).is_err());
+        // Geste non pointeur.
+        let typed = json!({
+            "kind": "with-modifiers", "modifiers": ["ctrl"],
+            "command": { "kind": "type", "text": "x" }
+        });
+        assert!(serde_json::from_value::<InteractionCommand>(typed).is_err());
+        // KeyHold dans WithModifiers : le plafond cumulé n'est jamais contourné.
+        let hold = json!({
+            "kind": "with-modifiers", "modifiers": ["ctrl"],
+            "command": { "kind": "key-hold", "key": "a", "duration_ms": 5 }
+        });
+        assert!(serde_json::from_value::<InteractionCommand>(hold).is_err());
+        // Modificateur inconnu.
+        let unknown = json!({
+            "kind": "with-modifiers", "modifiers": ["hyper"],
+            "command": { "kind": "click", "position": { "x": 1, "y": 2 } }
+        });
+        assert!(serde_json::from_value::<InteractionCommand>(unknown).is_err());
+        // KeyHold sans nom de touche.
+        let empty = json!({ "kind": "key-hold", "key": " ", "duration_ms": 10 });
+        assert!(serde_json::from_value::<InteractionCommand>(empty).is_err());
+        // KeyHold au-delà du plafond.
+        let long = json!({ "kind": "key-hold", "key": "a", "duration_ms": MAX_KEY_HOLD_MS + 1 });
+        assert!(serde_json::from_value::<InteractionCommand>(long).is_err());
+    }
+
+    #[test]
+    fn key_hold_is_capped_at_construction_and_validation() {
+        assert!(InteractionCommand::key_hold("Shift_L", MAX_KEY_HOLD_MS).is_ok());
+        assert_eq!(
+            InteractionCommand::key_hold("Shift_L", MAX_KEY_HOLD_MS + 1),
+            Err(InvalidCommand::HoldTooLong {
+                requested: MAX_KEY_HOLD_MS + 1,
+                max: MAX_KEY_HOLD_MS
+            })
+        );
+        assert_eq!(
+            InteractionCommand::key_hold(" ", 10),
+            Err(InvalidCommand::EmptyKey)
+        );
+        // Un littéral qui contourne les constructeurs est rattrapé par validate().
+        let literal = InteractionCommand::KeyHold {
+            key: "a".into(),
+            duration_ms: u32::MAX,
+        };
+        assert!(literal.validate().is_err());
+        let wrapped = InteractionCommand::WithModifiers {
+            modifiers: vec![Modifier::Ctrl],
+            command: Box::new(InteractionCommand::type_text("x")),
+        };
+        assert!(wrapped.validate().is_err());
+        assert!(shift_click().validate().is_ok());
+    }
+
+    #[test]
+    fn key_hold_serializes_with_kind_tag() {
+        let cmd = InteractionCommand::key_hold("Shift_L", 300).unwrap();
+        assert_eq!(
+            serde_json::to_value(&cmd).unwrap(),
+            json!({ "kind": "key-hold", "key": "Shift_L", "duration_ms": 300 })
+        );
+    }
+
+    #[test]
+    fn kind_name_never_leaks_payloads() {
+        assert_eq!(InteractionCommand::type_text("secret").kind_name(), "type");
+        assert_eq!(shift_click().kind_name(), "with-modifiers");
     }
 }

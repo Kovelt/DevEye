@@ -13,10 +13,10 @@ use adapter_clipboard_wayland::WaylandClipboard;
 use adapter_commands_http::SdkCommandRouter;
 use adapter_composite::{
     CompositeInspector, CompositeWaitCondition, JsConsoleErrorSource, MaskingCommandRouter,
-    NoopConsoleErrorSource, RouteDomInspector, DEFAULT_DOM_ROUTE,
+    NoopConsoleErrorSource, RouteDomInspector, RouteWidgetsElements, DEFAULT_DOM_ROUTE,
 };
 use adapter_dioxus_signals::{
-    DioxusSignalsInspector, EvalDomInspector, JsInteraction, SdkEvaluator,
+    BridgeElementInspector, DioxusSignalsInspector, EvalDomInspector, JsInteraction, SdkEvaluator,
 };
 use adapter_interaction_kwin_eis::KwinEisInteraction;
 use adapter_logs_tracing::SdkTracingLogSource;
@@ -27,8 +27,8 @@ use adapter_screencap_kwin::{
 use adapter_screencap_xcap::{MonitorRenderer, XcapRenderer};
 use adapter_x11::{X11Config, X11Target};
 use deveye_ports::{
-    AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
-    LogSource, Renderer, WaitCondition, WindowGeometry, WindowLister, WindowManager,
+    AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, ElementInspector, InteractionSink,
+    JsEvaluator, LogSource, Renderer, WaitCondition, WindowGeometry, WindowLister, WindowManager,
 };
 
 use crate::cdp::{build_cdp_filter, try_initial_cdp, LazyCdp};
@@ -37,8 +37,8 @@ use crate::fallback::{
     FallbackDom, FallbackEvaluator, FallbackInteraction, FallbackRenderer, FallbackState,
 };
 use crate::stubs::{
-    EmptyWindowLister, UnsupportedClipboard, UnsupportedEvaluator, UnsupportedInspector,
-    UnsupportedWindowGeometry, UnsupportedWindowManager,
+    EmptyWindowLister, UnsupportedClipboard, UnsupportedElementInspector, UnsupportedEvaluator,
+    UnsupportedInspector, UnsupportedWindowGeometry, UnsupportedWindowManager,
 };
 
 /// Le quintet pilotant : yeux, mains, DOM, évaluateur JS, liste des fenêtres.
@@ -243,6 +243,40 @@ const JS_DEPENDENT_TOOLS: &[&str] = &[
     "collect_console_errors",
 ];
 
+/// Les cibles qui savent désigner des éléments (`snapshot` et `act`, expérimentaux,
+/// ADR-0073 et ADR-0074) : les natives par la route `ui.widgets`, les webviews à
+/// pompe SDK (`sdk`, `auto`) par le script du pont JS. `--target cdp` pur attend
+/// l'arbre d'accessibilité CDP.
+fn has_elements(target: TargetMode) -> bool {
+    matches!(
+        target,
+        TargetMode::X11 | TargetMode::KwinEis | TargetMode::Sdk | TargetMode::Auto
+    )
+}
+
+/// Marche à suivre sur `--target cdp`, où les références d'éléments ne sont pas
+/// encore câblées.
+const CDP_ELEMENTS_HINT: &str =
+    "les références d'éléments ne sont pas encore disponibles sur `--target cdp` (arbre \
+     d'accessibilité CDP à venir) ; `--target auto` ou `--target sdk` les servent par le pont JS \
+     du SDK, et `dom`, `find_element`, `click_selector` et `click_text` désignent par sélecteur \
+     ou par texte";
+
+/// Éléments par référence de la cible : widgets natifs par la route `ui.widgets`
+/// (x11, kwin-eis), DOM par le script du pont JS évalué par `evaluator` (sdk ; auto,
+/// où l'évaluateur est celui du repli : CDP puis pompe SDK), indisponibles sur cdp.
+fn build_elements(args: &Args, evaluator: Arc<dyn JsEvaluator>) -> Arc<dyn ElementInspector> {
+    match args.target {
+        TargetMode::X11 | TargetMode::KwinEis => {
+            let router: Arc<dyn CommandRouter> =
+                Arc::new(SdkCommandRouter::new(args.sdk_url.clone()));
+            Arc::new(RouteWidgetsElements::new(router, DEFAULT_DOM_ROUTE))
+        }
+        TargetMode::Sdk | TargetMode::Auto => Arc::new(BridgeElementInspector::new(evaluator)),
+        TargetMode::Cdp => Arc::new(UnsupportedElementInspector::new(CDP_ELEMENTS_HINT)),
+    }
+}
+
 /// Construit la description de la cible (outil `target_info`) selon le mode
 /// choisi et la session : capacités distinctives, version du serveur, notes sur
 /// les pièges et indisponibilités propres à chaque cible.
@@ -266,6 +300,7 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
         focus_window: kwin_focus,
         window_manager: wm_kwin.to_string(),
         clipboard,
+        elements: has_elements(target),
         js_dependent_tools: JS_DEPENDENT_TOOLS.iter().map(|t| t.to_string()).collect(),
         server: crate::version::server_version(),
         notes: String::new(),
@@ -315,7 +350,8 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
                     KDE/Wayland (ces champs sont faux ailleurs). list_windows enumere tout le \
                     workspace (aucun titre requis) ; window_geometry cible par titre (celui de \
                     l'appel ou, a défaut, --screencap-window) ; focus_window exige \
-                    --screencap-window au démarrage."
+                    --screencap-window au démarrage. snapshot/act (expérimentaux) désignent \
+                    les widgets de la route `ui.widgets` par des références `w:<id>`."
                     .to_string();
         }
         TargetMode::X11 => {
@@ -342,7 +378,9 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
                     temporaire. Molette : un cran par tranche de 120 px de dx/dy. Presse-papiers \
                     indisponible. Limites de capture : l'image est la racine du serveur X \
                     rognee a la fenêtre (une fenêtre recouvrante y apparait, la partie hors \
-                    écran est noire), sans mise a l'échelle HiDPI ni compositeur."
+                    écran est noire), sans mise a l'échelle HiDPI ni compositeur. \
+                    snapshot/act (expérimentaux) désignent les widgets de `ui.widgets` par \
+                    des références `w:<id>`, position remesurée à chaque action."
                     .to_string();
         }
     }
@@ -541,6 +579,8 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
         build_clipboard()
     };
 
+    let elements = build_elements(args, evaluator.clone());
+
     Ok(DeveyeMcpServer::new(DeveyePorts {
         renderer,
         interaction,
@@ -554,6 +594,7 @@ pub(crate) async fn build_mcp(args: &Args) -> anyhow::Result<DeveyeMcpServer> {
         window_manager,
         window_geometry,
         clipboard,
+        elements,
         target_info: build_target_info(args.target, HostCaps::detect(args)),
         effective_backend: fallback_state
             .map(|state| -> EffectiveBackendProbe { Arc::new(move || state.label().to_string()) }),
@@ -647,6 +688,40 @@ mod tests {
         assert!(!info.eval_js && !info.console_errors);
         assert!(info.eyes.contains("GetImage") && info.hands.contains("XTEST"));
         assert!(info.notes.contains("ui.widgets") && info.notes.contains("--display"));
+    }
+
+    /// `snapshot`/`act` : annoncés pour les cibles à arbre de widgets ou à pompe SDK, pas sur cdp.
+    #[test]
+    fn elements_are_announced_only_for_widget_targets() {
+        for (target, expected) in [
+            (TargetMode::X11, true),
+            (TargetMode::KwinEis, true),
+            (TargetMode::Auto, true),
+            (TargetMode::Cdp, false),
+            (TargetMode::Sdk, true),
+        ] {
+            let info = build_target_info(target, host(false, false));
+            assert_eq!(info.elements, expected, "{target:?}");
+            assert_eq!(has_elements(target), expected, "{target:?}");
+        }
+    }
+
+    /// Sur `--target cdp`, `snapshot` répond `unsupported` avec une marche à suivre.
+    #[tokio::test]
+    async fn cdp_target_answers_unsupported_with_a_hint() {
+        use clap::Parser as _;
+        use deveye_core::elements::SnapshotQuery;
+        let args = Args::try_parse_from(["deveye-server", "--target", "cdp"]).expect("args");
+        let evaluator: Arc<dyn JsEvaluator> = Arc::new(UnsupportedEvaluator);
+        match build_elements(&args, evaluator)
+            .snapshot(&SnapshotQuery::new())
+            .await
+        {
+            Err(deveye_ports::ElementError::Unsupported { hint }) => {
+                assert!(hint.contains("click_selector"), "{hint}")
+            }
+            other => panic!("attendu Unsupported : {:?}", other.map(|s| s.count())),
+        }
     }
 
     /// `has_js` pilote la console : les cibles natives n'ont pas de console JS.

@@ -1,6 +1,6 @@
 [package]
 name = "deveye-core"
-version = "1.1.0"
+version = "1.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license = "MIT"
@@ -29,3 +29,7 @@ schemars = { version = "1", optional = true }
 default = []
 # Dérive `schemars::JsonSchema` sur les types du module `ui`.
 schema = ["dep:schemars"]
+# Surface expérimentale (ADR-0069, ADR-0072) : éléments à références stables,
+# hors promesse semver. N'ajoute aucune dépendance et ne déplace aucun élément
+# existant : activer la feature ne fait qu'ajouter le module `elements`.
+unstable-elements = []

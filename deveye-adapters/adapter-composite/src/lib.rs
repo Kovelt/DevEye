@@ -26,8 +26,10 @@ use deveye_ports::{
     Renderer, WaitCondition,
 };
 
+mod elements;
 mod ui_mask;
 
+pub use elements::{RouteWidgetsElements, WIDGETS_TARGET_KIND};
 pub use ui_mask::mask_route_value;
 
 // ── ConsoleErrorSource ────────────────────────────────────────────────────────

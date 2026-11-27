@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use deveye_core::{InteractionCommand, MouseButton, Position};
+use deveye_core::{InteractionCommand, Modifier, MouseButton, Position};
 use deveye_ports::{InteractionSink, JsEvaluator, PortError, PortResult};
 
 use crate::client::CdpClient;
@@ -9,6 +9,20 @@ use crate::client::CdpClient;
 #[async_trait]
 impl InteractionSink for CdpClient {
     async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
+        // Invariants du domaine avant toute emission (les champs de variante
+        // sont publics : un litteral peut contourner les constructeurs).
+        command
+            .validate()
+            .map_err(|e| PortError::Interaction(e.to_string()))?;
+        // Le decorateur ne change que le masque `modifiers` des evenements de
+        // souris ; aucun keyDown/keyUp de modificateur n'est emis (limite
+        // documentee, ADR-0075).
+        let (mask, command) = match command {
+            InteractionCommand::WithModifiers { modifiers, command } => {
+                (modifiers_mask(&modifiers), *command)
+            }
+            other => (0, other),
+        };
         match command {
             InteractionCommand::Click { position, button } => {
                 let label = mouse_button_label(button).ok_or_else(|| {
@@ -20,13 +34,13 @@ impl InteractionSink for CdpClient {
                 // contextuels, etc.). On laisse 60 ms au framework pour
                 // re-render avant le press : ordre de grandeur suffisant pour
                 // Dioxus 0.7 sans gêner les usages humains.
-                mouse_event(self, "mouseMoved", position, label).await?;
+                mouse_event(self, "mouseMoved", position, label, mask).await?;
                 tokio::time::sleep(std::time::Duration::from_millis(60)).await;
-                mouse_event(self, "mousePressed", position, label).await?;
-                mouse_event(self, "mouseReleased", position, label).await?;
+                mouse_event(self, "mousePressed", position, label, mask).await?;
+                mouse_event(self, "mouseReleased", position, label, mask).await?;
             }
             InteractionCommand::Hover { position } => {
-                mouse_event(self, "mouseMoved", position, "left").await?;
+                mouse_event(self, "mouseMoved", position, "left", mask).await?;
             }
             InteractionCommand::Type { text } => {
                 // `Input.insertText` sur un élément non éditable ne fait rien et
@@ -116,6 +130,7 @@ impl InteractionSink for CdpClient {
                     "y": position.y,
                     "deltaX": dx,
                     "deltaY": dy,
+                    "modifiers": mask,
                 });
                 let _: Value = self
                     .call("Input.dispatchMouseEvent", payload)
@@ -125,12 +140,12 @@ impl InteractionSink for CdpClient {
             InteractionCommand::DoubleClick { position } => {
                 // mouseMoved + deux press/release ; le 2e a clickCount=2 (c'est
                 // ce qui declenche l'evenement `dblclick` cote page).
-                mouse_event(self, "mouseMoved", position, "left").await?;
+                mouse_event(self, "mouseMoved", position, "left", mask).await?;
                 tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                mouse_event_cc(self, "mousePressed", position, "left", 1).await?;
-                mouse_event_cc(self, "mouseReleased", position, "left", 1).await?;
-                mouse_event_cc(self, "mousePressed", position, "left", 2).await?;
-                mouse_event_cc(self, "mouseReleased", position, "left", 2).await?;
+                mouse_event_cc(self, "mousePressed", position, "left", 1, mask).await?;
+                mouse_event_cc(self, "mouseReleased", position, "left", 1, mask).await?;
+                mouse_event_cc(self, "mousePressed", position, "left", 2, mask).await?;
+                mouse_event_cc(self, "mouseReleased", position, "left", 2, mask).await?;
             }
             InteractionCommand::HandleDialog {
                 accept,
@@ -186,16 +201,25 @@ impl InteractionSink for CdpClient {
                 // intermédiaires (certains frameworks exigent ≥1 mousemove
                 // pendant le drag) -> release. Petits délais pour laisser le
                 // framework réagir entre chaque étape.
-                mouse_event(self, "mouseMoved", from, "left").await?;
+                mouse_event(self, "mouseMoved", from, "left", mask).await?;
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                mouse_event(self, "mousePressed", from, "left").await?;
+                mouse_event(self, "mousePressed", from, "left", mask).await?;
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                 let mid = Position::new((from.x + to.x) / 2, (from.y + to.y) / 2);
-                mouse_event(self, "mouseMoved", mid, "left").await?;
+                mouse_event(self, "mouseMoved", mid, "left", mask).await?;
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                mouse_event(self, "mouseMoved", to, "left").await?;
+                mouse_event(self, "mouseMoved", to, "left", mask).await?;
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                mouse_event(self, "mouseReleased", to, "left").await?;
+                mouse_event(self, "mouseReleased", to, "left", mask).await?;
+            }
+            // Un appui maintenu demande un keyDown, une attente, puis un keyUp :
+            // `Input.dispatchKeyEvent` ne reproduit pas fidelement un appui
+            // physique long (pas d'auto-repetition) ; refus net plutot qu'une
+            // approximation (ADR-0075).
+            InteractionCommand::KeyHold { .. } => {
+                return Err(PortError::Unsupported(
+                    "key_hold n'est pas disponible en CDP ; utiliser x11 ou kwin-eis".to_string(),
+                ))
             }
             InteractionCommand::Resize { width, height } => {
                 let (method, params) = resize_request(width, height)?;
@@ -219,8 +243,9 @@ async fn mouse_event(
     kind: &str,
     position: Position,
     button: &str,
+    modifiers: i64,
 ) -> PortResult<()> {
-    mouse_event_cc(client, kind, position, button, 1).await
+    mouse_event_cc(client, kind, position, button, 1, modifiers).await
 }
 
 /// Variante avec `clickCount` explicite (2 pour le second press/release d'un
@@ -231,6 +256,7 @@ async fn mouse_event_cc(
     position: Position,
     button: &str,
     click_count: u32,
+    modifiers: i64,
 ) -> PortResult<()> {
     let payload = json!({
         "type": kind,
@@ -238,6 +264,7 @@ async fn mouse_event_cc(
         "y": position.y,
         "button": button,
         "clickCount": click_count,
+        "modifiers": modifiers,
     });
     let _: Value = client
         .call("Input.dispatchMouseEvent", payload)
@@ -325,6 +352,24 @@ async fn key_event(client: &CdpClient, ty: &str, key: &str, modifiers: i64) -> P
     Ok(())
 }
 
+/// Bit CDP d'un modificateur (`Input.dispatchMouseEvent.modifiers`).
+fn modifier_bit(modifier: Modifier) -> i64 {
+    match modifier {
+        Modifier::Alt => 1,
+        Modifier::Ctrl => 2,
+        Modifier::Meta => 4,
+        Modifier::Shift => 8,
+        // `Modifier` est `#[non_exhaustive]` : un modificateur futur n'ajoute
+        // aucun bit tant que cet adapter ne le traduit pas.
+        _ => 0,
+    }
+}
+
+/// Masque CDP cumule d'une liste de modificateurs.
+fn modifiers_mask(modifiers: &[Modifier]) -> i64 {
+    modifiers.iter().fold(0, |acc, m| acc | modifier_bit(*m))
+}
+
 /// Resout un nom de modificateur (insensible a la casse) en `(bit CDP, nom de
 /// touche CDP)`. Bitmask CDP : Alt=1, Ctrl=2, Meta=4, Shift=8.
 fn cdp_modifier(name: &str) -> Option<(i64, &'static str)> {
@@ -403,5 +448,23 @@ mod tests {
         assert_eq!(cdp_modifier("super"), Some((4, "Meta")));
         assert_eq!(cdp_modifier("cmd"), Some((4, "Meta")));
         assert_eq!(cdp_modifier("hyper"), None);
+    }
+
+    #[test]
+    fn modifiers_mask_follows_the_cdp_bit_values() {
+        assert_eq!(modifiers_mask(&[]), 0);
+        assert_eq!(modifiers_mask(&[Modifier::Shift]), 8);
+        assert_eq!(modifiers_mask(&[Modifier::Alt, Modifier::Ctrl]), 3);
+        assert_eq!(
+            modifiers_mask(&[
+                Modifier::Alt,
+                Modifier::Ctrl,
+                Modifier::Meta,
+                Modifier::Shift
+            ]),
+            15
+        );
+        // Doublon : le masque ne change pas.
+        assert_eq!(modifiers_mask(&[Modifier::Ctrl, Modifier::Ctrl]), 2);
     }
 }

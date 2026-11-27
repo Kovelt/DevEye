@@ -1,6 +1,6 @@
 [package]
 name = "adapter-x11"
-version = "1.1.0"
+version = "1.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,8 +14,8 @@ publish = false  # interne, non publié
 workspace = true
 
 [dependencies]
-deveye-core = { path = "../../deveye-core", version = "1.1.0" }
-deveye-ports = { path = "../../deveye-ports", version = "1.1.0" }
+deveye-core = { path = "../../deveye-core", version = "1.2.0" }
+deveye-ports = { path = "../../deveye-ports", version = "1.2.0" }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "time"] }
