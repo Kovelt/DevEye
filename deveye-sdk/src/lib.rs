@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{DefaultBodyLimit, Request, State},
-    http::{header, HeaderName, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -120,11 +120,13 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        // Entier décimal de 1 à 65535, sans espace : tout le reste (vide, texte,
-        // hors plage, 0 qui demanderait un port éphémère imprévisible) retombe
-        // sur le port par défaut (cf. `docs/wire-protocol.md` §1).
+        // Entier décimal de 1 à 65535, chiffres seuls (ni espace ni signe : `u16`
+        // accepterait `+4242`) : tout le reste (vide, texte, hors plage, 0 qui
+        // demanderait un port éphémère imprévisible) retombe sur le port par
+        // défaut (cf. `docs/wire-protocol.md` §1).
         let port = std::env::var("DEVEYE_PORT")
             .ok()
+            .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
             .and_then(|s| s.parse::<u16>().ok())
             .filter(|port| *port != 0)
             .unwrap_or(DEFAULT_PORT);
@@ -232,7 +234,6 @@ pub(crate) static REGISTRY: std::sync::LazyLock<Arc<Registry>> =
 /// disponible) : sans runtime le SDK ne peut rien faire, et le code n'existe
 /// qu'en build de développement. Un panic explicite y est préférable à un SDK
 /// muet.
-#[allow(clippy::expect_used)]
 pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
     static RT: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
         tokio::runtime::Builder::new_multi_thread()
@@ -313,7 +314,7 @@ pub fn init(config: Config) {
             if let Some(listener) = bind_or_report(addr).await {
                 if let Err(e) = axum::serve(listener, app).await {
                     tracing::error!(
-                        "deveye-sdk: le serveur HTTP s'est arrete avec une erreur: {e}"
+                        "deveye-sdk: le serveur HTTP s'est arrêté avec une erreur: {e}"
                     );
                 }
             }
@@ -379,7 +380,27 @@ async fn state_handler(State(registry): State<Arc<Registry>>) -> impl IntoRespon
     (StatusCode::OK, Json(StatePayload { entries }))
 }
 
-async fn logs_poll_handler(State(registry): State<Arc<Registry>>) -> impl IntoResponse {
+/// Vrai si la requête provient d'un contexte web inter-origine. Un `fetch`
+/// `no-cors` vers le loopback ne porte pas `Origin` en GET mais porte
+/// `Sec-Fetch-Site` ; seul `none` (saisie directe de l'URL) est toléré. Les
+/// clients non navigateur (adapters, curl) n'envoient aucun des deux.
+fn is_cross_site_request(headers: &HeaderMap) -> bool {
+    headers.contains_key(header::ORIGIN)
+        || headers
+            .get("sec-fetch-site")
+            .is_some_and(|value| value.as_bytes() != b"none")
+}
+
+async fn logs_poll_handler(State(registry): State<Arc<Registry>>, headers: HeaderMap) -> Response {
+    // Ce GET a un effet de bord (il vide le tampon) : une page tierce ne doit
+    // pas pouvoir le déclencher, même sans pouvoir lire la réponse.
+    if is_cross_site_request(&headers) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "requête inter-origine refusée" })),
+        )
+            .into_response();
+    }
     let mut guard = registry.logs.lock().await;
     let mut events: Vec<_> = guard.drain(..).collect();
     drop(guard);
@@ -391,7 +412,7 @@ async fn logs_poll_handler(State(registry): State<Arc<Registry>>) -> impl IntoRe
     for event in &mut events {
         redact::redact(&mut event.fields, &extra);
     }
-    (StatusCode::OK, Json(LogsPayload { events }))
+    (StatusCode::OK, Json(LogsPayload { events })).into_response()
 }
 
 /// Côté app : prend le bout consommateur du canal d'évaluation. La pompe de
@@ -703,6 +724,7 @@ mod tests {
             ("abc", DEFAULT_PORT),
             ("", DEFAULT_PORT),
             (" 4242", DEFAULT_PORT),
+            ("+4242", DEFAULT_PORT),
         ] {
             std::env::set_var("DEVEYE_PORT", value);
             assert_eq!(Config::default().port, expected, "DEVEYE_PORT={value:?}");

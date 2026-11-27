@@ -23,7 +23,7 @@ La spec est **agnostique du langage** : n'importe quelle techno capable de servi
 | Protocole | HTTP/1.1 (pas de TLS, pas de HTTP/2 requis) |
 | Adresse de bind | `127.0.0.1` exclusivement — jamais `0.0.0.0` ni `::` |
 | Port par défaut | `31337` |
-| Variable de surcharge | `DEVEYE_PORT` : entier décimal de 1 à 65535, sans espace ni signe |
+| Variable de surcharge | `DEVEYE_PORT` : entier décimal de 1 à 65535, chiffres décimaux seuls (ni espace ni signe, `+4242` est ignoré) |
 | Base URL côté client | `http://127.0.0.1:<port>` |
 
 Le choix du port `31337` est arbitraire et mnémonique. Il est surchargeable sans recompilation via `DEVEYE_PORT`, ce qui est indispensable quand plusieurs apps tournent simultanément en dev.
@@ -202,7 +202,7 @@ Pour les erreurs de décodage, l'implémentation de référence répond `400` (J
 
 **Objectif** : obtenir un snapshot instantané du state applicatif publié par l'app cible.
 
-**Requête** : aucun corps, aucun paramètre de query.
+**Requête** : aucun corps, aucun paramètre de query. Le poll étant destructif, un SDK refuse (`403`) la requête qui porte un en-tête `Origin` ou un `Sec-Fetch-Site` différent de `none` : un navigateur, y compris en `no-cors`, ne doit pas pouvoir vider le buffer ([ADR-0055](adr/0055-refus-des-requetes-inter-origine-sur-le-drain-des-logs.md)). Les clients non navigateur n'envoient aucun de ces en-têtes.
 
 **Réponse 200** :
 

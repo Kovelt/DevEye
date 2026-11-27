@@ -270,7 +270,7 @@ async fn wire_protocol_contract_end_to_end() {
         iban = "log-secret-iban",
         tokens = "log-secret-toks",
         user = "alice",
-        "ping depuis le test d'integration"
+        "ping depuis le test d'intégration"
     );
     tokio::time::sleep(Duration::from_millis(120)).await;
     let resp = http
@@ -296,8 +296,8 @@ async fn wire_protocol_contract_end_to_end() {
     let events = body["events"].as_array().cloned().unwrap_or_default();
     let ours = events
         .iter()
-        .find(|e| e["message"] == "ping depuis le test d'integration")
-        .expect("le log du test doit etre draine");
+        .find(|e| e["message"] == "ping depuis le test d'intégration")
+        .expect("le log du test doit être draine");
     assert_eq!(
         ours["fields"]["password"],
         serde_json::json!(deveye_sdk::REDACTED)

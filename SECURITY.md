@@ -24,7 +24,7 @@ Versions suivies : la dernière version 1.x publiée reçoit les correctifs de s
 |---|---|---|
 | Un binaire de production qui embarque le SDK par erreur | un build release avec la feature activée | `init` est un no-op en release ; preuve sur binaire |
 | Le réseau | un autre hôte du réseau local | écoute sur `127.0.0.1` uniquement |
-| Une page web hostile dans le navigateur du développeur | rebond DNS, requête inter-origine vers `localhost:31337` | garde `Host`, CORS refusé |
+| Une page web hostile dans le navigateur du développeur | rebond DNS, requête inter-origine vers `localhost:31337` | garde `Host`, CORS refusé, drain des logs refusé aux requêtes inter-origine |
 | Une app qui se trompe de cible | pilotage de la session graphique vivante par XTEST | garde d'isolation de la cible `x11`, sans contournement |
 | Un client qui sature l'app | file d'évaluation, corps énormes | file bornée (32), corps bornés à 1 Mio, tampon de logs borné |
 
