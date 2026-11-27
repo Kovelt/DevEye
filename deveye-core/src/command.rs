@@ -97,6 +97,7 @@ pub enum InteractionCommand {
     /// dans un seul appel (jamais de touche collante entre deux appels).
     /// `duration_ms` ne dépasse pas [`MAX_KEY_HOLD_MS`].
     KeyHold {
+        #[serde(deserialize_with = "deserialize_hold_key")]
         key: String,
         #[serde(deserialize_with = "deserialize_hold_duration")]
         duration_ms: u32,
@@ -109,7 +110,7 @@ pub enum InteractionCommand {
 pub enum InvalidCommand {
     /// `WithModifiers` n'enveloppe que les gestes de pointeur.
     #[error(
-        "WithModifiers n'enveloppe que click, double-click, hover, drag-drop et scroll,          pas « {0} »"
+        "WithModifiers n'enveloppe que click, double-click, hover, drag-drop et scroll, pas « {0} »"
     )]
     NotModifiable(&'static str),
     /// `KeyHold` au-delà du plafond.
@@ -120,15 +121,68 @@ pub enum InvalidCommand {
     EmptyKey,
 }
 
+/// Les cinq gestes qu'un `WithModifiers` peut envelopper, et rien d'autre : la
+/// désérialisation du geste interne ne récurse donc jamais, quelle que soit la
+/// profondeur du JSON hostile (y compris via `from_value`, sans limite propre).
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum PointerGesture {
+    Click {
+        position: Position,
+        #[serde(default)]
+        button: MouseButton,
+    },
+    Hover {
+        position: Position,
+    },
+    DoubleClick {
+        position: Position,
+    },
+    DragDrop {
+        from: Position,
+        to: Position,
+    },
+    Scroll {
+        position: Position,
+        dx: i32,
+        dy: i32,
+    },
+    #[serde(other)]
+    Other,
+}
+
 fn deserialize_gesture<'de, D>(deserializer: D) -> Result<Box<InteractionCommand>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let command = Box::<InteractionCommand>::deserialize(deserializer)?;
-    command
-        .check_modifiable()
-        .map_err(serde::de::Error::custom)?;
-    Ok(command)
+    let command = match PointerGesture::deserialize(deserializer)? {
+        PointerGesture::Click { position, button } => {
+            InteractionCommand::Click { position, button }
+        }
+        PointerGesture::Hover { position } => InteractionCommand::Hover { position },
+        PointerGesture::DoubleClick { position } => InteractionCommand::DoubleClick { position },
+        PointerGesture::DragDrop { from, to } => InteractionCommand::DragDrop { from, to },
+        PointerGesture::Scroll { position, dx, dy } => {
+            InteractionCommand::Scroll { position, dx, dy }
+        }
+        PointerGesture::Other => {
+            return Err(serde::de::Error::custom(InvalidCommand::NotModifiable(
+                "autre commande",
+            )))
+        }
+    };
+    Ok(Box::new(command))
+}
+
+fn deserialize_hold_key<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let key = String::deserialize(deserializer)?;
+    if key.trim().is_empty() {
+        return Err(serde::de::Error::custom(InvalidCommand::EmptyKey));
+    }
+    Ok(key)
 }
 
 fn deserialize_hold_duration<'de, D>(deserializer: D) -> Result<u32, D::Error>
@@ -540,6 +594,9 @@ mod tests {
             "command": { "kind": "click", "position": { "x": 1, "y": 2 } }
         });
         assert!(serde_json::from_value::<InteractionCommand>(unknown).is_err());
+        // KeyHold sans nom de touche.
+        let empty = json!({ "kind": "key-hold", "key": " ", "duration_ms": 10 });
+        assert!(serde_json::from_value::<InteractionCommand>(empty).is_err());
         // KeyHold au-delà du plafond.
         let long = json!({ "kind": "key-hold", "key": "a", "duration_ms": MAX_KEY_HOLD_MS + 1 });
         assert!(serde_json::from_value::<InteractionCommand>(long).is_err());
