@@ -45,6 +45,7 @@ Sous KDE Plasma Wayland, ajouter au besoin `"--screencap-backend", "kwin"` et po
 | `click*`, `hover`, `drag_drop`, `type_text`, `press_key`, `key_combo`, `scroll`, paramètre `modifiers` (événements JS synthétiques, `isTrusted` faux ; `key_hold` indisponible) | tout ce qui exige de **vrais** événements système (menus natifs, dialogues du système) |
 | `eval_js`, `dom` (`outerHTML`), `find_element`, `wait_for_*`, `collect_console_errors` | `list_windows` (liste vide : pas de vue inter-fenêtres) |
 | `state`, `logs_*`, `invoke_command`, `navigate` | |
+| `snapshot` et `act` (expérimentaux) : références `e<n>` posées par le pont JS, [usage](../usage.md#désigner-un-élément-par-référence-expérimental) | références stables d'un rechargement à l'autre : une référence périmée répond `stale_ref` |
 
 ## 5. Garde-fous
 
