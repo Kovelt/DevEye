@@ -81,3 +81,4 @@ Option retenue, en une phrase.
 | [0015](0015-retrait-du-script-de-synchronisation-des-copies.md) | Retrait du script de synchronisation des copies vendored | Accepté |
 | [0016](0016-masquage-des-secrets-par-cles-dans-le-sdk.md) | Masquage des secrets par clés dans le SDK | Accepté |
 | [0017](0017-protocole-1-0-version-info-et-limites.md) | Protocole 1.0 : version, compatibilité côté client, `/devtools/info` et limites de taille | Accepté |
+| [0018](0018-portage-selectif-de-l-ancienne-lignee-github.md) | Portage sélectif de l'ancienne lignée GitHub | Accepté |
