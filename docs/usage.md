@@ -225,7 +225,7 @@ Codes de sortie : 0 conforme, 1 écarts, 2 la suite n'a pas pu s'exécuter. Le b
 | `window_geometry` | KDE | KDE | KDE | oui |
 | `focus_window` | KDE, avec `--screencap-window` | KDE, avec `--screencap-window` | KDE, avec `--screencap-window` | oui |
 | `clipboard_get`, `clipboard_set` | Wayland | Wayland | Wayland | non |
-| `snapshot`, `act` (expérimentaux), section `elements` d'`observe` | non (à venir) | non (à venir) | SDK, route `ui.widgets` | SDK, route `ui.widgets` |
+| `snapshot`, `act` (expérimentaux), section `elements` d'`observe` | non (à venir) | oui, pont JS (`auto` : CDP puis pompe SDK) | SDK, route `ui.widgets` | SDK, route `ui.widgets` |
 
 `target_info` rend ces mêmes capacités en booléens, calculés au démarrage d'après la session réelle.
 
@@ -403,7 +403,7 @@ Géométrie écran `{ x, y, width, height }` d'une fenêtre : `title` (sous-cha�
 
 #### `target_info`
 
-Décrit la cible : `{ target, effective_backend, eyes, hands, eval_js, dom, state, console_errors, list_windows, window_geometry, focus_window, window_manager, clipboard, elements?, js_dependent_tools, server: { version, commit, sdk_protocol, mcp_protocol }, notes }`. `elements` (expérimental) n'est présent que s'il est vrai : `snapshot` et `act` peuvent désigner des éléments sur cette cible (`x11`, `kwin-eis`) ; absent, ils répondent `unsupported`. `effective_backend` dit si le repli de `auto` est actif ; `js_dependent_tools` liste les outils qui répondent `unsupported` quand `eval_js` est faux ; `notes` rappelle les pièges de la cible.
+Décrit la cible : `{ target, effective_backend, eyes, hands, eval_js, dom, state, console_errors, list_windows, window_geometry, focus_window, window_manager, clipboard, elements?, js_dependent_tools, server: { version, commit, sdk_protocol, mcp_protocol }, notes }`. `elements` (expérimental) n'est présent que s'il est vrai : `snapshot` et `act` peuvent désigner des éléments sur cette cible (`x11`, `kwin-eis`, `sdk`, `auto`) ; absent, ils répondent `unsupported`. `effective_backend` dit si le repli de `auto` est actif ; `js_dependent_tools` liste les outils qui répondent `unsupported` quand `eval_js` est faux ; `notes` rappelle les pièges de la cible.
 
 ### Logs
 
@@ -479,13 +479,13 @@ Observe l'app en **un appel** (remplace quatre ou cinq). Paramètres (tous optio
 
 Un agent désigne d'ordinaire un élément par sélecteur CSS, par texte ou par coordonnées. `snapshot` rend un arbre compact d'éléments, chacun avec une **référence** ; `act` agit dessus. Sur une cible sans DOM (egui, GTK, Godot, Uno), c'est la seule désignation qui ne passe pas par des pixels.
 
-- **Références** : `w:<id>` pour les widgets natifs (cibles `x11` et `kwin-eis`) : l'`id` que l'app donne à son widget dans l'arbre `deveye.ui/1` de la route `ui.widgets`. Il est stable d'un instantané à l'autre ; il l'est **d'une relance à l'autre seulement si l'app fournit des identifiants déterministes**. Un identifiant dupliqué ou synthétisé (format legacy sans `id`) est signalé `[ephemeral]` par `snapshot` et par `deveye-server doctor`. Les références `e<n>` des cibles à DOM (webview) arrivent avec le pont WebKitGTK ; d'ici là ces cibles répondent `unsupported`.
+- **Références** : `w:<id>` pour les widgets natifs (cibles `x11` et `kwin-eis`) : l'`id` que l'app donne à son widget dans l'arbre `deveye.ui/1` de la route `ui.widgets`. Il est stable d'un instantané à l'autre ; il l'est **d'une relance à l'autre seulement si l'app fournit des identifiants déterministes**. Un identifiant dupliqué ou synthétisé (format legacy sans `id`) est signalé `[ephemeral]` par `snapshot` et par `deveye-server doctor`. Les pages web (cibles `sdk` et `auto`) portent des références `e<n>`, calculées par un script JavaScript que le serveur évalue par la pompe `document::eval` du SDK (ou par CDP en `auto` tant qu'il répond) : le **chemin réel sous Linux**, où le webview WebKitGTK n'a pas de CDP. Une référence `e<n>` reste la même d'un instantané à l'autre tant que le nœud vit (même après un déplacement dans le DOM), n'est **jamais réutilisée** et devient périmée au rechargement de la page. Le script est plus fruste que l'arbre d'accessibilité d'un navigateur : rôle implicite par une table minimale (`button`, `link`, `textbox`, `checkbox`, `heading`, `list`…, plus `clickable` pour une zone au curseur « main » ou au `tabindex`), nom accessible simplifié (`aria-labelledby`, `aria-label`, `<label>`, `alt`, contenu, `title`, `placeholder`), shadow DOM ouvert traversé, **iframes non parcourues**, jamais la valeur d'un champ `password` ni d'un champ d'autocomplétion `current-password` ou `new-password`. Les clics passent par `click` (événements JS synthétiques, `isTrusted` faux) ; `--target cdp` pur répond encore `unsupported` (l'arbre d'accessibilité CDP viendra après).
 - **Pas de relocalisation silencieuse** : `act` relit l'arbre au moment de l'action et **remesure** l'élément ; le rect d'un ancien instantané ne sert à rien. Un `id` qui a disparu ne se rabat pas sur un voisin : l'erreur propose des `candidates` (même rôle, même nom) et laisse choisir.
 - **Aucun secret** : la valeur d'un champ secret (`password`, `state.secret`) n'est jamais dans un instantané.
 
 #### `snapshot`
 
-Décrit les éléments de la cible. Paramètres (tous optionnels) : `scope` (référence d'un sous-arbre ; sur les widgets, une référence `w:<id>`, pas un sélecteur), `max_depth`, `max_nodes` (défaut 400, plafond 2000), `interactive_only` (défaut `true` : éléments interactifs et conteneurs utiles, les conteneurs anonymes sont aplatis), `viewport_only` (défaut `false`), `format` (`text` par défaut, ou `json`).
+Décrit les éléments de la cible. Paramètres (tous optionnels) : `scope` (référence d'un sous-arbre ; sur les widgets, une référence `w:<id>`, pas un sélecteur ; sur une page web, une référence `e<n>` ou un sélecteur CSS), `max_depth`, `max_nodes` (défaut 400, plafond 2000), `interactive_only` (défaut `true` : éléments interactifs et conteneurs utiles, les conteneurs anonymes sont aplatis), `viewport_only` (défaut `false`), `format` (`text` par défaut, ou `json`).
 
 Le **texte** est un arbre indenté, une ligne par élément, orienté jetons :
 
@@ -500,7 +500,7 @@ focus: w:name
 
 Marqueurs : `[disabled]`, `[checked]` ou `[unchecked]`, `[expanded]` ou `[collapsed]`, `[selected]`, `[focused]`, `[offscreen]`, `[scrollable]`, `[ephemeral]`, puis ` = "valeur"` (tronquée à 80 caractères). `focus:` désigne l'élément qui a le focus clavier. L'en-tête dit `TRONQUÉ` quand `max_nodes` ou `max_depth` a coupé l'arbre : cibler un `scope`. Avec `format: "json"`, la réponse porte le même contenu avec les rects et `generation` (texte et `structuredContent` égaux) ; les rects sont **indicatifs**. Sans arbre d'éléments sur la cible : `isError` `{ ok: false, reason: "unsupported", hint }` ; le `hint` dit quoi faire (exposer `ui.widgets` avec `deveye_sdk::ui::publish`, ou `screenshot` puis `click` aux coordonnées).
 
-**Taille mesurée** (test de bout en bout sous Xvfb, route `ui.widgets` factice) : 4 widgets, 200 octets de texte contre 416 de `dom` ; environ 55 widgets (liste de 50 lignes), 2 531 octets contre 6 377 pour `dom` (39 %). Mesure consignée, sans seuil : `format: "json"` coûte environ le double du texte.
+**Taille mesurée** (test de bout en bout sous Xvfb, route `ui.widgets` factice) : 4 widgets, 200 octets de texte contre 416 de `dom` ; environ 55 widgets (liste de 50 lignes), 2 531 octets contre 6 377 pour `dom` (39 %). Mesure consignée, sans seuil : `format: "json"` coûte environ le double du texte. **Pont JS** (test dans Chromium headless, page de 56 éléments dont une liste de 40 lignes au balisage verbeux) : environ 1,6 Ko de texte compact, 5,3 Ko en JSON, contre 18,8 Ko de DOM brut (`outerHTML`), soit 9 % et 28 %.
 
 #### `act`
 
@@ -511,11 +511,11 @@ Agit sur l'élément `ref`. `action` : `click` (`button` optionnel), `double_cli
 | `reason` | Cas |
 |---|---|
 | `stale_ref` | l'élément a disparu depuis l'instantané ; `hint` : relancer `snapshot` ; `candidates` : éléments de même rôle et de même nom |
-| `unknown_ref` | référence jamais émise, ou forme inconnue (`e<n>` sur une cible à widgets) |
+| `unknown_ref` | référence jamais émise, ou forme inconnue (`e<n>` sur une cible à widgets, `w:<id>` sur une page web) |
 | `ambiguous_ref` | plusieurs widgets portent le même `id` : agir serait un pari ; corriger l'app (`doctor` le signale) |
-| `offscreen` | élément hors de la zone visible, sans surface, ou centre remesuré hors viewport |
+| `offscreen` | élément hors de la zone visible, sans surface, ou centre remesuré hors viewport (sur une page web, `act` amène d'abord l'élément au centre par `scrollIntoView`) |
 | `disabled` | élément désactivé (un `hover` ou un `scroll` reste permis) |
-| `obscured` | un autre élément recouvre le centre (`by` : sa référence). Pas encore produit pour les widgets natifs, dont l'arbre ne dit pas qui est dessiné au-dessus |
+| `obscured` | un autre élément recouvre le centre (`by` : sa référence). Produit sur les pages web (`elementFromPoint` au centre remesuré) ; pas pour les widgets natifs, dont l'arbre ne dit pas qui est dessiné au-dessus |
 | `unsupported` | la cible n'a pas d'arbre d'éléments (`hint`) |
 
 ---

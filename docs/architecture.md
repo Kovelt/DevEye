@@ -144,9 +144,10 @@ Les outils MCP expérimentaux `snapshot` et `act` (`adapter-mcp-server`, `tools_
 | Famille | Cibles | Inspecteur | Références | Fraîcheur |
 |---|---|---|---|---|
 | Widgets natifs | `x11`, `kwin-eis` | `RouteWidgetsElements` (`adapter-composite`) sur la route `ui.widgets` | `w:<id>` (id fourni par l'app) | sans cache : chaque `snapshot` et chaque `act` relisent la route ; mémoire des seuls identifiants déjà vus, pour distinguer périmé et inconnu et proposer des candidats |
-| Webview (pont WebKitGTK, CDP) | `sdk`, `cdp`, `auto` | pas encore câblé : `unsupported` avec une marche à suivre | `e<n>` (`RefTable`) | à venir dans la 1.2 |
+| Webview sans CDP (pont WebKitGTK) | `sdk`, `auto` | `BridgeElementInspector` (`adapter-dioxus-signals`) : script JS synchrone évalué par un `JsEvaluator` (pompe SDK ; en `auto`, l'évaluateur de repli, CDP puis pompe) | `e<n>` (`RefTable`, clé `<epoch>:<n>` du script ; [ADR-0074](adr/0074-pont-js-d-elements-pour-webkitgtk.md)) | `WeakMap` élément vers numéro et `Map` numéro vers `WeakRef` dans la page ; epoch nouvelle à chaque chargement, donc génération suivante côté serveur |
+| Webview CDP | `cdp` | pas encore câblé : `unsupported` avec une marche à suivre | `e<n>` | arbre d'accessibilité CDP, après le pont |
 
-`FallbackElementInspector` (`deveye-server`) suit le patron des autres replis : il ne bascule que sur une panne de **liaison** (`PortError::Network`), jamais sur une référence périmée, inconnue ou ambiguë (ce serait un rebind silencieux) ; il sera câblé avec le pont.
+`FallbackElementInspector` (`deveye-server`) suit le patron des autres replis : il ne bascule que sur une panne de **liaison** (`PortError::Network`), jamais sur une référence périmée, inconnue ou ambiguë (ce serait un rebind silencieux) ; il est réservé à l'arbre d'accessibilité CDP, qui deviendra le primaire du pont. En attendant, `auto` compose le pont sur l'évaluateur de repli : un changement de backend change de page côté script, donc d'epoch, donc de génération.
 
 ## Les 12 ports en détail
 

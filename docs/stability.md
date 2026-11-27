@@ -107,7 +107,7 @@ Outils MCP expérimentaux actuels (hors des 44 outils stables ; description pré
 
 | Outil | Contenu |
 |---|---|
-| `snapshot` | arbre compact d'éléments avec références (`w:<id>` pour les widgets natifs) ; la section `elements` d'`observe` (sur demande) et le champ `elements` de `target_info` (absent s'il est faux) en dépendent ([ADR-0073](adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)) |
+| `snapshot` | arbre compact d'éléments avec références (`w:<id>` pour les widgets natifs, `e<n>` pour les pages web par le pont JS) ; la section `elements` d'`observe` (sur demande) et le champ `elements` de `target_info` (absent s'il est faux) en dépendent ([ADR-0073](adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)) |
 | `act` | action sur une référence, position remesurée au moment de l'action |
 
 Décision : [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md).
