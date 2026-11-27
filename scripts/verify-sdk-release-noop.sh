@@ -18,6 +18,7 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-12}"
 FORBIDDEN=(
   "/devtools/"
   "x-deveye-protocol"
+  "ui.widgets"
 )
 
 contains() { # contains <binaire> <fragment>

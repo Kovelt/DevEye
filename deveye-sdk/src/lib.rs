@@ -50,6 +50,7 @@ use deveye_core::CommandDescriptor;
 
 mod redact;
 mod tracing_layer;
+pub mod ui;
 
 pub use tracing_layer::install_tracing_layer;
 
@@ -205,6 +206,8 @@ pub(crate) struct Registry {
     /// Clés sensibles propres à l'app (normalisées), posées par [`init`] ;
     /// s'ajoutent aux clés par défaut au moment de servir state et logs.
     pub(crate) secret_keys: std::sync::RwLock<HashSet<String>>,
+    /// Arbre de widgets publié par [`ui::publish`] (ADR-0065).
+    pub(crate) ui: ui::UiSlot,
 }
 
 impl Default for Registry {
@@ -216,6 +219,7 @@ impl Default for Registry {
             log_tx: std::sync::OnceLock::new(),
             routes: std::sync::RwLock::new(HashMap::new()),
             secret_keys: std::sync::RwLock::new(HashSet::new()),
+            ui: Default::default(),
         }
     }
 }
@@ -605,6 +609,10 @@ async fn info_handler(State(registry): State<Arc<Registry>>) -> impl IntoRespons
     }
     if registry.eval_tx.read().await.is_some() {
         capabilities.push("eval");
+    }
+    #[cfg(debug_assertions)]
+    if registry.ui.is_enabled() {
+        capabilities.push(ui::CAPABILITY);
     }
     (
         StatusCode::OK,

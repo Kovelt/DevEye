@@ -8,5 +8,10 @@ fn main() {
     deveye_sdk::init(deveye_sdk::Config::with_port(31598));
     deveye_sdk::install_tracing_layer();
     deveye_sdk::set_state("probe", serde_json::json!({ "ok": true }));
+    // Helper ui : doit disparaître avec le reste en release (route `ui.widgets`).
+    deveye_sdk::ui::publish(deveye_sdk::ui::builder(10, 10).build());
+    if deveye_sdk::ui::is_observed() {
+        println!("observé");
+    }
     println!("sonde terminée");
 }
