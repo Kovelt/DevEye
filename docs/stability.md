@@ -103,6 +103,13 @@ Surface expérimentale actuelle :
 |---|---|---|
 | `unstable-elements` | `deveye-core`, `deveye-ports` | éléments désignables par référence stable : module `elements` (`ElementNode`, `ElementSnapshot`, `RefTable`, `SnapshotQuery`, `ElementLocation`) et port `ElementInspector` avec son erreur `ElementError` ; la feature n'ajoute aucun élément à la surface stable et `cargo-semver-checks` passe avec et sans elle ([ADR-0072](adr/0072-references-d-elements-stables-et-outils-snapshot-act.md)) |
 
+Outils MCP expérimentaux actuels (hors des 44 outils stables ; description préfixée « [expérimental] » ; noms, paramètres et formes de réponse susceptibles de changer dans une version mineure ; graduation évaluée à la 1.5) :
+
+| Outil | Contenu |
+|---|---|
+| `snapshot` | arbre compact d'éléments avec références (`w:<id>` pour les widgets natifs) ; la section `elements` d'`observe` (sur demande) et le champ `elements` de `target_info` (absent s'il est faux) en dépendent ([ADR-0073](adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)) |
+| `act` | action sur une référence, position remesurée au moment de l'action |
+
 Décision : [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md).
 
 ## Ce que la 1.0 ne promet pas

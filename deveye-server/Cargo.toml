@@ -19,8 +19,9 @@ name = "deveye-server"
 path = "src/main.rs"
 
 [dependencies]
-deveye-core = { path = "../deveye-core", version = "1.1.0" }
-deveye-ports = { path = "../deveye-ports", version = "1.1.0" }
+# `unstable-elements` : éléments par référence (`snapshot`, `act`), expérimental (ADR-0069, ADR-0073).
+deveye-core = { path = "../deveye-core", version = "1.1.0", features = ["unstable-elements"] }
+deveye-ports = { path = "../deveye-ports", version = "1.1.0", features = ["unstable-elements"] }
 deveye-sdk-client = { path = "../deveye-sdk-client", version = "1.1.0" }
 adapter-cdp-webview = { path = "../deveye-adapters/adapter-cdp-webview", version = "1.1.0" }
 adapter-screencap-xcap = { path = "../deveye-adapters/adapter-screencap-xcap", version = "1.1.0" }

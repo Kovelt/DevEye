@@ -5,10 +5,11 @@
 
 use async_trait::async_trait;
 
+use deveye_core::elements::{ElementLocation, ElementSnapshot, SnapshotQuery};
 use deveye_core::{DomTree, StateDump, WindowInfo, WindowRect};
 use deveye_ports::{
-    AppInspector, Clipboard, JsEvaluator, PortError, PortResult, WindowGeometry, WindowLister,
-    WindowManager,
+    AppInspector, Clipboard, ElementError, ElementInspector, ElementResult, JsEvaluator, PortError,
+    PortResult, WindowGeometry, WindowLister, WindowManager,
 };
 
 /// `WindowLister` du pont natif (cible `sdk`) : aucune visibilite
@@ -96,5 +97,35 @@ impl Clipboard for UnsupportedClipboard {
         Err(PortError::Unsupported(
             "presse-papiers indisponible sur cette cible (session Wayland requise)".to_string(),
         ))
+    }
+}
+
+/// Éléments par référence indisponibles sur cette cible : `hint` dit quoi faire à la
+/// place. Sert les cibles à webview tant qu'aucun inspecteur d'éléments ne leur est
+/// câblé (ADR-0073).
+pub(crate) struct UnsupportedElementInspector {
+    hint: String,
+}
+
+impl UnsupportedElementInspector {
+    pub(crate) fn new(hint: impl Into<String>) -> Self {
+        Self { hint: hint.into() }
+    }
+
+    fn error(&self) -> ElementError {
+        ElementError::Unsupported {
+            hint: self.hint.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl ElementInspector for UnsupportedElementInspector {
+    async fn snapshot(&self, _query: &SnapshotQuery) -> ElementResult<ElementSnapshot> {
+        Err(self.error())
+    }
+
+    async fn locate(&self, _reference: &str) -> ElementResult<ElementLocation> {
+        Err(self.error())
     }
 }

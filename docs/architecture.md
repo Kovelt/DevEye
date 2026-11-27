@@ -137,7 +137,16 @@ Les quatre crates MIT sont ceux qu'une app embarque ou qu'un tiers réutilise ; 
 
 ## Port expérimental : `ElementInspector`
 
-Derrière la feature `unstable-elements` de `deveye-ports` et `deveye-core` (hors promesse semver, [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md)), un 13ᵉ port désigne les éléments d'une cible par une référence stable : `snapshot(&SnapshotQuery)` rend un arbre compact (`ElementSnapshot`), `locate(&str)` remesure un élément au moment de l'action. Les références sont `e<n>` (DOM, attribuées par la `RefTable` pure du domaine, jamais réutilisées) ou `w:<id>` (widgets natifs, identifiant fourni par l'app). Son erreur `ElementError` (référence périmée avec candidats, inconnue, couverte, non prise en charge) est distincte de `PortError`. Les adapters et les outils MCP `snapshot` et `act` suivent dans la 1.2. Décision : [ADR-0072](adr/0072-references-d-elements-stables-et-outils-snapshot-act.md).
+Derrière la feature `unstable-elements` de `deveye-ports` et `deveye-core` (hors promesse semver, [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md)), un 13ᵉ port désigne les éléments d'une cible par une référence stable : `snapshot(&SnapshotQuery)` rend un arbre compact (`ElementSnapshot`), `locate(&str)` remesure un élément au moment de l'action. Les références sont `e<n>` (DOM, attribuées par la `RefTable` pure du domaine, jamais réutilisées) ou `w:<id>` (widgets natifs, identifiant fourni par l'app). Son erreur `ElementError` (référence périmée avec candidats, inconnue, couverte, non prise en charge) est distincte de `PortError`. Décision : [ADR-0072](adr/0072-references-d-elements-stables-et-outils-snapshot-act.md).
+
+Les outils MCP expérimentaux `snapshot` et `act` (`adapter-mcp-server`, `tools_perception.rs`) le consomment ; ils ne font qu'enchaîner `locate` puis une `InteractionCommand` existante (aucune variante nouvelle, aucune obligation pour les adapters d'interaction). Implémentations, par famille de cible ([ADR-0073](adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)) :
+
+| Famille | Cibles | Inspecteur | Références | Fraîcheur |
+|---|---|---|---|---|
+| Widgets natifs | `x11`, `kwin-eis` | `RouteWidgetsElements` (`adapter-composite`) sur la route `ui.widgets` | `w:<id>` (id fourni par l'app) | sans cache : chaque `snapshot` et chaque `act` relisent la route ; mémoire des seuls identifiants déjà vus, pour distinguer périmé et inconnu et proposer des candidats |
+| Webview (pont WebKitGTK, CDP) | `sdk`, `cdp`, `auto` | pas encore câblé : `unsupported` avec une marche à suivre | `e<n>` (`RefTable`) | à venir dans la 1.2 |
+
+`FallbackElementInspector` (`deveye-server`) suit le patron des autres replis : il ne bascule que sur une panne de **liaison** (`PortError::Network`), jamais sur une référence périmée, inconnue ou ambiguë (ce serait un rebind silencieux) ; il sera câblé avec le pont.
 
 ## Les 12 ports en détail
 

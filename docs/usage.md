@@ -191,7 +191,7 @@ Codes de sortie : 0 conforme, 1 écarts, 2 la suite n'a pas pu s'exécuter. Le b
 
 ## Les outils MCP
 
-44 outils en sept familles. Appeler **`target_info` en premier** : il dit quels outils répondront sur la cible active.
+44 outils stables en sept familles, plus deux outils **expérimentaux** (`snapshot` et `act`, [Désigner un élément par référence](#désigner-un-élément-par-référence-expérimental)) hors de la promesse de stabilité. Appeler **`target_info` en premier** : il dit quels outils répondront sur la cible active.
 
 ### Conventions de résultat
 
@@ -225,6 +225,7 @@ Codes de sortie : 0 conforme, 1 écarts, 2 la suite n'a pas pu s'exécuter. Le b
 | `window_geometry` | KDE | KDE | KDE | oui |
 | `focus_window` | KDE, avec `--screencap-window` | KDE, avec `--screencap-window` | KDE, avec `--screencap-window` | oui |
 | `clipboard_get`, `clipboard_set` | Wayland | Wayland | Wayland | non |
+| `snapshot`, `act` (expérimentaux), section `elements` d'`observe` | non (à venir) | non (à venir) | SDK, route `ui.widgets` | SDK, route `ui.widgets` |
 
 `target_info` rend ces mêmes capacités en booléens, calculés au démarrage d'après la session réelle.
 
@@ -402,7 +403,7 @@ Géométrie écran `{ x, y, width, height }` d'une fenêtre : `title` (sous-cha�
 
 #### `target_info`
 
-Décrit la cible : `{ target, effective_backend, eyes, hands, eval_js, dom, state, console_errors, list_windows, window_geometry, focus_window, window_manager, clipboard, js_dependent_tools, server: { version, commit, sdk_protocol, mcp_protocol }, notes }`. `effective_backend` dit si le repli de `auto` est actif ; `js_dependent_tools` liste les outils qui répondent `unsupported` quand `eval_js` est faux ; `notes` rappelle les pièges de la cible.
+Décrit la cible : `{ target, effective_backend, eyes, hands, eval_js, dom, state, console_errors, list_windows, window_geometry, focus_window, window_manager, clipboard, elements?, js_dependent_tools, server: { version, commit, sdk_protocol, mcp_protocol }, notes }`. `elements` (expérimental) n'est présent que s'il est vrai : `snapshot` et `act` peuvent désigner des éléments sur cette cible (`x11`, `kwin-eis`) ; absent, ils répondent `unsupported`. `effective_backend` dit si le repli de `auto` est actif ; `js_dependent_tools` liste les outils qui répondent `unsupported` quand `eval_js` est faux ; `notes` rappelle les pièges de la cible.
 
 ### Logs
 
@@ -470,7 +471,52 @@ Invoque la commande `name` avec `args` (JSON ; un objet ou tableau passé en cha
 
 #### `observe`
 
-Observe l'app en **un appel** (remplace quatre ou cinq). Paramètres (tous optionnels) : `include`, `exclude` (sections parmi `screenshot`, `dom`, `state`, `console`, `logs` ; `include` d'abord, `exclude` ensuite) ; `max_dom_nodes` (défaut 60, plafond 500) ; `max_dom_depth` (défaut 6, plafond 30) ; `max_events` (défaut 20, plafond 200, pour `console` et `logs`) ; `max_width` (**1024 par défaut**), `format`, `quality`. Retour : l'image (si capturée), puis `{ sections: { screenshot, dom, state, console, logs }, skipped }` ; chaque section porte `available: true` et ses données, ou `available: false` avec `reason` et `detail` sans faire échouer les autres. **Draine** les tampons de logs et de console (seuls les messages `error` et `warning` sont restitués, les autres sont comptés dans `ignored_lower_levels`). L'état et les champs de logs passent par le masquage des secrets du SDK.
+Observe l'app en **un appel** (remplace quatre ou cinq). Paramètres (tous optionnels) : `include`, `exclude` (sections parmi `screenshot`, `dom`, `state`, `console`, `logs` ; `include` d'abord, `exclude` ensuite ; la section expérimentale `elements`, arbre compact de `snapshot` avec ses références et borné par `max_dom_nodes`, n'est produite que si `include` la nomme) ; `max_dom_nodes` (défaut 60, plafond 500) ; `max_dom_depth` (défaut 6, plafond 30) ; `max_events` (défaut 20, plafond 200, pour `console` et `logs`) ; `max_width` (**1024 par défaut**), `format`, `quality`. Retour : l'image (si capturée), puis `{ sections: { screenshot, dom, state, console, logs }, skipped }` ; chaque section porte `available: true` et ses données, ou `available: false` avec `reason` et `detail` sans faire échouer les autres. **Draine** les tampons de logs et de console (seuls les messages `error` et `warning` sont restitués, les autres sont comptés dans `ignored_lower_levels`). L'état et les champs de logs passent par le masquage des secrets du SDK.
+
+### Désigner un élément par référence (expérimental)
+
+> **Expérimental, hors promesse semver** ([ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md), [ADR-0073](adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)). Leur description commence par « [expérimental] » ; les noms, paramètres et formes de réponse de ces deux outils peuvent changer dans une version mineure. Ils ne comptent pas dans les 44 outils stables.
+
+Un agent désigne d'ordinaire un élément par sélecteur CSS, par texte ou par coordonnées. `snapshot` rend un arbre compact d'éléments, chacun avec une **référence** ; `act` agit dessus. Sur une cible sans DOM (egui, GTK, Godot, Uno), c'est la seule désignation qui ne passe pas par des pixels.
+
+- **Références** : `w:<id>` pour les widgets natifs (cibles `x11` et `kwin-eis`) : l'`id` que l'app donne à son widget dans l'arbre `deveye.ui/1` de la route `ui.widgets`. Il est stable d'un instantané à l'autre ; il l'est **d'une relance à l'autre seulement si l'app fournit des identifiants déterministes**. Un identifiant dupliqué ou synthétisé (format legacy sans `id`) est signalé `[ephemeral]` par `snapshot` et par `deveye-server doctor`. Les références `e<n>` des cibles à DOM (webview) arrivent avec le pont WebKitGTK ; d'ici là ces cibles répondent `unsupported`.
+- **Pas de relocalisation silencieuse** : `act` relit l'arbre au moment de l'action et **remesure** l'élément ; le rect d'un ancien instantané ne sert à rien. Un `id` qui a disparu ne se rabat pas sur un voisin : l'erreur propose des `candidates` (même rôle, même nom) et laisse choisir.
+- **Aucun secret** : la valeur d'un champ secret (`password`, `state.secret`) n'est jamais dans un instantané.
+
+#### `snapshot`
+
+Décrit les éléments de la cible. Paramètres (tous optionnels) : `scope` (référence d'un sous-arbre ; sur les widgets, une référence `w:<id>`, pas un sélecteur), `max_depth`, `max_nodes` (défaut 400, plafond 2000), `interactive_only` (défaut `true` : éléments interactifs et conteneurs utiles, les conteneurs anonymes sont aplatis), `viewport_only` (défaut `false`), `format` (`text` par défaut, ou `json`).
+
+Le **texte** est un arbre indenté, une ligne par élément, orienté jetons :
+
+```text
+# widgets : 4 élément(s), génération 0
+- window "Fixture" [ref=w:root]
+  - textbox "Nom" [ref=w:name] = "alice"
+  - button "Enregistrer" [ref=w:save]
+  - button "Hors vue" [ref=w:off] [offscreen]
+focus: w:name
+```
+
+Marqueurs : `[disabled]`, `[checked]` ou `[unchecked]`, `[expanded]` ou `[collapsed]`, `[selected]`, `[focused]`, `[offscreen]`, `[scrollable]`, `[ephemeral]`, puis ` = "valeur"` (tronquée à 80 caractères). `focus:` désigne l'élément qui a le focus clavier. L'en-tête dit `TRONQUÉ` quand `max_nodes` ou `max_depth` a coupé l'arbre : cibler un `scope`. Avec `format: "json"`, la réponse porte le même contenu avec les rects et `generation` (texte et `structuredContent` égaux) ; les rects sont **indicatifs**. Sans arbre d'éléments sur la cible : `isError` `{ ok: false, reason: "unsupported", hint }` ; le `hint` dit quoi faire (exposer `ui.widgets` avec `deveye_sdk::ui::publish`, ou `screenshot` puis `click` aux coordonnées).
+
+**Taille mesurée** (test de bout en bout sous Xvfb, route `ui.widgets` factice) : 4 widgets, 200 octets de texte contre 416 de `dom` ; environ 55 widgets (liste de 50 lignes), 2 531 octets contre 6 377 pour `dom` (39 %). Mesure consignée, sans seuil : `format: "json"` coûte environ le double du texte.
+
+#### `act`
+
+Agit sur l'élément `ref`. `action` : `click` (`button` optionnel), `double_click`, `right_click`, `hover`, `type` (clique pour donner le focus puis saisit `text`), `scroll_into_view` (vérifie que l'élément est visible), `scroll` (molette `dx`/`dy` ancrée sur l'élément). Un paramètre sans sens pour l'action (`text` hors `type`, `dx` ou `dy` hors `scroll`, `button` hors `click`) est refusé en `invalid_params` avant tout accès à la cible. Succès : `{ ok: true, action, ref, x, y }` (centre remesuré cliqué, en pixels). Les gestes sont ceux de `click`, `double_click`, `hover`, `type_text` et `scroll`, avec les mêmes cibles et les mêmes limites (`{ ok: true }` signifie « événements envoyés »).
+
+Échecs sémantiques (`isError`, `{ ok: false, reason, ref, detail, hint?, candidates?, by? }`), tous **sans aucun événement émis** :
+
+| `reason` | Cas |
+|---|---|
+| `stale_ref` | l'élément a disparu depuis l'instantané ; `hint` : relancer `snapshot` ; `candidates` : éléments de même rôle et de même nom |
+| `unknown_ref` | référence jamais émise, ou forme inconnue (`e<n>` sur une cible à widgets) |
+| `ambiguous_ref` | plusieurs widgets portent le même `id` : agir serait un pari ; corriger l'app (`doctor` le signale) |
+| `offscreen` | élément hors de la zone visible, sans surface, ou centre remesuré hors viewport |
+| `disabled` | élément désactivé (un `hover` ou un `scroll` reste permis) |
+| `obscured` | un autre élément recouvre le centre (`by` : sa référence). Pas encore produit pour les widgets natifs, dont l'arbre ne dit pas qui est dessiné au-dessus |
+| `unsupported` | la cible n'a pas d'arbre d'éléments (`hint`) |
 
 ---
 

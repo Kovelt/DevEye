@@ -92,6 +92,8 @@ Pour donner à l'agent l'état, les logs et les commandes de votre app Rust, int
 | **Composite** | `observe` |
 <!-- outils:fin -->
 
+Deux outils **expérimentaux**, hors de la promesse de stabilité, s'y ajoutent : `snapshot` (arbre compact d'éléments avec références) et `act` (agir sur une référence). Ils désignent les widgets natifs par `w:<id>` sur les cibles `x11` et `kwin-eis` ; voir [Désigner un élément par référence](docs/usage.md#désigner-un-élément-par-référence-expérimental).
+
 Un test échoue si cette liste diffère des outils réellement enregistrés par le serveur. Paramètres, retours et disponibilité par cible : [docs/usage.md](docs/usage.md#les-outils-mcp).
 
 ## Les cibles

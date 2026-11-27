@@ -2,7 +2,9 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Quarante-quatre outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Quarante-quatre outils stables, plus deux outils **expérimentaux** (`snapshot` et
+//! `act`, hors promesse semver, ADR-0069 et ADR-0073), sont publiés à Claude (ou à
+//! n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `screenshot_region` : capture puis recadre sur (x, y, width, height)
 //! - `screenshot_element` : capture recadrée sur le rect d'un sélecteur CSS
@@ -72,7 +74,12 @@
 //! - `wait_ready` : attend que l'app publie un state non vide (app prête)
 //! - `target_info` : décrit la cible active et ses capacités (eval_js, dom…)
 //! - `observe` : outil composite — capture bornée, résumé de l'arbre, état,
-//!   erreurs console et logs récents en un appel (ADR-0029)
+//!   erreurs console et logs récents en un appel (ADR-0029) ; la section
+//!   `elements` (références `snapshot`) s'y ajoute sur demande
+//! - `snapshot` **[expérimental]** : arbre compact d'éléments avec références
+//!   stables (`w:<id>` pour les widgets natifs), texte par défaut, JSON sur demande
+//! - `act` **[expérimental]** : agit sur un élément par sa référence (position
+//!   remesurée au moment de l'action, jamais de relocalisation silencieuse)
 //!
 //! **Sorties structurées (ADR-0067)** : 28 outils à petite sortie déclarent un
 //! `outputSchema` et renvoient `structuredContent` en plus d'un texte inchangé
@@ -130,9 +137,9 @@ use responses::{
 
 use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, StateDump, WaitPredicate};
 use deveye_ports::{
-    AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
-    LogSource, PortError, PortResult, Renderer, WaitCondition, WindowGeometry, WindowLister,
-    WindowManager,
+    AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, ElementInspector, InteractionSink,
+    JsEvaluator, LogSource, PortError, PortResult, Renderer, WaitCondition, WindowGeometry,
+    WindowLister, WindowManager,
 };
 
 // H1 : les outils `#[tool]` sont répartis par famille dans ces sous-modules
@@ -145,6 +152,7 @@ mod tools_capture;
 mod tools_inspect;
 mod tools_interaction;
 mod tools_observe;
+mod tools_perception;
 mod tools_wait;
 
 #[cfg(test)]
@@ -164,7 +172,19 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 /// crate et le test de bout en bout du binaire (`deveye-server/tests/e2e_mcp.rs`)
 /// l'exigent tous deux, de sorte qu'ajouter ou retirer un outil impose de
 /// mettre à jour ce nombre, la classification et la documentation.
-pub const EXPECTED_TOOL_COUNT: usize = 44;
+pub const EXPECTED_TOOL_COUNT: usize = 46;
+
+/// Outils expérimentaux : hors de la promesse semver sur les noms, paramètres et
+/// formes de réponse (ADR-0069). Leur description commence par
+/// [`EXPERIMENTAL_PREFIX`] ; ils ne comptent pas dans les « 44 outils » annoncés
+/// par la documentation.
+pub const EXPERIMENTAL_TOOLS: &[&str] = &["snapshot", "act"];
+
+/// Nombre d'outils stables : [`EXPECTED_TOOL_COUNT`] moins les expérimentaux.
+pub const STABLE_TOOL_COUNT: usize = EXPECTED_TOOL_COUNT - EXPERIMENTAL_TOOLS.len();
+
+/// Préfixe de la description d'un outil expérimental.
+pub const EXPERIMENTAL_PREFIX: &str = "[expérimental]";
 
 /// E4 : timeout par defaut partage par tous les outils `wait_*` a boucle de
 /// polling explicite, quand `timeout_ms` est omis par l'appelant. Une seule
@@ -269,6 +289,10 @@ pub struct TargetInfo {
     pub window_manager: String,
     /// `clipboard_get`/`clipboard_set` disponibles (Wayland ; jamais en x11) ?
     pub clipboard: bool,
+    /// `snapshot` et `act` (expérimentaux) peuvent désigner des éléments sur cette
+    /// cible ? Absent de la réponse quand c'est faux, pour garder la forme de la 1.1.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub elements: bool,
     /// Outils qui exigent un moteur JS (webview CDP ou pompe SDK) et répondent
     /// `Unsupported` quand `eval_js` est faux.
     pub js_dependent_tools: Vec<String>,
@@ -293,6 +317,8 @@ pub struct DeveyePorts {
     pub window_manager: Arc<dyn WindowManager>,
     pub window_geometry: Arc<dyn WindowGeometry>,
     pub clipboard: Arc<dyn Clipboard>,
+    /// Éléments désignables par référence (`snapshot`, `act`, expérimentaux).
+    pub elements: Arc<dyn ElementInspector>,
     pub target_info: TargetInfo,
     /// Sonde du backend effectif (mode `auto`) ; `None` : celui de `target_info` fait foi.
     pub effective_backend: Option<EffectiveBackendProbe>,
@@ -316,6 +342,7 @@ pub struct DeveyeMcpServer {
     window_manager: Arc<dyn WindowManager>,
     window_geometry: Arc<dyn WindowGeometry>,
     clipboard: Arc<dyn Clipboard>,
+    elements: Arc<dyn ElementInspector>,
     target_info: TargetInfo,
     effective_backend: Option<EffectiveBackendProbe>,
     /// Racine hors de laquelle `assert_visual` ne lit ni n'écrit (ADR-0049).
@@ -346,6 +373,10 @@ impl Drop for GateGuard<'_> {
         let duree_ms = self.acquired_at.elapsed().as_millis() as u64;
         debug!(outil = self.outil, duree_ms, "gate libere");
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Coordonnées seules — `hover`/`right_click`/`double_click` (le bouton y est
@@ -797,6 +828,7 @@ impl DeveyeMcpServer {
             window_manager: ports.window_manager,
             window_geometry: ports.window_geometry,
             clipboard: ports.clipboard,
+            elements: ports.elements,
             target_info: ports.target_info,
             effective_backend: ports.effective_backend,
             baseline_root: tools_capture::default_baseline_root(),
@@ -823,6 +855,7 @@ impl DeveyeMcpServer {
             + Self::inspect_router()
             + Self::wait_router()
             + Self::observe_router()
+            + Self::perception_router()
     }
 
     /// Lance le serveur MCP en stdio. Bloque jusqu'à la fermeture du client.
@@ -936,10 +969,11 @@ impl ServerHandler for DeveyeMcpServer {
              wait_for_selector, wait_for_text, find_element, assert_selector, \
              drag_drop, collect_console_errors, list_windows, wait_condition, \
              wait_for_log, wait_screenshot_region, wait_target_alive, \
-             wait_ready, target_info, observe. \
+             wait_ready, target_info, observe ; expérimentaux : snapshot, act. \
              Appeler target_info en premier pour connaitre les capacites de la \
              cible (eval_js/dom indisponibles en kwin-eis). observe resume \
-             l'app en un appel (capture reduite, arbre, état, console, logs)."
+             l'app en un appel (capture reduite, arbre, état, console, logs). \
+             snapshot liste les éléments avec des références, act agit dessus."
                 .to_string(),
         );
         info
@@ -1698,6 +1732,27 @@ mod dispatch_tests {
         }
     }
 
+    struct NoopElements;
+    #[async_trait]
+    impl ElementInspector for NoopElements {
+        async fn snapshot(
+            &self,
+            _query: &deveye_core::elements::SnapshotQuery,
+        ) -> deveye_ports::ElementResult<deveye_core::elements::ElementSnapshot> {
+            Err(deveye_ports::ElementError::Unsupported {
+                hint: "mock".to_string(),
+            })
+        }
+        async fn locate(
+            &self,
+            _reference: &str,
+        ) -> deveye_ports::ElementResult<deveye_core::elements::ElementLocation> {
+            Err(deveye_ports::ElementError::Unsupported {
+                hint: "mock".to_string(),
+            })
+        }
+    }
+
     pub(crate) fn base_ports() -> DeveyePorts {
         DeveyePorts {
             renderer: Arc::new(NoopRenderer),
@@ -1712,6 +1767,7 @@ mod dispatch_tests {
             window_manager: Arc::new(NoopWindowManager),
             window_geometry: Arc::new(NoopWindowGeometry),
             clipboard: Arc::new(NoopClipboard),
+            elements: Arc::new(NoopElements),
             target_info: TargetInfo {
                 target: "test".to_string(),
                 eyes: "mock".to_string(),
@@ -1725,6 +1781,7 @@ mod dispatch_tests {
                 focus_window: true,
                 window_manager: "test".to_string(),
                 clipboard: true,
+                elements: false,
                 js_dependent_tools: vec!["eval_js".to_string()],
                 effective_backend: Some("test".to_string()),
                 server: ServerVersion::new("9.9.9", Some("abc1234".to_string()), "1.0"),
@@ -2945,6 +3002,10 @@ mod dispatch_tests {
         ("wait_for_log", true, false, false, false),
         ("wait_condition", true, false, false, false),
         ("observe", true, false, false, false),
+        // Expérimentaux (ADR-0073) : `snapshot` observe sans rien changer ; `act`
+        // écrit sans rien détruire, deux appels identiques peuvent différer.
+        ("snapshot", true, false, true, false),
+        ("act", false, false, false, false),
         // Modifie l'app de façon non destructive.
         ("screenshot_element", false, false, true, false),
         ("hover", false, false, true, false),
