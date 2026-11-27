@@ -161,7 +161,7 @@ Diagnostic **sans effet voulu** : il n'ouvre aucun serveur MCP, ne compose aucun
 | Display X privé | le display passe la garde d'isolation et son socket existe |
 | SDK de l'app cible | `GET /devtools/info` répond, version du protocole compatible avec celle du serveur |
 | CDP (navigateur) | le point d'accès CDP répond |
-| Arbre `ui.widgets` (facultatif) | seulement si le SDK annonce `ui.widgets/1` : lit la route (`POST /devtools/command` sur la route de l'app, lecture seule par convention) et vérifie le schéma, les ids uniques et non vides, les parents et le focus connus ; un arbre invalide est un **échec**, une route illisible ou sans arbre publié un avertissement ([ADR-0065](adr/0065-helper-sdk-ui-lecture-serveur-et-controles.md)) |
+| Arbre `ui.widgets` (facultatif) | seulement si le SDK annonce `ui.widgets/1` : lit la route (`POST /devtools/command` sur la route de l'app, lecture seule par convention) et vérifie le schéma, les ids uniques et non vides, les parents et le focus connus ; un arbre invalide (ids dupliqués compris) est un **échec**, une route illisible, sans arbre publié ou dont des ids sont synthétisés (format legacy sans `id` : les références `w:<id>` de `snapshot` et `act` ne seraient pas stables d'une relance à l'autre) un avertissement ([ADR-0065](adr/0065-helper-sdk-ui-lecture-serveur-et-controles.md)) |
 
 Statuts : `[OK]`, `[ATTENTION]` (utile mais non bloquant : capacité réduite), `[ÉCHEC]` (prérequis bloquant de la cible demandée), `[SANS OBJET]`. Code de sortie : **0** (prêt, ou avertissements seulement), **1** (au moins un prérequis bloquant manque), **2** (erreur d'usage). Le texte du diagnostic n'est pas couvert par la promesse de stabilité, ses codes de sortie le sont.
 
