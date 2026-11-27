@@ -15,15 +15,17 @@ pub mod console_error;
 #[cfg(feature = "unstable-elements")]
 pub mod elements;
 pub mod log_event;
+pub mod modifier;
 pub mod snapshot;
 pub mod ui;
 pub mod wait_condition;
 pub mod window_info;
 pub mod window_rect;
 
-pub use command::{CommandDescriptor, InteractionCommand, MouseButton};
+pub use command::{CommandDescriptor, InteractionCommand, InvalidCommand, MouseButton};
 pub use console_error::{ConsoleError, ConsoleLevel};
 pub use log_event::{LogEvent, LogLevel};
+pub use modifier::{parse_modifiers, Modifier, UnknownModifier, MAX_KEY_HOLD_MS};
 pub use snapshot::{DomTree, Position, Screenshot, Size, StateDump};
 pub use ui::{
     UiIssue, UiIssueKind, UiReadError, UiRole, UiScroll, UiState, UiTree, UiTreeBuilder, UiWidget,
