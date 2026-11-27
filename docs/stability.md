@@ -97,7 +97,13 @@ Une capacité qui n'est pas prête pour la promesse semver est livrée **hors pr
 - côté outils MCP, un outil expérimental est annoncé comme tel dans sa description (préfixe « [expérimental] »), signalé au CHANGELOG et exclu de la promesse sur les noms, paramètres et formes de réponse ;
 - toute surface expérimentale est signalée au CHANGELOG ; sa graduation vers la surface stable est une décision écrite (ADR) qui l'ajoute au tableau.
 
-Aucune surface expérimentale n'existe en 1.1. Décision : [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md).
+Surface expérimentale actuelle :
+
+| Feature | Crates | Contenu |
+|---|---|---|
+| `unstable-elements` | `deveye-core`, `deveye-ports` | éléments désignables par référence stable : module `elements` (`ElementNode`, `ElementSnapshot`, `RefTable`, `SnapshotQuery`, `ElementLocation`) et port `ElementInspector` avec son erreur `ElementError` ; la feature n'ajoute aucun élément à la surface stable et `cargo-semver-checks` passe avec et sans elle ([ADR-0072](adr/0072-references-d-elements-stables-et-outils-snapshot-act.md)) |
+
+Décision : [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md).
 
 ## Ce que la 1.0 ne promet pas
 

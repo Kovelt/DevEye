@@ -135,6 +135,10 @@ Les quatre crates MIT sont ceux qu'une app embarque ou qu'un tiers réutilise ; 
 
 ---
 
+## Port expérimental : `ElementInspector`
+
+Derrière la feature `unstable-elements` de `deveye-ports` et `deveye-core` (hors promesse semver, [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md)), un 13ᵉ port désigne les éléments d'une cible par une référence stable : `snapshot(&SnapshotQuery)` rend un arbre compact (`ElementSnapshot`), `locate(&str)` remesure un élément au moment de l'action. Les références sont `e<n>` (DOM, attribuées par la `RefTable` pure du domaine, jamais réutilisées) ou `w:<id>` (widgets natifs, identifiant fourni par l'app). Son erreur `ElementError` (référence périmée avec candidats, inconnue, couverte, non prise en charge) est distincte de `PortError`. Les adapters et les outils MCP `snapshot` et `act` suivent dans la 1.2. Décision : [ADR-0072](adr/0072-references-d-elements-stables-et-outils-snapshot-act.md).
+
 ## Les 12 ports en détail
 
 ### 1. `Renderer`
