@@ -31,16 +31,20 @@ pub enum TracingInstallError {
 pub fn try_install_tracing_layer() -> Result<(), TracingInstallError> {
     #[cfg(debug_assertions)]
     {
-        use std::sync::atomic::{AtomicBool, Ordering};
         use tracing_subscriber::layer::SubscriberExt;
-        static INSTALLED: AtomicBool = AtomicBool::new(false);
-        if INSTALLED.load(Ordering::Acquire) {
+        // Verrou tenu pendant tout le test-and-set : deux fils concurrents ne peuvent
+        // pas conclure à tort qu'un abonné étranger bloque la capture.
+        static INSTALLED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+        let mut installed = INSTALLED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *installed {
             return Ok(());
         }
         let subscriber = tracing_subscriber::Registry::default().with(DeveyeLayer(()));
         tracing::subscriber::set_global_default(subscriber)
             .map_err(|_| TracingInstallError::SubscriberAlreadySet)?;
-        INSTALLED.store(true, Ordering::Release);
+        *installed = true;
         crate::enable_logs();
     }
     Ok(())
@@ -55,6 +59,10 @@ pub fn install_tracing_layer() {
 /// Layer `tracing` à composer avec l'abonné d'un hôte qui possède déjà le
 /// sien : `registry().with(deveye_sdk::layer())`. Capture les événements au
 /// niveau de `DEVEYE_LOG_LEVEL` (défaut `info`). No-op en build release.
+///
+/// La capacité `logs` est annoncée dès la construction du layer, qu'il soit
+/// branché ou non : un layer construit mais jamais composé dans un abonné actif
+/// laisse `logs_tail` vide.
 ///
 /// Expose `tracing_subscriber::Layer` 0.3 dans l'API (couplage consigné par
 /// ADR-0066) ; désactivable avec la feature `tracing-layer`.

@@ -26,6 +26,16 @@ default = ["tracing-layer"]
 # `log` et `log_with` restent, sans dépendance à `tracing-subscriber`.
 tracing-layer = ["dep:tracing-subscriber"]
 
+# Ces tests capturent des événements `tracing` : sans la feature ils n'ont pas de sens
+# (`cargo test --no-default-features` les saute, la CI le vérifie).
+[[test]]
+name = "wire_protocol"
+required-features = ["tracing-layer"]
+
+[[test]]
+name = "security"
+required-features = ["tracing-layer"]
+
 [dependencies]
 deveye-core = { path = "../deveye-core", version = "1.0.0" }
 serde = { workspace = true }

@@ -139,6 +139,8 @@ jobs:
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
       - name: Test release du SDK
         run: cargo test --release --locked -p deveye-sdk --test release_noop
+      - name: SDK sans la feature tracing-layer (compile et teste)
+        run: cargo test --locked -p deveye-sdk --no-default-features
       - name: Preuve sur binaire (aucun symbole du serveur HTTP)
         run: scripts/verify-sdk-release-noop.sh
 

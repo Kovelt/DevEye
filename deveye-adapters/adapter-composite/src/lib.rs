@@ -679,19 +679,21 @@ impl CommandRouter for MaskingCommandRouter {
     }
 }
 
+/// Âge d'un arbre `deveye.ui/1` s'il dépasse [`UI_STALE_AFTER_MS`].
+fn stale_age_ms(tree: &serde_json::Value, now_ms: u64) -> Option<u64> {
+    let published = tree
+        .get("published_at_ms")
+        .and_then(serde_json::Value::as_u64)?;
+    let age = now_ms.saturating_sub(published);
+    (age > UI_STALE_AFTER_MS).then_some(age)
+}
+
 /// Signale un arbre `deveye.ui/1` plus vieux que [`UI_STALE_AFTER_MS`].
 fn warn_if_stale(tree: &serde_json::Value) {
-    let Some(published) = tree
-        .get("published_at_ms")
-        .and_then(serde_json::Value::as_u64)
-    else {
-        return;
-    };
     let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
         return;
     };
-    let age = (now.as_millis() as u64).saturating_sub(published);
-    if age > UI_STALE_AFTER_MS {
+    if let Some(age) = stale_age_ms(tree, now.as_millis() as u64) {
         warn!(
             age_ms = age,
             "arbre ui.widgets périmé : l'UI de l'app est peut-être gelée ou n'a pas rendu de frame"
@@ -722,6 +724,16 @@ mod tests {
     use async_trait::async_trait;
     use deveye_core::{ConsoleLevel, LogEvent, Screenshot, Size};
     use deveye_ports::PortError;
+
+    #[test]
+    fn stale_age_only_reported_past_threshold() {
+        let tree = |ms: u64| serde_json::json!({ "published_at_ms": ms });
+        let now = 100_000;
+        assert_eq!(stale_age_ms(&tree(now - 10_000), now), Some(10_000));
+        assert_eq!(stale_age_ms(&tree(now - UI_STALE_AFTER_MS), now), None);
+        assert_eq!(stale_age_ms(&tree(now + 5), now), None);
+        assert_eq!(stale_age_ms(&serde_json::json!({}), now), None);
+    }
 
     // Timestamp RFC3339 fixe utilise dans les donnees de test (evite le besoin
     // d'une dependance directe a `chrono` dans le binaire).

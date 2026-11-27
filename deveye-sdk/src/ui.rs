@@ -47,7 +47,6 @@ pub const CAPABILITY: &str = "ui.widgets/1";
 
 /// Durée pendant laquelle un arbre est « observé » après la dernière lecture de
 /// la route : l'app ne reconstruit son arbre que dans cette fenêtre.
-#[cfg(debug_assertions)]
 pub const OBSERVE_WINDOW: Duration = Duration::from_secs(2);
 
 /// Attente maximale d'une première publication quand personne n'observait : une
@@ -114,15 +113,17 @@ pub(crate) struct UiSlot;
 /// observée, sinon personne ne demanderait jamais le premier arbre.
 #[cfg(debug_assertions)]
 fn ensure_route() {
-    let slot = &crate::REGISTRY.ui;
-    if slot.enabled.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    crate::expose_route(
-        ROUTE,
-        "Arbre de widgets de l'app (schéma deveye.ui/1)",
-        serve,
-    );
+    static REGISTER: std::sync::Once = std::sync::Once::new();
+    // `call_once` bloque les appelants concurrents jusqu'à la fin : la capacité n'est
+    // annoncée (`enabled`) qu'une fois la route réellement insérée.
+    REGISTER.call_once(|| {
+        crate::expose_route(
+            ROUTE,
+            "Arbre de widgets de l'app (schéma deveye.ui/1)",
+            serve,
+        );
+        crate::REGISTRY.ui.enabled.store(true, Ordering::Release);
+    });
 }
 
 /// Handler de la route : le payload est ignoré (ADR-0065).
@@ -255,6 +256,21 @@ mod tests {
                     .with_value(json!({ "user": "alice", "api_key": "k" })),
             )
             .build();
+        // Clé personnalisée (équivalent de `Config::with_secret_keys`).
+        crate::REGISTRY
+            .secret_keys
+            .write()
+            .unwrap()
+            .insert("iban".to_string());
+        let tree = {
+            let mut tree = tree;
+            tree.widgets.push(
+                UiWidget::new("bank", UiRole::LABEL)
+                    .with_rect([0, 0, 10, 10])
+                    .with_value(json!({ "owner": "alice", "iban": "FR76 0000" })),
+            );
+            tree
+        };
         // Arbre construit sans le builder : publish retire quand même le secret.
         let mut raw = tree.clone();
         raw.widgets[1].value = Some(json!("hunter2"));
@@ -268,6 +284,12 @@ mod tests {
         assert!(value["widgets"][1].get("value").is_none(), "{value}");
         assert_eq!(value["widgets"][2]["value"]["user"], "alice");
         assert_eq!(value["widgets"][2]["value"]["api_key"], crate::REDACTED);
+        assert_eq!(value["widgets"][3]["value"]["owner"], "alice");
+        assert_eq!(
+            value["widgets"][3]["value"]["iban"],
+            crate::REDACTED,
+            "{value}"
+        );
         let parsed = UiTree::from_value(&value).expect("arbre relu");
         assert!(parsed.validate().iter().all(|i| !i.is_error()));
         assert!(crate::REGISTRY.ui.is_enabled());

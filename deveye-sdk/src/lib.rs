@@ -809,6 +809,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_level_accepts_names_digits_and_trims() {
+        for (raw, expected) in [
+            ("trace", LogLevel::Trace),
+            ("DEBUG", LogLevel::Debug),
+            (" Info ", LogLevel::Info),
+            ("warn", LogLevel::Warn),
+            ("ERROR", LogLevel::Error),
+            ("5", LogLevel::Trace),
+            ("4", LogLevel::Debug),
+            ("3", LogLevel::Info),
+            ("2", LogLevel::Warn),
+            ("1", LogLevel::Error),
+        ] {
+            assert_eq!(parse_level(raw), Some(expected), "{raw}");
+        }
+        for raw in ["", "verbose", "0", "6", "warning"] {
+            assert_eq!(parse_level(raw), None, "{raw}");
+        }
+    }
+
+    #[test]
     fn default_config_uses_31337_without_env() {
         let config = Config::with_port(DEFAULT_PORT);
         assert_eq!(config.port, 31337);

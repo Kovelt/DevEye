@@ -524,7 +524,7 @@ Ref. code : `deveye-sdk/src/lib.rs` — handler `commands_handler` (tri par `a.n
 |---|---|---|
 | `sdk_version` | string | Version du SDK (crate `deveye-sdk` ou implémentation tierce) |
 | `protocol_version` | string | Version du protocole, `MAJEURE.MINEURE`, identique au header |
-| `capabilities` | tableau de string | Capacités **actives** : `state`, `commands` et `info` toujours ; `redaction` quand le masquage des secrets (§2.4) est actif ; `logs` quand une source de logs est armée (abonné ou `layer()` installé, ou premier appel de `log`) ; `ui.widgets/1` quand l'app publie un arbre de widgets (§3.7) ; `eval` quand une pompe d'évaluation est enregistrée. `eval` est cohérente avec `POST /devtools/eval` : annoncée, la route répond `200` ; non annoncée, `503`. De nouvelles valeurs peuvent apparaître en `1.x` : les ignorer si inconnues |
+| `capabilities` | tableau de string | Capacités **actives** : `state`, `commands` et `info` toujours ; `redaction` quand le masquage des secrets (§2.4) est actif ; `logs` quand une source de logs est armée (abonné installé, `layer()` construit — qu'il soit ou non composé dans un abonné actif —, ou premier appel de `log`) ; `ui.widgets/1` quand l'app publie un arbre de widgets (§3.7) ; `eval` quand une pompe d'évaluation est enregistrée. `eval` est cohérente avec `POST /devtools/eval` : annoncée, la route répond `200` ; non annoncée, `503`. De nouvelles valeurs peuvent apparaître en `1.x` : les ignorer si inconnues |
 
 **Codes HTTP** : 200 ; 403 (Host invalide).
 
