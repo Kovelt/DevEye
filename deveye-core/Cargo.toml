@@ -7,8 +7,11 @@ license = "MIT"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Domaine pur de DevEye : AppSession, Snapshot, InteractionCommand, Recording, Diff."
-publish = false  # interne, non publie
+description = "Domaine pur de DevEye : sessions, snapshots, commandes d'interaction, enregistrements et diff."
+readme = "README.md"
+keywords = ["devtools", "testing", "ui", "mcp", "debugging"]
+categories = ["development-tools", "development-tools::testing", "data-structures"]
+documentation = "https://docs.rs/deveye-core"
 
 [lints]
 workspace = true

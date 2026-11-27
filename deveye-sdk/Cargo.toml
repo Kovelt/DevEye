@@ -7,8 +7,11 @@ license = "MIT"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "SDK opt-in DevEye : micro-serveur HTTP local pour exposer le state d'une app en dev."
-publish = false  # interne, non publie
+description = "SDK opt-in DevEye : micro-serveur HTTP local pour exposer l'état d'une app en développement."
+readme = "README.md"
+keywords = ["devtools", "testing", "ui", "mcp", "debugging"]
+categories = ["development-tools", "development-tools::debugging", "web-programming::http-server"]
+documentation = "https://docs.rs/deveye-sdk"
 
 # Destiné à être ajouté en dépendance de l'app cible UNIQUEMENT en
 # cfg(debug_assertions).
@@ -17,7 +20,7 @@ publish = false  # interne, non publie
 workspace = true
 
 [dependencies]
-deveye-core = { path = "../deveye-core" }
+deveye-core = { path = "../deveye-core", version = "0.2.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

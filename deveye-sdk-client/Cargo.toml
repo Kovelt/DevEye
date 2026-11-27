@@ -7,8 +7,11 @@ license = "MIT"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Client HTTP partage pour les adapters DevEye communiquant avec le SDK opt-in."
-publish = false  # interne, non publie
+description = "Client HTTP partagé pour dialoguer avec le SDK opt-in de DevEye."
+readme = "README.md"
+keywords = ["devtools", "testing", "ui", "mcp", "http"]
+categories = ["development-tools", "development-tools::testing", "web-programming::http-client"]
+documentation = "https://docs.rs/deveye-sdk-client"
 
 [lints]
 workspace = true
