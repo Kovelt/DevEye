@@ -73,6 +73,13 @@ pub enum InteractionCommand {
         selector: String,
         paths: Vec<String>,
     },
+    /// Émule des dimensions de viewport de `width` x `height` pixels CSS
+    /// (test responsive). Émulation du moteur de rendu : la fenêtre de l'OS
+    /// n'est pas redimensionnée. `0` x `0` retire l'émulation et rend le
+    /// viewport réel ; un seul côté à `0` est invalide. CDP-only
+    /// (`Emulation.setDeviceMetricsOverride`) : les cibles sans moteur
+    /// pilotable répondent `PortError::Unsupported`.
+    Resize { width: u32, height: u32 },
 }
 
 /// Description d'une commande logique exposée par l'app cible, listée par
@@ -157,6 +164,10 @@ impl InteractionCommand {
             selector: selector.into(),
             paths,
         }
+    }
+
+    pub fn resize(width: u32, height: u32) -> Self {
+        Self::Resize { width, height }
     }
 }
 
@@ -244,6 +255,20 @@ mod tests {
             v,
             json!({ "kind": "scroll", "position": { "x": 10, "y": 20 }, "dx": 0, "dy": 600 })
         );
+    }
+
+    #[test]
+    fn resize_serializes_with_kind_tag() {
+        let cmd = InteractionCommand::resize(375, 812);
+        let v = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(v, json!({ "kind": "resize", "width": 375, "height": 812 }));
+    }
+
+    #[test]
+    fn resize_deserializes_from_kind_tag() {
+        let v = json!({ "kind": "resize", "width": 1024, "height": 768 });
+        let cmd: InteractionCommand = serde_json::from_value(v).unwrap();
+        assert_eq!(cmd, InteractionCommand::resize(1024, 768));
     }
 
     #[test]

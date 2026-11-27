@@ -124,6 +124,7 @@ pub fn command_kind(command: &InteractionCommand) -> &'static str {
         InteractionCommand::DoubleClick { .. } => "double-click",
         InteractionCommand::HandleDialog { .. } => "handle-dialog",
         InteractionCommand::UploadFile { .. } => "upload-file",
+        InteractionCommand::Resize { .. } => "resize",
         // `InteractionCommand` est `#[non_exhaustive]`.
         _ => "inconnue",
     }
@@ -142,6 +143,7 @@ pub fn check_supported(command: &InteractionCommand) -> Result<(), X11Error> {
         InteractionCommand::Navigate { .. } => unsupported("navigate"),
         InteractionCommand::HandleDialog { .. } => unsupported("handle_dialog"),
         InteractionCommand::UploadFile { .. } => unsupported("upload_file"),
+        InteractionCommand::Resize { .. } => unsupported("resize"),
         _ => Ok(()),
     }
 }
@@ -650,6 +652,7 @@ mod tests {
             InteractionCommand::navigate("x"),
             InteractionCommand::handle_dialog(true, None),
             InteractionCommand::upload_file("input", vec![]),
+            InteractionCommand::resize(800, 600),
         ] {
             let e = to_steps(cmd.clone(), (0, 0)).unwrap_err();
             assert!(matches!(e, X11Error::Unsupported(_)), "{cmd:?}");

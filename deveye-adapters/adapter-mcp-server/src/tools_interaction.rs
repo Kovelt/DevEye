@@ -200,6 +200,18 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
+        description = "Redimensionne le viewport à `width` x `height` pixels CSS (1 à 16384), pour tester un rendu responsive. ÉMULATION du moteur de rendu (`Emulation.setDeviceMetricsOverride`) : la fenêtre de l'OS garde sa taille, le facteur d'échelle de l'écran est conservé, et l'émulation persiste jusqu'à un nouveau `resize` ; `width` et `height` à 0 ensemble retirent l'émulation. Les captures et `click`/`hover` suivent le nouveau viewport. CDP-only : sur les autres cibles (sdk, kwin-eis, x11), résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
+    )]
+    pub(crate) async fn resize(
+        &self,
+        Parameters(p): Parameters<ResizeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_resize(p.width, p.height)?;
+        self.dispatch_ok(InteractionCommand::resize(p.width, p.height))
+            .await
+    }
+
+    #[tool(
         description = "Défile de (dx, dy) pixels — `dy > 0` vers le bas. Ancré en (x, y) ou, par défaut, au centre du viewport. En CDP, l'ancrage cible le bon conteneur scrollable (mouseWheel) ; via le pont SDK, le conteneur scrollable sous le point est privilégié (sinon window) ; en kwin-eis, le défilement va à la fenêtre focus. Indispensable pour les listes/grilles en kwin-eis (eval_js indisponible)."
     )]
     pub(crate) async fn scroll(

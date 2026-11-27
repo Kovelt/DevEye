@@ -2,7 +2,7 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Quarante-et-un outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Quarante-deux outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `screenshot_region` : capture puis recadre sur (x, y, width, height)
 //! - `screenshot_element` : capture recadrée sur le rect d'un sélecteur CSS
@@ -27,6 +27,7 @@
 //! - `key_combo` : combinaison avec modificateurs (Ctrl+S, Ctrl+Shift+P…)
 //! - `navigate` : navigue vers une route logique (routeur du SDK opt-in)
 //! - `scroll` : défile de (dx, dy) pixels, ancré (centre par défaut)
+//! - `resize` : émule un viewport `width` x `height` (CDP ; `Unsupported` ailleurs)
 //! - `handle_dialog` : répond à un dialog JS (alert/confirm/prompt) — CDP
 //! - `upload_file` : renseigne un input[type=file] (DOM.setFileInputFiles) — CDP
 //! - `focus_window` : donne le focus OS à une fenêtre (KWin) — kwin-eis/sdk
@@ -112,7 +113,7 @@ use deveye_ports::{
     WindowManager,
 };
 
-// H1 : les 41 outils `#[tool]` sont repartis par famille dans ces sous-modules
+// H1 : les outils `#[tool]` sont repartis par famille dans ces sous-modules
 // (chacun `use super::*;` pour voir DeveyeMcpServer, les structs de
 // parametres et les helpers ci-dessous) — lib.rs ne garde que la definition
 // du serveur, les helpers communs et l'assemblage des routeurs (`new`).
@@ -587,6 +588,18 @@ struct WaitScreenshotRegionParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct ResizeParams {
+    /// Largeur émulée du viewport, en pixels CSS (1 à 16384).
+    width: u32,
+    /// Hauteur émulée du viewport, en pixels CSS (1 à 16384).
+    height: u32,
+}
+
+/// Plus grande dimension émulable : au-delà, le moteur de rendu ne peut plus
+/// allouer de surface de capture (limite des textures GPU courantes).
+const RESIZE_MAX_DIMENSION: u32 = 16_384;
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct LogsTailParams {
     /// Nombre maximal d'événements les plus RÉCENTS à renvoyer (défaut 200).
     /// Le drain côté source reste complet (rien n'est laissé dans le buffer
@@ -663,7 +676,7 @@ impl DeveyeMcpServer {
     /// A8 : acquiert le gate en traçant l'attente ; la libération (durée
     /// comprise) est tracée par le `Drop` de [`GateGuard`]. Instrumenté sur
     /// les outils les plus longs (screenshot, eval_js, click, wait_ready) —
-    /// pas les 41, cf. audit §A8.
+    /// pas tous, cf. audit §A8.
     async fn acquire_gate(&self, outil: &'static str) -> GateGuard<'_> {
         let inner = self.gate.lock().await;
         debug!(outil, "gate acquis");
@@ -703,7 +716,7 @@ impl ServerHandler for DeveyeMcpServer {
              Outils : screenshot, screenshot_region, screenshot_element, \
              assert_visual, click, double_click, right_click, hover, \
              click_selector, click_text, eval_js, type_text, press_key, \
-             key_combo, navigate, scroll, handle_dialog, upload_file, \
+             key_combo, navigate, scroll, resize, handle_dialog, upload_file, \
              focus_window, window_geometry, clipboard_get, clipboard_set, dom, \
              state, assert_state, logs_tail, invoke_command, list_commands, \
              wait_for_selector, wait_for_text, find_element, assert_selector, \
@@ -803,6 +816,26 @@ fn parse_mouse_button(button: Option<&str>) -> Result<MouseButton, McpError> {
             format!("button invalide : {other:?} (attendu left/right/middle)"),
             None,
         )),
+    }
+}
+
+/// Valide les dimensions de `resize` avant tout dispatch : une dimension
+/// invalide est une faute d'appel (`invalid_params`), quelle que soit la cible
+/// (même celles qui répondraient `Unsupported`). `0` x `0` est le retrait de
+/// l'émulation ; un seul côté nul ou une dimension démesurée est refusé.
+fn validate_resize(width: u32, height: u32) -> Result<(), McpError> {
+    let reset = width == 0 && height == 0;
+    let in_range = |v: u32| (1..=RESIZE_MAX_DIMENSION).contains(&v);
+    if reset || (in_range(width) && in_range(height)) {
+        Ok(())
+    } else {
+        Err(McpError::invalid_params(
+            format!(
+                "dimensions invalides {width}x{height} : chaque côté doit être compris entre 1 et \
+                 {RESIZE_MAX_DIMENSION} (0x0 retire l'émulation)"
+            ),
+            None,
+        ))
     }
 }
 
@@ -1662,6 +1695,87 @@ mod dispatch_tests {
     }
 
     // ------------------------------------------------------------------
+    // resize : dispatch de la commande, validation, Unsupported structure.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn resize_dispatches_the_requested_dimensions() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(spy.clone());
+        });
+        let result = server
+            .resize(Parameters(ResizeParams {
+                width: 375,
+                height: 812,
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(
+            spy.calls.lock().unwrap()[0],
+            InteractionCommand::resize(375, 812)
+        );
+    }
+
+    #[tokio::test]
+    async fn resize_zero_by_zero_is_forwarded_to_clear_the_emulation() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(spy.clone());
+        });
+        server
+            .resize(Parameters(ResizeParams {
+                width: 0,
+                height: 0,
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(
+            spy.calls.lock().unwrap()[0],
+            InteractionCommand::resize(0, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn resize_with_invalid_dimensions_is_invalid_params_and_never_dispatches() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(spy.clone());
+        });
+        for (width, height) in [(0, 600), (800, 0), (RESIZE_MAX_DIMENSION + 1, 600)] {
+            let err = server
+                .resize(Parameters(ResizeParams { width, height }))
+                .await
+                .expect_err("dimensions invalides");
+            assert_eq!(
+                err.code,
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "{width}x{height}"
+            );
+        }
+        assert!(spy.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn resize_unsupported_target_becomes_structured_is_error() {
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(UnsupportedInteraction(
+                "Resize necessite un moteur de rendu pilotable".to_string(),
+            ));
+        });
+        let result = server
+            .resize(Parameters(ResizeParams {
+                width: 800,
+                height: 600,
+            }))
+            .await
+            .expect("E1 : pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(body_json(&result)["reason"], "unsupported");
+    }
+
+    // ------------------------------------------------------------------
     // (c) assert_state rapporte les mismatches.
     // ------------------------------------------------------------------
 
@@ -1768,7 +1882,7 @@ mod dispatch_tests {
         });
         // `screenshot` passe par `acquire_gate` (instrumente), `dom` par un
         // `gate.lock()` direct : les deux tiennent le MEME mutex, preuve que
-        // la serialisation couvre bien les 41 outils et pas seulement ceux
+        // la serialisation couvre bien tous les outils et pas seulement ceux
         // instrumentes.
         let s1 = server.clone();
         let s2 = server.clone();

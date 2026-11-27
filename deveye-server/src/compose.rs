@@ -246,7 +246,7 @@ fn build_target_info(target: TargetMode) -> TargetInfo {
             state: true,
             console_errors: true,
             list_windows: false,
-            notes: "resize indisponible (metriques moteur = CDP). Pas de visibilite \
+            notes: "resize indisponible (emulation des metriques moteur = CDP). Pas de visibilite \
                     inter-fenetres (list_windows vide)."
                 .to_string(),
         },

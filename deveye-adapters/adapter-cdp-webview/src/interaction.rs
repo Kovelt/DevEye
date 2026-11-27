@@ -186,6 +186,10 @@ impl InteractionSink for CdpClient {
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                 mouse_event(self, "mouseReleased", to, "left").await?;
             }
+            InteractionCommand::Resize { width, height } => {
+                let (method, params) = resize_request(width, height)?;
+                let _: Value = self.call(method, params).await.map_err(PortError::from)?;
+            }
             // `InteractionCommand` est `#[non_exhaustive]` : une commande
             // ajoutée par le domaine sans traduction CDP est refusée.
             // Pas de `Debug` de la commande : il embarquerait le texte tapé.
@@ -242,6 +246,28 @@ fn mouse_button_label(button: MouseButton) -> Option<&'static str> {
     }
 }
 
+/// Requête CDP d'un `Resize`. `deviceScaleFactor: 0` conserve le facteur
+/// d'échelle réel de l'écran (ne change que les dimensions CSS). `0` x `0`
+/// retire l'émulation ; un seul côté nul n'a pas de sens et est refusé.
+fn resize_request(width: u32, height: u32) -> PortResult<(&'static str, Value)> {
+    match (width, height) {
+        (0, 0) => Ok(("Emulation.clearDeviceMetricsOverride", json!({}))),
+        (0, _) | (_, 0) => Err(PortError::Interaction(format!(
+            "dimensions invalides {width}x{height} : les deux côtés doivent être non nuls \
+             (ou nuls ensemble pour retirer l'émulation)"
+        ))),
+        _ => Ok((
+            "Emulation.setDeviceMetricsOverride",
+            json!({
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": 0,
+                "mobile": false,
+            }),
+        )),
+    }
+}
+
 /// Envoie un `Input.dispatchKeyEvent` (keyDown/keyUp) avec un bitmask de
 /// modificateurs CDP. Utilise par `KeyCombo`.
 async fn key_event(client: &CdpClient, ty: &str, key: &str, modifiers: i64) -> PortResult<()> {
@@ -276,6 +302,33 @@ mod tests {
         assert_eq!(mouse_button_label(MouseButton::Left), Some("left"));
         assert_eq!(mouse_button_label(MouseButton::Right), Some("right"));
         assert_eq!(mouse_button_label(MouseButton::Middle), Some("middle"));
+    }
+
+    #[test]
+    fn resize_request_overrides_device_metrics_keeping_the_real_scale() {
+        let (method, params) = resize_request(375, 812).expect("dimensions valides");
+        assert_eq!(method, "Emulation.setDeviceMetricsOverride");
+        assert_eq!(params["width"], json!(375));
+        assert_eq!(params["height"], json!(812));
+        assert_eq!(params["deviceScaleFactor"], json!(0));
+        assert_eq!(params["mobile"], json!(false));
+    }
+
+    #[test]
+    fn resize_request_zero_by_zero_clears_the_override() {
+        let (method, params) = resize_request(0, 0).expect("0x0 retire l'émulation");
+        assert_eq!(method, "Emulation.clearDeviceMetricsOverride");
+        assert_eq!(params, json!({}));
+    }
+
+    #[test]
+    fn resize_request_rejects_a_single_zero_side() {
+        for (w, h) in [(0, 600), (800, 0)] {
+            assert!(
+                matches!(resize_request(w, h), Err(PortError::Interaction(_))),
+                "{w}x{h}"
+            );
+        }
     }
 
     #[test]

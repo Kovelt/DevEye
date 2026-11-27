@@ -85,7 +85,7 @@ dx serve --platform desktop --features deveye
 claude
 ```
 
-Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **41 outils sont disponibles** (1 _(à venir)_ : `resize`) :
+Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **42 outils sont disponibles** :
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|
@@ -127,7 +127,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `list_commands` | aucun | JSON `[{name, description}]` | « quelles commandes l'app expose-t-elle ? » |
 | `collect_console_errors` | aucun | JSON `[{level, text, url?, line?, timestamp}]` | « y a-t-il eu des erreurs JS depuis la dernière vérification ? » |
 | `list_windows` | aucun | JSON `[{id, title, url, kind}]` | « liste les onglets/fenêtres de la cible CDP » |
-| `resize` _(à venir)_ | `{width, height}` | `"ok"` | « passe en 375×812 » (émule le rendu responsive, pas la fenêtre OS) |
+| `resize` | `{width, height}` | JSON `{ok}` | « passe en 375×812 » (CDP : émule le viewport responsive, pas la fenêtre OS ; `0`×`0` retire l'émulation ; sdk/kwin-eis/x11 : `isError` `unsupported`) |
 
 **Conseils d'usage** :
 
@@ -160,7 +160,7 @@ cargo run -p deveye-server -- --serve-mcp --target sdk
 - `click_*` / `type_text` / `dom` / `eval_js` passent par la pompe `document::eval` de l'app (événements JS synthétiques complets : pointer + mouse + focus) — moins fidèles que CDP mais fonctionnels.
 - `screenshot` : sans `--screencap-window`, capture **plein écran** (`MonitorRenderer`) — adapté au CI/headless. Avec `--screencap-window <sous-chaîne>`, capture de la fenêtre par titre : sous KDE/Wayland natif ajouter `--screencap-backend kwin` (aucun XWayland requis) ; ailleurs, xcap avec `GDK_BACKEND=x11`. Lancer via `dx serve` (un `cargo run` nu n'a pas ses assets `asset!()` → page sans CSS).
 - `state` / `logs_tail` viennent du SDK, comme en mode CDP.
-- `resize` n'est **pas** disponible via le pont natif (les métriques du moteur exigent CDP) ; tout le reste l'est.
+- `resize` n'est **pas** disponible via le pont natif (l'émulation des métriques du moteur exige CDP) ; tout le reste l'est.
 
 > **Leçons d'usage (Linux/web)** : (1) pour chronométrer une animation, vérifier `document.visibilityState === "visible"` — une fenêtre masquée gèle `requestAnimationFrame`. (2) Le scroll de l'app vit souvent dans un conteneur (`.shell__content`), pas dans `window`. (3) En mode web sans `logs_tail`, poser un collecteur `window.addEventListener('error'/'unhandledrejection', …)` via `eval_js` et le relever en fin de session (à reposer après chaque `location.reload()`).
 
@@ -417,7 +417,7 @@ Côté app cible, le seul fichier qui référence DevEye est son `Cargo.toml` (f
 
 ## Limitations connues
 
-- **CDP = Windows (WebView2) uniquement.** Sur macOS (WKWebView) et Linux (WebKitGTK), CDP n'est pas exposé. Sous Linux, le **pont natif** du SDK (`--target sdk`/`auto`) conserve clic / saisie / DOM / JS / state via la pompe `document::eval` — seul `resize` (métriques moteur) reste indisponible. Pour les cibles sans WebView ni SDK (ex. Uno desktop / Skia), utiliser `--target kwin-eis` (injection OS-level KWin EIS — yeux par screencap).
+- **CDP = Windows (WebView2) uniquement.** Sur macOS (WKWebView) et Linux (WebKitGTK), CDP n'est pas exposé. Sous Linux, le **pont natif** du SDK (`--target sdk`/`auto`) conserve clic / saisie / DOM / JS / state via la pompe `document::eval` — seul `resize` (émulation des métriques du moteur) reste indisponible. Pour les cibles sans WebView ni SDK (ex. Uno desktop / Skia), utiliser `--target kwin-eis` (injection OS-level KWin EIS — yeux par screencap).
 - **Pas de stream WebSocket** sur les logs : `logs_tail` est un drain ponctuel ; pour attendre de nouveaux événements sans boucle arbitraire, utiliser `wait_condition` (prédicat `state-key` si l'app expose l'état) ou une boucle `logs_tail` côté agent. Pas de flush poussé temps réel (choix assumé).
 - **Commandes logiques** : `invoke_command` / `list_commands` sont opérationnels via `adapter-commands-http`, mais ne renvoient quelque chose que si l'app cible a déclaré des routes avec `deveye_sdk::expose_route` (sinon `list_commands` renvoie une liste vide). C'est à l'app d'exposer ce qu'elle veut rendre pilotable.
 - **Test runtime end-to-end** non automatisé : à valider manuellement à chaque release majeure Dioxus/wry (on dépend de l'option WebView2 `--remote-debugging-port`).

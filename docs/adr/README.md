@@ -82,3 +82,4 @@ Option retenue, en une phrase.
 | [0016](0016-masquage-des-secrets-par-cles-dans-le-sdk.md) | Masquage des secrets par clés dans le SDK | Accepté |
 | [0017](0017-protocole-1-0-version-info-et-limites.md) | Protocole 1.0 : version, compatibilité côté client, `/devtools/info` et limites de taille | Accepté |
 | [0018](0018-portage-selectif-de-l-ancienne-lignee-github.md) | Portage sélectif de l'ancienne lignée GitHub | Accepté |
+| [0019](0019-resize-variante-d-interaction-command.md) | Redimensionnement du viewport : variante `InteractionCommand::Resize` | Accepté |

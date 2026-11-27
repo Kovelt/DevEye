@@ -304,6 +304,7 @@ mod tests {
             InteractionCommand::navigate("x"),
             InteractionCommand::handle_dialog(true, None),
             InteractionCommand::upload_file("i", vec![]),
+            InteractionCommand::resize(800, 600),
         ] {
             let e = t.dispatch(cmd).await.unwrap_err();
             assert!(matches!(e, PortError::Unsupported(_)), "{e:?}");

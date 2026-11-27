@@ -179,9 +179,9 @@ Variantes de `InteractionCommand` (`deveye-core/src/command.rs`) :
 - `HandleDialog { accept, prompt_text }` — répond à une boîte de dialogue JS (`alert`/`confirm`/`prompt`). CDP-only : le moteur JS est suspendu pendant un dialog, `eval_js` y est impossible.
 - `UploadFile { selector, paths }` — renseigne les fichiers d'un `input[type=file]`. CDP-only (`DOM.setFileInputFiles`) : le verrou de sécurité navigateur interdit de setter `.value` depuis JS.
 
-`Resize { width, height }` (`Emulation.setDeviceMetricsOverride`, émulation responsive du moteur de rendu) reste **hors périmètre** — pas encore une variante du domaine (cf. « Hors périmètre actuel »).
+- `Resize { width, height }` — émule un viewport de `width` x `height` pixels CSS (`Emulation.setDeviceMetricsOverride`, `deviceScaleFactor: 0` pour garder l'échelle réelle de l'écran). Émulation du moteur de rendu : la fenêtre de l'OS n'est pas redimensionnée ; `0` x `0` retire l'émulation. CDP-only : toutes les autres cibles répondent `Unsupported` (ADR-0019).
 
-Adapters : `adapter-x11` (XTEST `FakeInput` sur un serveur X privé — gestes interpolés, clavier du serveur, remappage temporaire des caractères absents ; `Navigate`/`HandleDialog`/`UploadFile` → `Unsupported`), `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`, toutes variantes), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK ; `Navigate`/`HandleDialog`/`UploadFile` y renvoient `PortError::Unsupported`, sémantique applicative ou WebView impossible OS-level).
+Adapters : `adapter-x11` (XTEST `FakeInput` sur un serveur X privé — gestes interpolés, clavier du serveur, remappage temporaire des caractères absents ; `Navigate`/`HandleDialog`/`UploadFile`/`Resize` → `Unsupported`), `adapter-cdp-webview` (CDP `Input.*` / `Runtime.evaluate`, toutes variantes), `adapter-dioxus-signals` (`JsInteraction` — événements JS synthétiques via la pompe SDK), `adapter-interaction-kwin-eis` (events EI OS-level via KWin EIS — Wayland natif KDE, sans WebView ni SDK ; `Navigate`/`HandleDialog`/`UploadFile`/`Resize` y renvoient `PortError::Unsupported`, sémantique applicative ou WebView impossible OS-level).
 
 ### 4. `JsEvaluator`
 
@@ -344,7 +344,7 @@ Conséquence : un hot-reload ne nécessite plus de reconnexion manuelle du MCP. 
 
 Détails opérationnels : [`usage.md`](./usage.md).
 
-**Hors périmètre** : le pont natif ne couvre pas le `resize` de viewport (métriques moteur, exige CDP). Sous Wayland non-KDE, xcap reste le fallback screencap (XWayland requis).
+**Hors périmètre** : le pont natif ne couvre pas `resize` (émulation des métriques du moteur, exige CDP). Sous Wayland non-KDE, xcap reste le fallback screencap (XWayland requis).
 
 ---
 
@@ -381,8 +381,7 @@ Le contrat complet des routes HTTP du SDK (codes de statut, formes des corps, ga
 - VRT (Visual Regression Testing) — `Diff` est dans le domaine, le comparateur viendra plus tard
 - Replay de `Recording` — tests E2E reproductibles
 - Dashboard HTML pour humain (alternative au MCP)
-- `InteractionCommand::Resize` — variante prévue (`Emulation.setDeviceMetricsOverride`), pas encore dans le domaine. (`Scroll` est livré depuis le sprint 1 du backlog d'outils — cf. `deveye-core/src/command.rs`.)
-- `resize_viewport` (outil MCP correspondant) — mêmes conditions ; **breaking change** sur le trait `Renderer` (6 implémenteurs) si livré
+- Redimensionnement de la **fenêtre OS** réelle : `resize` n'émule que le viewport du moteur de rendu (ADR-0019) ; un `window_geometry_set` serait un ajout mineur ultérieur.
 
 ---
 

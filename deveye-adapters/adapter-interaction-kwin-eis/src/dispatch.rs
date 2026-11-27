@@ -27,6 +27,7 @@ fn command_kind(command: &InteractionCommand) -> &'static str {
         InteractionCommand::DoubleClick { .. } => "double-click",
         InteractionCommand::HandleDialog { .. } => "handle-dialog",
         InteractionCommand::UploadFile { .. } => "upload-file",
+        InteractionCommand::Resize { .. } => "resize",
         // `InteractionCommand` est `#[non_exhaustive]`.
         _ => "inconnue",
     }
@@ -87,6 +88,15 @@ fn to_action(command: InteractionCommand, origin: (i32, i32)) -> Result<EisActio
         InteractionCommand::Navigate { .. } => {
             return Err(PortError::Unsupported(
                 "Navigate nécessite un routeur applicatif (SDK ou CDP) ; \
+                 indisponible en mode kwin-eis (mains OS-level pures)"
+                    .to_string(),
+            ));
+        }
+        // `Resize` émule les métriques d'un moteur de rendu : sans objet pour
+        // une injection d'événements OS-level.
+        InteractionCommand::Resize { .. } => {
+            return Err(PortError::Unsupported(
+                "Resize nécessite un moteur de rendu pilotable (CDP) ; \
                  indisponible en mode kwin-eis (mains OS-level pures)"
                     .to_string(),
             ));
@@ -175,6 +185,14 @@ mod tests {
         };
         let result = to_action(command, ORIGIN);
         assert!(matches!(result, Err(PortError::Unsupported(_))));
+    }
+
+    /// Resize émule un moteur de rendu : sans objet en OS-level.
+    #[test]
+    fn resize_is_unsupported() {
+        let result = to_action(InteractionCommand::resize(800, 600), ORIGIN);
+        assert!(matches!(result, Err(PortError::Unsupported(_))));
+        assert_eq!(command_kind(&InteractionCommand::resize(1, 1)), "resize");
     }
 
     /// (e) Scroll ignore l'ancrage `position` : seuls dx/dy comptent, quels

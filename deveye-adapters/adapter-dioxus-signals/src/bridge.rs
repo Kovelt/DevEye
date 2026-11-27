@@ -333,6 +333,12 @@ impl InteractionSink for JsInteraction {
                  navigateur interdit de remplir un input fichier en JS"
                     .to_string(),
             )),
+            // Les métriques du moteur de rendu ne se règlent pas depuis la page.
+            InteractionCommand::Resize { .. } => Err(PortError::Unsupported(
+                "resize nécessite CDP (Emulation.setDeviceMetricsOverride) ; \
+                 indisponible via le pont SDK"
+                    .to_string(),
+            )),
             // `InteractionCommand` est `#[non_exhaustive]` : refus explicite.
             // Pas de `Debug` de la commande : il embarquerait le texte tapé.
             _ => Err(PortError::Unsupported(
@@ -556,6 +562,25 @@ mod tests {
         assert!(js.contains("\"KeyP\""));
         assert!(js.contains("keydown"));
         assert!(js.contains("keyup"));
+    }
+
+    /// Évaluateur qui ne doit jamais être appelé : `Resize` est refusé avant.
+    struct NeverCalled;
+    #[async_trait]
+    impl JsEvaluator for NeverCalled {
+        async fn evaluate(&self, _expression: &str) -> PortResult<serde_json::Value> {
+            Err(PortError::Network("ne devait pas être appelé".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn resize_est_unsupported_sans_toucher_la_page() {
+        let sink = JsInteraction::new(Arc::new(NeverCalled));
+        let err = sink
+            .dispatch(InteractionCommand::resize(375, 812))
+            .await
+            .expect_err("resize exige CDP");
+        assert!(matches!(err, PortError::Unsupported(_)), "{err:?}");
     }
 
     #[test]
