@@ -510,7 +510,11 @@ pub fn needs_keyboard(steps: &[Step]) -> bool {
     steps.iter().any(|s| {
         matches!(
             s,
-            Step::Type(_) | Step::Key(_) | Step::Combo { .. } | Step::Hold { .. }
+            Step::Type(_)
+                | Step::Key(_)
+                | Step::Combo { .. }
+                | Step::Hold { .. }
+                | Step::Modifiers { .. }
         )
     })
 }
@@ -734,6 +738,12 @@ mod tests {
         .unwrap();
         assert!(needs_keyboard(&s));
         assert!(!needs_keyboard(&[Step::Pause(SETTLE)]));
+        // Les modificateurs d'un Shift+clic sont des touches : le focus clavier
+        // doit suivre, sinon le KeyPress part vers la fenetre sous le pointeur.
+        assert!(needs_keyboard(&[Step::Modifiers {
+            modifiers: vec![Modifier::Shift],
+            press: true,
+        }]));
     }
 
     #[test]
