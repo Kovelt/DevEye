@@ -12,6 +12,8 @@
 
 pub mod command;
 pub mod console_error;
+#[cfg(feature = "unstable-elements")]
+pub mod elements;
 pub mod log_event;
 pub mod snapshot;
 pub mod ui;
