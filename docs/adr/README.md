@@ -76,3 +76,6 @@ Option retenue, en une phrase.
 | [0010](0010-toolchain-stable-et-msrv-1-88.md) | Toolchain stable épinglée par fichier et MSRV 1.88 | Accepté |
 | [0011](0011-politique-de-stabilite-et-de-versionnage-1-0.md) | Politique de stabilité et de versionnage de la 1.0 | Accepté |
 | [0012](0012-application-de-non-exhaustive-et-choix-limites.md) | Application de `#[non_exhaustive]` et choix limites avant le gel | Proposé |
+| [0013](0013-neutralite-apps-clientes-et-archivage-historique.md) | Neutralité vis-à-vis des apps clientes et archivage des documents historiques | Accepté |
+| [0014](0014-filtre-de-cible-cdp-permissif-par-defaut.md) | Filtre de cible CDP permissif par défaut | Accepté |
+| [0015](0015-retrait-du-script-de-synchronisation-des-copies.md) | Retrait du script de synchronisation des copies vendored | Accepté |
