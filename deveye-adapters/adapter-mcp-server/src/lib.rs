@@ -76,7 +76,7 @@
 //!
 //! **Sorties structurées (ADR-0067)** : 28 outils à petite sortie déclarent un
 //! `outputSchema` et renvoient `structuredContent` en plus d'un texte inchangé
-//! (voir [`responses`]) ; les autres restent en texte seul. `state` porte sa
+//! (voir `responses`) ; les autres restent en texte seul. `state` porte sa
 //! fraîcheur et sa provenance dans `_meta`.
 //!
 //! **Annotations (ADR-0027)** : chaque outil porte les quatre indices MCP
