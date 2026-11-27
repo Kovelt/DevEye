@@ -22,10 +22,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Même liste que APT_DEPS de ci.yml (sans xvfb, inutile ici).
       - name: Dépendances système
         run: >-
           sudo apt-get update && sudo apt-get install -y --no-install-recommends
           pkg-config libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev libgbm-dev
+          libpipewire-0.3-dev libspa-0.2-dev libclang-dev
       - name: Toolchain
         run: rustup toolchain install stable --profile minimal
       - name: Le tag correspond à la version de deveye-server

@@ -1,4 +1,5 @@
 # Intégration continue DevEye (ADR-0003, ADR-0037, ADR-0038).
+# Liste APT_DEPS : à garder identique à celle de release.yml et du README.
 # Les mêmes commandes existent en local dans le `justfile` (`just ci`).
 # Actions épinglées par SHA de commit (le tag d'origine est en commentaire).
 name: CI
@@ -22,13 +23,15 @@ env:
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: "1"
   # Dépendances système des adapters Linux :
-  #   xcap (capture)       -> libxcb, libxrandr, libgbm (backend Wayland)
+  #   xcap (capture)       -> libxcb, libxrandr, libgbm (backend Wayland) et
+  #                           libpipewire + libspa (pipewire-sys/libspa-sys :
+  #                           `system_deps` puis bindgen, d'où libclang)
   #   zbus (KWin D-Bus)    -> libdbus
   #   xkbcommon (EIS)      -> libxkbcommon ; reis est en Rust pur (pas de libei)
   #   xvfb                 -> serveur X privé des tests x11 et e2e
   APT_DEPS: >-
     pkg-config libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev
-    libgbm-dev xvfb
+    libgbm-dev libpipewire-0.3-dev libspa-0.2-dev libclang-dev xvfb
 
 jobs:
   fmt:

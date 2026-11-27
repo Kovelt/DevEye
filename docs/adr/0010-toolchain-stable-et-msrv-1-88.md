@@ -20,11 +20,11 @@ Aucun `rust-toolchain.toml` n'existait : la version du compilateur dépendait de
 
 1. **Rien** — chacun sa toolchain.
 2. **Épingler une version précise** (par exemple 1.98.1) — reproductible, mais à maintenir à chaque version.
-3. **Canal `stable`** dans `rust-toolchain.toml`, avec `rustfmt` et `clippy`, et MSRV 1.88 vérifiée séparément par `cargo +1.88 check`.
+3. **Canal `stable`** dans `rust-toolchain.toml`, avec `rustfmt` et `clippy`, et MSRV 1.88 vérifiée séparément par `cargo +1.88 check --all-targets`.
 
 ## Décision
 
-Option 3. `rust-toolchain.toml` fixe `channel = "stable"` et les composants `rustfmt` et `clippy`. La MSRV est `rust-version = "1.88"` dans `[workspace.package]`, héritée par les 16 crates ; la CI la vérifie avec `cargo +1.88 check --workspace --locked`.
+Option 3. `rust-toolchain.toml` fixe `channel = "stable"` et les composants `rustfmt` et `clippy`. La MSRV est `rust-version = "1.88"` dans `[workspace.package]`, héritée par les 17 crates ; la CI la vérifie avec `cargo +1.88 check --workspace --all-targets --locked` (la version est nommée explicitement par `+1.88`, ce qui prime sur `rust-toolchain.toml`).
 
 **Justification** : le canal stable suit les correctifs et avertissements actuels (la CI échoue tôt plutôt que tard) et la MSRV reste une promesse explicite, testée, vers les utilisateurs des bibliothèques.
 
