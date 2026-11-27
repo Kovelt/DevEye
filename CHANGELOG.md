@@ -6,6 +6,44 @@ Le format suit [Keep a Changelog 1.1.0](https://keepachangelog.com/fr/1.1.0/) et
 
 ## [Non publié]
 
+## [1.1.0] - 2026-11-27
+
+Version mineure « Perception structurée » : contrat des widgets natifs figé, réponses MCP typées et lisibles par machine, logs poussés par le SDK. Aucun changement cassant de la surface stable ([`docs/stability.md`](docs/stability.md)) ; le protocole du SDK reste en version 1.0, les ajouts additifs se découvrent par `capabilities` ([ADR-0068](docs/adr/0068-capacites-additives-et-version-du-protocole.md)). Aucune surface expérimentale n'est ajoutée en 1.1 : la règle des features `unstable-*`, hors promesse semver, est posée pour les versions suivantes ([ADR-0069](docs/adr/0069-surface-experimentale-par-features-unstable.md)).
+
+### Added
+
+- `deveye-core` : module `ui` (contrat `deveye.ui/1` de la route `ui.widgets` : `UiTree`, `UiWidget`, `UiRole` ouvert, builders, validation, lecteur tolérant du format legacy) et feature optionnelle `schema` générant `docs/schemas/ui-widgets-1.json` ([ADR-0062](docs/adr/0062-schema-deveye-ui-1-de-la-route-ui-widgets.md)).
+- Fixtures versionnées `deveye.ui/1` et vecteurs partagés de masquage des secrets et de garde Host (`docs/schemas/shared-vectors-1.json`) pour les implémentations tierces ([ADR-0064](docs/adr/0064-masquage-des-secrets-transversal-et-vecteurs-partages.md)).
+- `deveye-sdk::ui` (`publish`, `is_observed`, builder) : l'app publie son arbre `deveye.ui/1` ; la route `ui.widgets` est enregistrée au premier usage et `/devtools/info` annonce la capacité `ui.widgets/1` ; sans effet en release ([ADR-0065](docs/adr/0065-helper-sdk-ui-lecture-serveur-et-controles.md)).
+- `deveye-server doctor` contrôle l'arbre `ui.widgets` quand le SDK l'annonce (échec sur ids dupliqués, parent ou schéma invalide).
+- Scénarios UI-01 et UI-02 de la suite `deveye-conformance` pour la route `ui.widgets`.
+- `RouteDomInspector::ui_tree()` et avertissement d'arbre périmé (> 2 s).
+- `deveye-sdk` : `log()` et `log_with()` poussent des logs vers `logs_tail` sans abonné `tracing`, `LogLevel` réexporté ; `layer()` / `DeveyeLayer` composent la capture avec le subscriber de l'hôte, et `try_install_tracing_layer()` signale un abonné global déjà installé (feature `tracing-layer`, par défaut) ([ADR-0066](docs/adr/0066-push-de-logs-et-layer-du-sdk.md)).
+- Sorties structurées MCP : les 28 outils à petite sortie (`target_info`, `wait_*`, `assert_selector`, `assert_state`, `window_geometry`, `focus_window`, `click_selector`, `click_text` et les acquittements) déclarent un `outputSchema` dans `tools/list` et renvoient un `structuredContent` égal à leur texte ; le texte reste identique à celui de la 1.0 ([ADR-0067](docs/adr/0067-sorties-structurees-mcp-palier-a.md)).
+- Erreurs MCP typées `ToolError { ok, reason, detail, hint?, candidates? }` pour `unsupported`, `sdk_unavailable` et `interaction_failed`, avec `structuredContent` identique au texte ; `reason` est une liste ouverte.
+- L'outil `state` porte `_meta` (`io.deveye/captured_at`, `io.deveye/entry_count`, `io.deveye/state_source`) sans changer son texte.
+- `deveye-core` dérive `schemars::JsonSchema` sur `WaitOutcome` et `WindowRect` derrière la feature optionnelle `schema` ([ADR-0063](docs/adr/0063-dependance-optionnelle-schemars-dans-deveye-core.md)).
+
+### Changed
+
+- Règle 5 du `CLAUDE.md` amendée : `schemars` est autorisée dans `deveye-core` derrière la feature optionnelle `schema`.
+- Le buffer de logs du SDK est un `std::sync::Mutex` sans canal de drain ; la capacité `logs` est annoncée dès qu'une source de logs est armée.
+- Le numéro de version du protocole reste 1.0 pour tout ajout additif (route de commande, capacité, champ), découvert par `capabilities` ; `docs/stability.md` gagne une section « Surface expérimentale » (features `unstable-*`).
+- `deveye_sdk::ui::OBSERVE_WINDOW` existe aussi en release ; `cargo test -p deveye-sdk --no-default-features` est vérifié en CI.
+- `deveye-sdk` avec `default-features = false` n'expose plus `install_tracing_layer`, `try_install_tracing_layer` ni `layer()` (sans effet en 1.0 ; consommateur 1.0 concerné à signaler).
+
+### Fixed
+
+- La détection d'un widget secret ignore la casse et les espaces du rôle `password` dans `deveye-core`, le serveur et la conformité ; le drapeau `secret` du format legacy est lu par `UiTree::from_value`.
+- Le lecteur legacy de `deveye.ui` conserve un `rect` de taille négative ou à valeur nulle au lieu de faire échouer tout l'arbre ; `validate` le relève (`NegativeSize`).
+- `try_install_tracing_layer` est désormais atomique (plus de `SubscriberAlreadySet` spurieux en cas d'appels concurrents).
+- La capacité `ui.widgets/1` n'est annoncée qu'une fois la route réellement enregistrée.
+
+### Security
+
+- L'outil `dom` et `invoke_command {name: "ui.widgets"}` remplacent par `<secret>` la valeur (`value`, et `text` du format legacy, enfants `children` compris) d'un widget secret et appliquent le masquage par clés aux autres champs d'un arbre de widgets ; une réponse qui n'a pas la forme d'un arbre de widgets est renvoyée intacte (durcissement de classe mineure, [`docs/stability.md`](docs/stability.md)).
+- Le SDK ne publie jamais la valeur d'un widget secret (`state.secret` ou rôle `password`) ([ADR-0064](docs/adr/0064-masquage-des-secrets-transversal-et-vecteurs-partages.md), [ADR-0065](docs/adr/0065-helper-sdk-ui-lecture-serveur-et-controles.md)).
+
 ## [1.0.0] - 2026-11-27
 
 Première version publique et stable. Le dépôt s'ouvre sous **AGPL-3.0-or-later** (outil : `deveye-server`, adapters, `deveye-conformance`, scripts) et **MIT** (bibliothèques embarquées : `deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`). Linux est la seule plateforme supportée. Le protocole du SDK passe en version 1.0, figé pour toute la série 1.x ([ADR-0061](docs/adr/0061-version-1-0-0-perimetre-de-la-sortie.md)).
@@ -110,6 +148,7 @@ Les versions `0.1.x` (juin 2026) n'ont pas été taguées ; leur contenu est ré
 
 - **0.1.x (2026-06-02 au 2026-07-03)** : mise en place du workspace hexagonal ; première capture et premières interactions via CDP ; pont natif du SDK quand CDP est indisponible ; audit CI (offline-first) et `cargo deny` ; wire protocol formalisé ; jalons M0 à M7 (réconciliation du SDK, capture KWin ScreenShot2, clic droit, filtre de cible CDP configurable, outils de scénarios `wait_*`, `assert_*` et `drag_drop`, `list_windows`, interaction OS-level Wayland via KWin EIS, domaine d'orchestration, `justfile` et repli plein écran) ; audit qualité du 25 juin et durcissements.
 
-[Non publié]: https://github.com/Morgan-Voltz/DevEye/compare/v1.0.0...HEAD
+[Non publié]: https://github.com/Morgan-Voltz/DevEye/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Morgan-Voltz/DevEye/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Morgan-Voltz/DevEye/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/Morgan-Voltz/DevEye/releases/tag/v0.2.0

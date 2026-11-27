@@ -1,6 +1,6 @@
 [package]
 name = "adapter-clipboard-wayland"
-version = "1.0.0"
+version = "1.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,7 +14,7 @@ publish = false  # interne, non publié
 workspace = true
 
 [dependencies]
-deveye-ports = { path = "../../deveye-ports", version = "1.0.0" }
+deveye-ports = { path = "../../deveye-ports", version = "1.1.0" }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["process", "io-util", "rt", "macros", "time"] }
 tracing = "0.1"
