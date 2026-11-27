@@ -149,7 +149,9 @@ jobs:
       - name: Dernier tag v1.*
         id: baseline
         run: |
-          tag="$(git tag --list 'v1.*' --sort=-v:refname | head -n 1)"
+          # Versions finales seulement : `v1.0.0-rc1` trie après `v1.0.0` en
+          # `v:refname` et fausserait la référence de comparaison.
+          tag="$(git tag --list 'v1.*' --sort=-v:refname | grep -E '^v1\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           if [ -z "${tag}" ]; then
             echo "Aucun tag v1.* : cargo-semver-checks sauté (rien à comparer)." >> "$GITHUB_STEP_SUMMARY"
@@ -163,10 +165,29 @@ jobs:
           tool: cargo-semver-checks
       - name: cargo semver-checks
         if: steps.baseline.outputs.tag != ''
+        # Sortie d'étape passée par l'environnement, jamais interpolée dans le
+        # script : un nom de tag peut contenir des métacaractères shell.
+        env:
+          BASELINE_TAG: ${{ steps.baseline.outputs.tag }}
         run: >-
           cargo semver-checks check-release
           -p deveye-core -p deveye-ports -p deveye-sdk -p deveye-sdk-client
-          --baseline-rev "${{ steps.baseline.outputs.tag }}"
+          --baseline-rev "$BASELINE_TAG"
+
+  # Frontière des licences et contenu des paquets des quatre crates publiables.
+  # Aucune publication ici (ADR-0004) : `cargo package --list` ne publie rien.
+  packaging:
+    name: Licences et paquets crates.io
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Aucun crate MIT ne dépend d'un crate AGPL
+        run: scripts/verify-license-boundary.sh
+      - name: Contenu des paquets (LICENSE-MIT embarquée)
+        run: scripts/verify-packages.sh
 
   # Inventaire de la chaîne d'approvisionnement (CycloneDX), en artefact.
   sbom:

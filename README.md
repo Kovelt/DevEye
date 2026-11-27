@@ -166,7 +166,7 @@ Documentation : [`docs/`](docs/) (usage, intégration, guides, plateformes, arch
 ## Développement
 
 ```bash
-just ci          # formatage, lint strict, tests, doc, Xvfb, e2e MCP, cargo deny, conformité, SDK no-op
+just ci          # formatage, lint strict, tests, doc, Xvfb, e2e MCP, cargo deny, conformité, SDK no-op, frontière des licences, paquets
 # cœur, à la main :
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings

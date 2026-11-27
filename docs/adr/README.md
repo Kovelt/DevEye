@@ -60,6 +60,10 @@ Option retenue, en une phrase.
 (Facultatif : références, preuves, chantier de suivi.)
 ```
 
+## À arbitrer avant le tag 1.0
+
+Les ADR « Proposé » ci-dessous sont déjà appliqués dans le code et la documentation et figent la surface 1.0 (`#[non_exhaustive]`, types `tokio` exposés par le SDK, annotations et version du protocole MCP, `doctor`, `PortError::Script`, CI de release). Le mainteneur doit les passer à « Accepté », ou les remplacer par un ADR plus récent et ajuster le code, **avant** de poser le tag : ADR-0012, 0020 à 0034, 0039, 0048 à 0053. Le choix d'exposer les types `tokio` (version majeure de `tokio` = surface du SDK) n'est consigné que dans ADR-0012 ; `docs/stability.md` en est le relais.
+
 ## Index
 
 | ADR | Titre | Statut |
@@ -116,3 +120,4 @@ Option retenue, en une phrase.
 | [0050](0050-clipboard-get-monde-ouvert-et-limites-de-la-classification.md) | `clipboard_get` en monde ouvert et limites de la classification des outils | Proposé |
 | [0051](0051-semantique-de-la-suite-de-conformite-skip-n-a-et-host-absent.md) | Sémantique de la suite de conformité : `SKIP`, `N/A`, `Host` absent | Proposé |
 | [0052](0052-erreurs-de-liaison-et-de-protocole-visibles-et-cles-secretes-cumulatives.md) | Erreurs de liaison et de protocole visibles, clés secrètes cumulatives | Proposé |
+| [0053](0053-porte-de-qualite-de-la-release-et-controles-de-packaging.md) | Porte de qualité de la release et contrôles de packaging | Proposé |

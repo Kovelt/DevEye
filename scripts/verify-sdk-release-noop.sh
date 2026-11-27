@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Preuve sur binaire réel que le SDK est un no-op en release (ADR-0037).
+# Preuve sur binaire réel que le SDK est un no-op en release (ADR-0039).
 #
 # 1. construit l'exemple `release_probe` en debug : il DOIT contenir les routes
 #    `/devtools/` (témoin positif : sans lui, une recherche vide ne prouverait

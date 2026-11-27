@@ -23,7 +23,7 @@ cargo test --workspace
 just x11      # cible x11 contre un Xvfb privé (tests #[ignore], bloquants en CI)
 just e2e      # session MCP de bout en bout
 just deny     # licences, avis RustSec, sources
-just ci       # tout ce que fait la CI
+just ci       # la CI en local, sauf msrv, semver et sbom (outils à part : `just msrv`, `just sbom`)
 ```
 
 La machine peut être lourdement sollicitée par une compilation complète : limitez le parallélisme si besoin (`CARGO_BUILD_JOBS=4`) et ne lancez pas deux commandes cargo à la fois. Les tests `live_*` des adapters KWin exigent une session KDE Plasma Wayland réelle et se lancent à la main ; ils ne sont pas requis pour une contribution qui ne les touche pas.
@@ -94,8 +94,8 @@ Pas de trailer de signature d'outil dans les messages. Un commit par sujet cohé
 
 ## Branches et revue
 
-- **GitHub Flow.** `main` est toujours propre et intégrable ; tout travail se fait sur une branche dédiée issue de `main`, nommée `<type>/<slug-kebab>` (`feature/inspecteur-signaux`, `fix/cdp-reconnect-timeout`, `docs/guide-wayland`), fusionnée par demande de fusion.
-- **Une demande de fusion** : décrit le *pourquoi*, renvoie à l'issue et à l'ADR concernés, et passe la CI (format, clippy, tests, documentation, Xvfb et e2e, MSRV, `cargo deny`, conformité, SDK no-op).
+- **GitHub Flow.** `main` est toujours propre et intégrable ; tout travail se fait sur une branche dédiée issue de `main`, nommée `<type>/<slug-kebab>` (`feat/inspecteur-signaux`, `fix/cdp-reconnect-timeout`, `docs/guide-wayland`), fusionnée par demande de fusion.
+- **Une demande de fusion** : décrit le *pourquoi*, renvoie à l'issue et à l'ADR concernés, et passe la CI (format, clippy, tests, documentation, Xvfb et e2e, MSRV, `cargo deny`, conformité, SDK no-op, semver, frontière MIT/AGPL et contenu des paquets).
 - **Revue** : le mainteneur relit le code, les tests et la documentation ; une contribution qui change du comportement documenté met à jour la documentation dans la même demande.
 - Les `unwrap`, les noms d'app cliente, les dépendances nouvelles et les changements de la surface stable sont les points sur lesquels la revue est la plus stricte.
 

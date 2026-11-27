@@ -6,15 +6,15 @@ default:
 
 # Build du binaire orchestrateur (release, pour .mcp.json)
 build:
-    cargo build --release -p deveye-server
+    cargo build --release --locked -p deveye-server
 
 # Tests du workspace
 test:
-    cargo test --workspace
+    cargo test --workspace --locked
 
 # Lint strict (echoue sur tout warning)
 lint:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # Formatage
 fmt:
@@ -26,7 +26,7 @@ fmt-check:
 
 # Conformite du wire protocol : SDK Rust en processus, ou `just conformance <url>` pour une implementation tierce
 conformance url="":
-    if [ -z "{{url}}" ]; then cargo test -p deveye-conformance -- --nocapture; else cargo run -q -p deveye-conformance -- --url "{{url}}"; fi
+    if [ -z "{{url}}" ]; then cargo test -p deveye-conformance --locked -- --nocapture; else cargo run -q --locked -p deveye-conformance -- --url "{{url}}"; fi
 
 # Documentation, avertissements rustdoc = erreurs (comme en CI)
 doc:
@@ -53,6 +53,14 @@ release-noop:
     cargo test --release --locked -p deveye-sdk --test release_noop
     scripts/verify-sdk-release-noop.sh
 
+# Frontiere des licences : aucun crate MIT ne depend d'un crate AGPL (ADR-0002)
+license-boundary:
+    scripts/verify-license-boundary.sh
+
+# Contenu des paquets des 4 crates publiables (LICENSE-MIT embarquee), sans rien publier
+packages:
+    scripts/verify-packages.sh
+
 # SBOM CycloneDX, un fichier .cdx.json par crate (requiert cargo-cyclonedx)
 sbom:
     cargo cyclonedx --format json
@@ -69,5 +77,5 @@ install:
 sync-deveye *args:
     ./scripts/sync-deveye.sh {{args}}
 
-# Pipeline CI complet en local (hors msrv et sbom, qui exigent des outils a part)
-ci: fmt-check lint test doc x11 e2e deny conformance release-noop
+# Pipeline CI en local, hors msrv, semver et sbom (outils a part ou tag de reference requis)
+ci: fmt-check lint test doc x11 e2e deny conformance release-noop license-boundary packages

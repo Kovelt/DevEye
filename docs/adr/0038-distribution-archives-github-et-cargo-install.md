@@ -25,7 +25,7 @@ Aucun artefact versionné n'existait : les apps clientes pointaient des binaires
 
 ## Décision
 
-Option 3, conformément à la décision du propriétaire. Le workflow `.github/workflows/release.yml`, déclenché par un tag `v*` :
+Option 3, conformément à la décision du propriétaire. Le workflow `.github/workflows/release.yml`, déclenché par un tag `vX.Y.Z` (ou une pré-version `vX.Y.Z-…`, voir ADR-0053) :
 
 - vérifie que le tag égale la version de `deveye-server` et qu'une section du `CHANGELOG.md` existe pour elle ;
 - construit `deveye-server` en release avec `--locked` ;

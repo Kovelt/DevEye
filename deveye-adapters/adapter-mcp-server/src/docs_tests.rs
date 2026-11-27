@@ -1,4 +1,4 @@
-//! Tests de cohérence entre la documentation et le code (ADR-0047).
+//! Tests de cohérence entre la documentation et le code (ADR-0048).
 //!
 //! Ils lisent les fichiers Markdown du dépôt et échouent quand la doc décrit
 //! autre chose que ce que le code fait : liste des outils du README et de
