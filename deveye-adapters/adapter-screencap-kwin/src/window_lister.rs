@@ -119,10 +119,10 @@ mod tests {
 
     #[test]
     fn window_info_from_json_empty_kind_falls_back_to_kwin() {
-        let v = serde_json::json!({"id": "abc", "title": "Atelier", "kind": ""});
+        let v = serde_json::json!({"id": "abc", "title": "Mon App", "kind": ""});
         let info = window_info_from_json(&v);
         assert_eq!(info.id, "abc");
-        assert_eq!(info.title, "Atelier");
+        assert_eq!(info.title, "Mon App");
         assert_eq!(info.kind, "kwin");
         assert_eq!(info.url, "");
     }

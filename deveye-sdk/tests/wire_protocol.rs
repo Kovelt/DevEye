@@ -115,7 +115,7 @@ async fn wire_protocol_contract_end_to_end() {
     // route inconnue => 404 + corps minimal { "error": "inconnue" }. La route
     // n'est PAS repetee dans le corps : elle est deja portee par
     // `PortError::Route` cote client, dont le Display la prefixe — la repeter
-    // donnait « commande X : commande inconnue : X » (audit C2-b, F2 Chronos).
+    // donnait « commande X : commande inconnue : X » (constaté en conditions réelles).
     let resp = http
         .post(url("/devtools/command"))
         .header(HOST, "localhost")

@@ -84,8 +84,7 @@
 //! interactions concurrentes pendant un re-render Dioxus touchaient le
 //! mauvais nœud (leçon du 5 juin 2026).
 //!
-//! Voir [`deveye.md`](../../../../../../docs/architecture/deveye.md) côté
-//! Chronos pour le contexte global.
+//! Voir `docs/architecture.md` pour le contexte global.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -901,9 +900,8 @@ fn internal<E: std::fmt::Display>(err: E) -> McpError {
 /// plutot que cette erreur protocolaire — cette fonction ne voit alors
 /// jamais la variante pour ces outils-la.
 ///
-/// Portage du banc d'essai Chronos du 28/06 (audit C2-c) : verifie en
-/// conditions reelles que « route inconnue » y remontait -32602 au lieu du
-/// -32603 aplati que produisait `internal` jusque-la.
+/// Verifie en conditions reelles qu'une « route inconnue » remonte -32602 et
+/// non le -32603 aplati que produisait `internal` auparavant.
 fn port_to_mcp(err: PortError) -> McpError {
     match &err {
         PortError::Route { .. } | PortError::Interaction(_) => {

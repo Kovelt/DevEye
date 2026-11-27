@@ -1,5 +1,5 @@
-//! SDK opt-in DevEye — à intégrer côté app cible (Chronos, FAS, etc.)
-//! **uniquement en `cfg(debug_assertions)`**.
+//! SDK opt-in DevEye — à intégrer côté app cible (par exemple une app Dioxus
+//! desktop) **uniquement en `cfg(debug_assertions)`**.
 //!
 //! Démarre un micro-serveur HTTP local sur `127.0.0.1:<port>` (par défaut
 //! `31337`) qui expose le state et les logs de l'app pour qu'un binaire
@@ -448,7 +448,7 @@ async fn command_handler(
             // Corps minimal : la route est déjà portée par `PortError::Route`
             // côté client, dont le Display la préfixe (« commande {route} :
             // {message} ») — la répéter ici donnait « commande X : commande
-            // inconnue : X » (constaté au banc d'essai Chronos, 28/06, F2).
+            // inconnue : X » (constaté en conditions réelles).
             Json(serde_json::json!({ "error": "inconnue" })),
         )
             .into_response(),

@@ -3,7 +3,7 @@
 //! Injecte des evenements d'entree dans n'importe quelle fenetre Wayland en
 //! passant par le protocole EIS de KWin (`org.kde.KWin.EIS.RemoteDesktop`),
 //! sans XWayland ni shim dans l'app cible. Seule voie d'interaction pour les
-//! cibles sans WebView ni SDK — au premier chef atlas Uno desktop (rendu Skia).
+//! cibles sans WebView ni SDK — par exemple une app Uno desktop (rendu Skia).
 //!
 //! # Flux
 //!

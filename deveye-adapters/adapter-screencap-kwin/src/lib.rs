@@ -16,7 +16,7 @@
 //!
 //! Prérequis système (dev-only) : KWin doit tourner avec
 //! `KWIN_SCREENSHOT_NO_PERMISSION_CHECKS=1` dans son environnement de session,
-//! sinon `CaptureWindow` renvoie `NoAuthorized`. Voir `docs/roadmap/M1-*`.
+//! sinon `CaptureWindow` renvoie `NoAuthorized`. Voir `docs/usage.md`.
 //!
 //! Aucune dépendance à une app cible : la fenêtre est désignée par sous-chaîne
 //! de titre, fournie à la construction.

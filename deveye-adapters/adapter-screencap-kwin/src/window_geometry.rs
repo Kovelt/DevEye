@@ -134,8 +134,8 @@ mod tests {
 
     #[test]
     fn build_geometry_script_lowercases_needle_and_reports_rect() {
-        let js = build_geometry_script("Mon \"Atelier\"", ":1.42");
-        assert!(js.contains(r#"var needle = "mon \"atelier\"""#));
+        let js = build_geometry_script("Mon \"App\"", ":1.42");
+        assert!(js.contains(r#"var needle = "mon \"app\"""#));
         assert!(js.contains(r#"var dest = ":1.42""#));
         assert!(js.contains("g.x"));
         assert!(js.contains("g.y"));

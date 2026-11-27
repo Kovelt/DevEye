@@ -46,7 +46,7 @@ mod tests {
 
     #[test]
     fn window_not_found_maps_to_unsupported() {
-        let p: PortError = KwinScreencapError::WindowNotFound("atelier".into()).into();
+        let p: PortError = KwinScreencapError::WindowNotFound("mon_app".into()).into();
         assert!(matches!(p, PortError::Unsupported(_)));
     }
 

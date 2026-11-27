@@ -107,8 +107,8 @@ mod tests {
 
     #[test]
     fn build_activate_script_lowercases_needle_and_sets_active() {
-        let js = build_activate_script("Mon \"Atelier\"", ":1.42");
-        assert!(js.contains(r#"var needle = "mon \"atelier\"""#));
+        let js = build_activate_script("Mon \"App\"", ":1.42");
+        assert!(js.contains(r#"var needle = "mon \"app\"""#));
         assert!(js.contains(r#"var dest = ":1.42""#));
         assert!(js.contains("workspace.activeWindow = w"));
         assert!(js.contains("workspace.activeClient = w"));

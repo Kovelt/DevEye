@@ -21,7 +21,7 @@ pub enum LogLevel {
 
 /// Événement de log capturé depuis une app cible.
 ///
-/// `target` correspond au module Rust qui émet le log (ex. `chronos_app::pages::agenda`).
+/// `target` correspond au module Rust qui émet le log (ex. `mon_app::pages::agenda`).
 /// `fields` porte les paires `key=value` posées par les macros `tracing` ; on
 /// les garde en `serde_json::Value` plutôt qu'en `BTreeMap<String,String>` parce
 /// que `tracing` autorise des types arbitraires.
@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn empty_fields_are_skipped_in_serialization() {
-        let event = LogEvent::new(LogLevel::Info, "chronos_app", "Hello");
+        let event = LogEvent::new(LogLevel::Info, "mon_app", "Hello");
         let serialized = serde_json::to_string(&event).unwrap();
         assert!(
             !serialized.contains("fields"),
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn populated_fields_are_serialized() {
-        let event = LogEvent::new(LogLevel::Warn, "chronos_app", "slow query")
+        let event = LogEvent::new(LogLevel::Warn, "mon_app", "slow query")
             .with_fields(json!({ "duration_ms": 1234 }));
         let serialized = serde_json::to_string(&event).unwrap();
         assert!(serialized.contains("\"duration_ms\":1234"));

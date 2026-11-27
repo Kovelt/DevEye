@@ -5,8 +5,8 @@
 //! format MCP sur stdio (`adapter-mcp-server`) pour qu'un client MCP — Claude
 //! Code via `.mcp.json`, par exemple — pilote l'app cible.
 //!
-//! Voir [`deveye.md`](../../../../../docs/architecture/deveye.md) cote
-//! Chronos pour le contexte global et le mode d'emploi.
+//! Voir `docs/architecture.md` pour le contexte global et `docs/usage.md`
+//! pour le mode d'emploi.
 
 mod cdp;
 mod cli;

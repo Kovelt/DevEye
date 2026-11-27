@@ -331,8 +331,8 @@ mod tests {
 
     #[test]
     fn build_resolve_script_inline_needle_lowercase_and_escapes() {
-        let js = build_resolve_script("Mon \"Atelier\"", ":1.42");
-        assert!(js.contains(r#"var needle = "mon \"atelier\"""#));
+        let js = build_resolve_script("Mon \"App\"", ":1.42");
+        assert!(js.contains(r#"var needle = "mon \"app\"""#));
         assert!(js.contains(r#"var dest = ":1.42""#));
         assert!(js.contains("callDBus(dest"));
         assert!(js.contains("org.deveye.KwinBridge"));

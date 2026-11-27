@@ -19,8 +19,8 @@ const CAP_POINTER: i32 = 2;
 /// Proxy D-Bus vers `org.kde.KWin.EIS.RemoteDesktop`.
 ///
 /// Signature réelle vérifiée sur KWin 6.7 (Plasma 6) :
-/// `connectToEIS(i capabilities) -> (h fd, i serial)`. Le doc de roadmap
-/// supposait à tort `connectToEIS()` sans argument.
+/// `connectToEIS(i capabilities) -> (h fd, i serial)`. Une conception
+/// antérieure supposait à tort `connectToEIS()` sans argument.
 #[zbus::proxy(
     interface = "org.kde.KWin.EIS.RemoteDesktop",
     default_service = "org.kde.KWin",
