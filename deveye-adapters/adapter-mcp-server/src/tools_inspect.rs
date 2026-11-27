@@ -417,7 +417,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Décrit la cible active et ses capacités : `{ target, effective_backend, eyes, hands, eval_js, dom, state, console_errors, list_windows, window_geometry, focus_window, window_manager, clipboard, js_dependent_tools, server, notes }`. Permet de savoir d'avance quels outils répondront (ex. eval_js/dom = false en kwin-eis) sans tenter un appel pour le découvrir ; `effective_backend` dit si le repli du mode auto est actif ; `server` donne version, commit et versions des protocoles.",
+        description = "Décrit la cible active et ses capacités : `{ target, effective_backend, eyes, hands, eval_js, dom, state, console_errors, list_windows, window_geometry, focus_window, window_manager, clipboard, js_dependent_tools, server, notes, elements? }` (`elements`, expérimental, hors promesse semver : présent et vrai quand `snapshot` et `act` répondent sur la cible, absent sinon). Permet de savoir d'avance quels outils répondront (ex. eval_js/dom = false en kwin-eis) sans tenter un appel pour le découvrir ; `effective_backend` dit si le repli du mode auto est actif ; `server` donne version, commit et versions des protocoles.",
         output_schema = output_schema::<TargetInfo>(),
         annotations(
             read_only_hint = true,
