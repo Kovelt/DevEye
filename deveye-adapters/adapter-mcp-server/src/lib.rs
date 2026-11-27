@@ -2,7 +2,7 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Quarante-trois outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Quarante-quatre outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `screenshot_region` : capture puis recadre sur (x, y, width, height)
 //! - `screenshot_element` : capture recadrée sur le rect d'un sélecteur CSS
@@ -70,6 +70,13 @@
 //!   joignable (raccourci du prédicat `target-alive`)
 //! - `wait_ready` : attend que l'app publie un state non vide (app prête)
 //! - `target_info` : décrit la cible active et ses capacités (eval_js, dom…)
+//! - `observe` : outil composite — capture bornée, résumé de l'arbre, état,
+//!   erreurs console et logs récents en un appel (ADR-0029)
+//!
+//! **Annotations (ADR-0027)** : chaque outil porte les quatre indices MCP
+//! (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) ; un
+//! test échoue si un outil n'est pas classé. **Protocole (ADR-0028)** : version
+//! [`MCP_PROTOCOL_VERSION`], transport stdio seul.
 //!
 //! `wait_for_selector` accepte aussi `negate` (attendre la disparition d'un
 //! élément — « wait_for_gone »).
@@ -95,10 +102,10 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
+use base64::engine::general_purpose::STANDARD as B64;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, ContentBlock, ServerCapabilities, ServerConfig},
+    model::{CallToolResult, ContentBlock, ProtocolVersion, ServerCapabilities, ServerConfig},
     service::ServiceExt,
     tool, tool_handler, tool_router,
     transport::stdio,
@@ -107,6 +114,8 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
+
+use imaging::{CaptureOptions, Region};
 
 use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, StateDump, WaitPredicate};
 use deveye_ports::{
@@ -119,10 +128,19 @@ use deveye_ports::{
 // (chacun `use super::*;` pour voir DeveyeMcpServer, les structs de
 // parametres et les helpers ci-dessous) — lib.rs ne garde que la definition
 // du serveur, les helpers communs et l'assemblage des routeurs (`new`).
+mod imaging;
 mod tools_capture;
 mod tools_inspect;
 mod tools_interaction;
+mod tools_observe;
 mod tools_wait;
+
+/// Version du protocole MCP annoncée à l'`initialize` et plafond de la
+/// négociation (ADR-0028). Transport : stdio uniquement. Les clients plus
+/// anciens (>= 2024-11-05) négocient à la baisse ; les annotations d'outils
+/// (ADR-0027) existent depuis 2025-03-26 et sont ignorées des clients plus
+/// anciens.
+pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// E4 : timeout par defaut partage par tous les outils `wait_*` a boucle de
 /// polling explicite, quand `timeout_ms` est omis par l'appelant. Une seule
@@ -500,6 +518,13 @@ struct WaitReadyParams {
     timeout_ms: u64,
 }
 
+/// `screenshot` : aucune sélection, seulement les options de coût (ADR-0029).
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+struct ScreenshotParams {
+    #[serde(flatten)]
+    capture: CaptureOptions,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ScreenshotRegionParams {
     /// Abscisse du coin haut-gauche de la région (pixels du screenshot).
@@ -510,6 +535,8 @@ struct ScreenshotRegionParams {
     width: u32,
     /// Hauteur de la région.
     height: u32,
+    #[serde(flatten)]
+    capture: CaptureOptions,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -531,6 +558,17 @@ struct AssertVisualParams {
     width: Option<u32>,
     #[serde(default)]
     height: Option<u32>,
+    /// Rectangles à ignorer (horloge, curseur, animation), en pixels de l'image
+    /// comparée — relatifs à la région si `x/y/width/height` sont fournis. Les
+    /// pixels masqués sont exclus de la comparaison **et** du dénominateur de
+    /// `diff_ratio`.
+    #[serde(default)]
+    ignore_regions: Option<Vec<Region>>,
+    /// Si `true`, remplace la baseline par la capture courante (même si elle
+    /// existe) au lieu de comparer : à n'utiliser qu'après avoir validé le
+    /// changement visuel. Défaut `false`.
+    #[serde(default)]
+    update_baseline: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -545,6 +583,8 @@ struct ScreenshotElementParams {
     /// Sélecteur CSS de l'élément à capturer (le premier match). L'élément est
     /// défilé au centre, puis la capture est recadrée sur son `BoundingClientRect`.
     selector: String,
+    #[serde(flatten)]
+    capture: CaptureOptions,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -688,6 +728,7 @@ impl DeveyeMcpServer {
             + Self::interaction_router()
             + Self::inspect_router()
             + Self::wait_router()
+            + Self::observe_router()
     }
 
     /// Lance le serveur MCP en stdio. Bloque jusqu'à la fermeture du client.
@@ -782,6 +823,7 @@ impl ServerHandler for DeveyeMcpServer {
         // `ServerConfig` est `#[non_exhaustive]` : on part du default et on
         // mute les champs qui nous intéressent.
         let mut info = ServerConfig::default();
+        info.protocol_version = ProtocolVersion::V_2025_11_25;
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
             "DevEye MCP — observe et pilote une app vivante en dev. \
@@ -794,12 +836,20 @@ impl ServerHandler for DeveyeMcpServer {
              wait_for_selector, wait_for_text, find_element, assert_selector, \
              drag_drop, collect_console_errors, list_windows, wait_condition, \
              wait_for_log, wait_screenshot_region, wait_target_alive, \
-             wait_ready, target_info. \
+             wait_ready, target_info, observe. \
              Appeler target_info en premier pour connaitre les capacites de la \
-             cible (eval_js/dom indisponibles en kwin-eis)."
+             cible (eval_js/dom indisponibles en kwin-eis). observe resume \
+             l'app en un appel (capture reduite, arbre, etat, console, logs)."
                 .to_string(),
         );
         info
+    }
+
+    /// ADR-0028 : on n'annonce que les révisions du protocole qu'on a testées,
+    /// jusqu'à [`MCP_PROTOCOL_VERSION`] ; la révision suivante du SDK (sans
+    /// `initialize`, par requête) n'est pas implémentée ici.
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        std::borrow::Cow::Borrowed(ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_11_25))
     }
 }
 
@@ -1148,61 +1198,13 @@ fn crop_png(png: &[u8], x: u32, y: u32, width: u32, height: u32) -> Result<Vec<u
     Ok(out)
 }
 
-/// Resultat d'une comparaison visuelle (`assert_visual`).
-struct VisualOutcome {
-    /// Vrai si baseline et capture ont les memes dimensions.
-    same_dims: bool,
-    /// Ratio de pixels differents (0.0–1.0). `1.0` si les dimensions different.
-    diff_ratio: f64,
-    baseline_dims: (u32, u32),
-    current_dims: (u32, u32),
-}
-
-/// Compare deux PNG pixel a pixel (RGBA). Des dimensions differentes => echec
-/// (`same_dims=false`, `diff_ratio=1.0`) sans iterer. Sinon, ratio de pixels
-/// non identiques sur le total.
-fn visual_diff(baseline_png: &[u8], current_png: &[u8]) -> Result<VisualOutcome, String> {
-    let a = image::load_from_memory(baseline_png)
-        .map_err(|e| format!("decode baseline : {e}"))?
-        .to_rgba8();
-    let b = image::load_from_memory(current_png)
-        .map_err(|e| format!("decode capture : {e}"))?
-        .to_rgba8();
-    let baseline_dims = a.dimensions();
-    let current_dims = b.dimensions();
-    if baseline_dims != current_dims {
-        return Ok(VisualOutcome {
-            same_dims: false,
-            diff_ratio: 1.0,
-            baseline_dims,
-            current_dims,
-        });
-    }
-    let total = (baseline_dims.0 as u64) * (baseline_dims.1 as u64);
-    let diff = a
-        .pixels()
-        .zip(b.pixels())
-        .filter(|(pa, pb)| pa != pb)
-        .count() as u64;
-    let diff_ratio = if total == 0 {
-        0.0
-    } else {
-        diff as f64 / total as f64
-    };
-    Ok(VisualOutcome {
-        same_dims: true,
-        diff_ratio,
-        baseline_dims,
-        current_dims,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         crop_png, dom_size_guard, filter_state_entries, png_dimensions, selector_assertion_ok,
-        truncate_recent, visual_diff, DOM_MAX_BYTES,
+        truncate_recent, DOM_MAX_BYTES,
     };
+    use crate::imaging::visual_diff;
     use deveye_core::{InteractionCommand, MouseButton, Position};
 
     /// Encode une image RGBA unie de `w`x`h` en PNG (helper de test).
@@ -1250,7 +1252,7 @@ mod tests {
     #[test]
     fn visual_diff_identical_is_zero() {
         let a = solid_png(4, 4, [10, 20, 30, 255]);
-        let out = visual_diff(&a, &a).expect("diff ok");
+        let out = visual_diff(&a, &a, &[]).expect("diff ok");
         assert!(out.same_dims);
         assert_eq!(out.diff_ratio, 0.0);
     }
@@ -1259,7 +1261,7 @@ mod tests {
     fn visual_diff_dimension_mismatch_is_max() {
         let a = solid_png(4, 4, [0, 0, 0, 255]);
         let b = solid_png(8, 8, [0, 0, 0, 255]);
-        let out = visual_diff(&a, &b).expect("diff ok");
+        let out = visual_diff(&a, &b, &[]).expect("diff ok");
         assert!(!out.same_dims);
         assert_eq!(out.diff_ratio, 1.0);
         assert_eq!(out.baseline_dims, (4, 4));
@@ -1281,7 +1283,7 @@ mod tests {
         };
         let a = encode(&mut a_img);
         let b = encode(&mut b_img);
-        let out = visual_diff(&a, &b).expect("diff ok");
+        let out = visual_diff(&a, &b, &[]).expect("diff ok");
         assert!(out.same_dims);
         assert!(
             (out.diff_ratio - 0.25).abs() < 1e-9,
@@ -1447,6 +1449,7 @@ mod tests {
 /// plutot qu'erreur JSON-RPC opaque) sur les traits mockes ici.
 #[cfg(test)]
 mod dispatch_tests {
+    use super::tools_observe::ObserveParams;
     use super::*;
     use async_trait::async_trait;
     use deveye_core::{
@@ -1464,11 +1467,21 @@ mod dispatch_tests {
     // l'interessent via `server_with`.
     // ------------------------------------------------------------------
 
+    /// PNG 2x2 valide : les outils de capture lisent désormais l'en-tête de
+    /// l'image pour rapporter sa taille et son échelle (ADR-0029).
+    fn tiny_png() -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([9, 9, 9, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("encodage PNG de test");
+        out
+    }
+
     struct NoopRenderer;
     #[async_trait]
     impl Renderer for NoopRenderer {
         async fn screenshot(&self) -> PortResult<Screenshot> {
-            Ok(Screenshot::new_png(vec![0u8; 4], Size::new(2, 2)))
+            Ok(Screenshot::new_png(tiny_png(), Size::new(2, 2)))
         }
         async fn viewport_size(&self) -> PortResult<Size> {
             Ok(Size::new(2, 2))
@@ -1772,7 +1785,7 @@ mod dispatch_tests {
     #[async_trait]
     impl Renderer for SizedRenderer {
         async fn screenshot(&self) -> PortResult<Screenshot> {
-            Ok(Screenshot::new_png(vec![0u8; 4], Size::new(2, 2)))
+            Ok(Screenshot::new_png(tiny_png(), Size::new(2, 2)))
         }
         async fn viewport_size(&self) -> PortResult<Size> {
             self.0
@@ -2173,7 +2186,7 @@ mod dispatch_tests {
             ports.renderer = Arc::new(SizedRenderer(Some(Size::new(800, 600))));
         });
         let result = server
-            .screenshot()
+            .screenshot(Parameters(ScreenshotParams::default()))
             .await
             .expect("pas d'erreur protocolaire");
         assert_eq!(result.content.len(), 2);
@@ -2181,6 +2194,8 @@ mod dispatch_tests {
         let meta = meta_json(&result);
         assert!(is_rfc3339(&meta["captured_at"]), "{meta}");
         assert_eq!(meta["viewport"], json!({ "width": 2, "height": 2 }));
+        assert_eq!(meta["image"]["scale"], 1.0, "{meta}");
+        assert_eq!(meta["image"]["format"], "png");
     }
 
     #[tokio::test]
@@ -2631,7 +2646,7 @@ mod dispatch_tests {
     impl Renderer for ProbedRenderer {
         async fn screenshot(&self) -> PortResult<Screenshot> {
             self.0.enter_then_wait().await;
-            Ok(Screenshot::new_png(vec![0u8; 4], Size::new(2, 2)))
+            Ok(Screenshot::new_png(tiny_png(), Size::new(2, 2)))
         }
         async fn viewport_size(&self) -> PortResult<Size> {
             Ok(Size::new(2, 2))
@@ -2663,9 +2678,10 @@ mod dispatch_tests {
         // instrumentes.
         let s1 = server.clone();
         let s2 = server.clone();
-        let (r1, r2) = tokio::join!(async move { s1.screenshot().await }, async move {
-            s2.dom().await
-        });
+        let (r1, r2) = tokio::join!(
+            async move { s1.screenshot(Parameters(ScreenshotParams::default())).await },
+            async move { s2.dom().await }
+        );
         assert!(r1.is_ok());
         assert!(r2.is_ok());
         assert_eq!(
@@ -2710,5 +2726,724 @@ mod dispatch_tests {
             .expect("pas d'erreur protocolaire");
         assert_eq!(result.is_error, Some(true));
         assert_eq!(body_json(&result)["ready"], false);
+    }
+
+    // ------------------------------------------------------------------
+    // Annotations d'outils et version de protocole (ADR-0027, ADR-0028).
+    // ------------------------------------------------------------------
+
+    /// Classification attendue de CHAQUE outil : (nom, read_only, destructive,
+    /// idempotent, open_world). Ajouter un outil impose de le classer ici, donc
+    /// de réfléchir à son risque (règle dans ADR-0027 et docs/usage.md).
+    const CLASSIFICATION: &[(&str, bool, bool, bool, bool)] = &[
+        // Observation pure.
+        ("screenshot", true, false, true, false),
+        ("screenshot_region", true, false, true, false),
+        ("dom", true, false, true, false),
+        ("state", true, false, true, false),
+        ("assert_state", true, false, true, false),
+        ("find_element", true, false, true, false),
+        ("assert_selector", true, false, true, false),
+        ("list_commands", true, false, true, false),
+        ("target_info", true, false, true, false),
+        ("list_windows", true, false, true, false),
+        ("window_geometry", true, false, true, false),
+        ("clipboard_get", true, false, true, false),
+        ("wait_for_selector", true, false, true, false),
+        ("wait_for_text", true, false, true, false),
+        ("wait_screenshot_region", true, false, true, false),
+        ("wait_target_alive", true, false, true, false),
+        ("wait_ready", true, false, true, false),
+        // Observation qui draine un buffer de l'observateur (non idempotente).
+        ("logs_tail", true, false, false, false),
+        ("logs_wait", true, false, false, false),
+        ("collect_console_errors", true, false, false, false),
+        ("wait_for_log", true, false, false, false),
+        ("wait_condition", true, false, false, false),
+        ("observe", true, false, false, false),
+        // Modifie l'app de façon non destructive.
+        ("screenshot_element", false, false, true, false),
+        ("hover", false, false, true, false),
+        ("resize", false, false, true, false),
+        ("focus_window", false, false, true, false),
+        ("click", false, false, false, false),
+        ("right_click", false, false, false, false),
+        ("double_click", false, false, false, false),
+        ("click_selector", false, false, false, false),
+        ("click_text", false, false, false, false),
+        ("type_text", false, false, false, false),
+        ("press_key", false, false, false, false),
+        ("drag_drop", false, false, false, false),
+        ("handle_dialog", false, false, false, false),
+        ("scroll", false, false, false, false),
+        // Potentiellement destructif (écrase, quitte, exécute du code arbitraire).
+        ("assert_visual", false, true, false, false),
+        ("key_combo", false, true, false, false),
+        ("navigate", false, true, true, false),
+        ("upload_file", false, true, true, false),
+        ("clipboard_set", false, true, true, false),
+        ("eval_js", false, true, false, true),
+        ("invoke_command", false, true, false, true),
+    ];
+
+    #[test]
+    fn every_tool_is_annotated_and_classified() {
+        let tools = DeveyeMcpServer::tool_router().list_all();
+        let mut seen = Vec::new();
+        for tool in &tools {
+            let name = tool.name.as_ref();
+            let a = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("l'outil `{name}` n'a aucune annotation (ADR-0027)"));
+            let hints = (
+                a.read_only_hint,
+                a.destructive_hint,
+                a.idempotent_hint,
+                a.open_world_hint,
+            );
+            let (Some(ro), Some(de), Some(id), Some(ow)) = hints else {
+                panic!("l'outil `{name}` doit poser les QUATRE indices explicitement : {hints:?}");
+            };
+            assert!(
+                !(ro && de),
+                "`{name}` ne peut être à la fois lecture seule et destructif"
+            );
+            let expected = CLASSIFICATION
+                .iter()
+                .find(|(n, ..)| *n == name)
+                .unwrap_or_else(|| panic!("`{name}` absent de CLASSIFICATION : le classer"));
+            assert_eq!(
+                (ro, de, id, ow),
+                (expected.1, expected.2, expected.3, expected.4),
+                "classification de `{name}`"
+            );
+            seen.push(name.to_string());
+        }
+        for (name, ..) in CLASSIFICATION {
+            assert!(
+                seen.iter().any(|s| s == name),
+                "CLASSIFICATION cite `{name}`, qui n'est plus un outil"
+            );
+        }
+        assert_eq!(tools.len(), CLASSIFICATION.len());
+    }
+
+    #[test]
+    fn capture_tools_expose_the_cost_options_in_their_input_schema() {
+        let tools = DeveyeMcpServer::tool_router().list_all();
+        for name in [
+            "screenshot",
+            "screenshot_region",
+            "screenshot_element",
+            "observe",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|t| t.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("outil {name} absent"));
+            let props = tool
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .unwrap_or_else(|| panic!("{name} : schéma sans propriétés"));
+            for opt in ["max_width", "format", "quality"] {
+                assert!(props.contains_key(opt), "{name} sans `{opt}` : {props:?}");
+            }
+        }
+    }
+
+    fn init_request(version: ProtocolVersion) -> rmcp::model::InitializeRequestParams {
+        rmcp::model::InitializeRequestParams::new(
+            rmcp::model::ClientCapabilities::default(),
+            rmcp::model::Implementation::new("test", "0"),
+        )
+        .with_protocol_version(version)
+    }
+
+    #[test]
+    fn protocol_version_is_pinned_and_negotiated_down_from_newer_clients() {
+        assert_eq!(MCP_PROTOCOL_VERSION, ProtocolVersion::V_2025_11_25.as_str());
+        let server = server_with(|_| {});
+        assert_eq!(
+            server.get_info().protocol_version,
+            ProtocolVersion::V_2025_11_25
+        );
+        for (asked, answered) in [
+            (ProtocolVersion::V_2025_11_25, ProtocolVersion::V_2025_11_25),
+            (ProtocolVersion::V_2025_06_18, ProtocolVersion::V_2025_06_18),
+            // Un client plus récent que notre plafond est ramené au plafond.
+            (ProtocolVersion::V_2026_07_28, ProtocolVersion::V_2025_11_25),
+        ] {
+            let result = server
+                .negotiate_initialize(&init_request(asked.clone()))
+                .expect("négociation");
+            assert_eq!(
+                result.protocol_version, answered,
+                "client demandant {asked}"
+            );
+        }
+        assert!(!server
+            .supported_protocol_versions()
+            .contains(&ProtocolVersion::V_2026_07_28));
+    }
+
+    // ------------------------------------------------------------------
+    // Options de coût des captures (ADR-0029).
+    // ------------------------------------------------------------------
+
+    fn png_of(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbaImage::from_pixel(w, h, image::Rgba(rgba))
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("encodage PNG de test");
+        out
+    }
+
+    /// Renderer dont le PNG est modifiable par le test entre deux captures.
+    #[derive(Clone)]
+    struct SwitchRenderer(Arc<Mutex<Vec<u8>>>);
+    impl SwitchRenderer {
+        fn new(png: Vec<u8>) -> Self {
+            Self(Arc::new(Mutex::new(png)))
+        }
+        fn set(&self, png: Vec<u8>) {
+            *self.0.lock().unwrap() = png;
+        }
+    }
+    #[async_trait]
+    impl Renderer for SwitchRenderer {
+        async fn screenshot(&self) -> PortResult<Screenshot> {
+            let png = self.0.lock().unwrap().clone();
+            let (w, h) = png_dimensions(&png).expect("PNG de test");
+            Ok(Screenshot::new_png(png, Size::new(w, h)))
+        }
+        async fn viewport_size(&self) -> PortResult<Size> {
+            let (w, h) = png_dimensions(&self.0.lock().unwrap()).expect("PNG de test");
+            Ok(Size::new(w, h))
+        }
+    }
+
+    fn capture_options(
+        max_width: Option<u32>,
+        format: Option<&str>,
+        quality: Option<u32>,
+    ) -> CaptureOptions {
+        serde_json::from_value(json!({
+            "max_width": max_width, "format": format, "quality": quality
+        }))
+        .expect("options de capture")
+    }
+
+    #[tokio::test]
+    async fn screenshot_max_width_reports_size_and_scale() {
+        let server = server_with(|p| {
+            p.renderer = Arc::new(SwitchRenderer::new(png_of(400, 200, [1, 2, 3, 255])));
+        });
+        let result = server
+            .screenshot(Parameters(ScreenshotParams {
+                capture: capture_options(Some(100), None, None),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        let image = result.content[0].as_image().expect("image");
+        let bytes = base64::Engine::decode(&B64, &image.data).expect("base64");
+        assert_eq!(png_dimensions(&bytes).unwrap(), (100, 50));
+        let meta = meta_json(&result);
+        assert_eq!(meta["image"]["width"], 100);
+        assert_eq!(meta["image"]["source_width"], 400);
+        assert_eq!(meta["image"]["scale"], 0.25);
+        assert_eq!(meta["viewport"], json!({ "width": 400, "height": 200 }));
+    }
+
+    #[tokio::test]
+    async fn screenshot_jpeg_has_the_jpeg_mime_type() {
+        let server = server_with(|p| {
+            p.renderer = Arc::new(SwitchRenderer::new(png_of(64, 64, [200, 10, 10, 255])));
+        });
+        let result = server
+            .screenshot(Parameters(ScreenshotParams {
+                capture: capture_options(None, Some("jpeg"), Some(70)),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        let image = result.content[0].as_image().expect("image");
+        assert_eq!(image.mime_type, "image/jpeg");
+        assert_eq!(meta_json(&result)["image"]["format"], "jpeg");
+    }
+
+    #[tokio::test]
+    async fn invalid_capture_options_are_invalid_params_before_any_capture() {
+        let server = server_with(|_| {});
+        for bad in [
+            capture_options(Some(0), None, None),
+            capture_options(None, Some("bmp"), None),
+            capture_options(None, Some("jpeg"), Some(500)),
+        ] {
+            let err = server
+                .screenshot(Parameters(ScreenshotParams { capture: bad }))
+                .await
+                .expect_err("options invalides");
+            assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        }
+    }
+
+    #[tokio::test]
+    async fn screenshot_region_carries_origin_and_scale() {
+        let server = server_with(|p| {
+            p.renderer = Arc::new(SwitchRenderer::new(png_of(400, 200, [1, 2, 3, 255])));
+        });
+        let result = server
+            .screenshot_region(Parameters(ScreenshotRegionParams {
+                x: 40,
+                y: 20,
+                width: 200,
+                height: 100,
+                capture: capture_options(Some(50), None, None),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.content.len(), 2);
+        let meta = meta_json(&result);
+        assert_eq!(meta["image"]["origin"], json!({ "x": 40, "y": 20 }));
+        assert_eq!(meta["image"]["source_width"], 200);
+        assert_eq!(meta["image"]["width"], 50);
+        assert_eq!(meta["image"]["scale"], 0.25);
+    }
+
+    #[tokio::test]
+    async fn screenshot_element_carries_origin_and_scale() {
+        let server = server_with(|p| {
+            p.renderer = Arc::new(SwitchRenderer::new(png_of(400, 200, [1, 2, 3, 255])));
+            p.evaluator = Arc::new(FixedEval(json!({
+                "found": true, "x": 10.0, "y": 20.0, "width": 100.0, "height": 50.0
+            })));
+        });
+        let result = server
+            .screenshot_element(Parameters(ScreenshotElementParams {
+                selector: "#x".to_string(),
+                capture: capture_options(Some(50), None, None),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        let meta = meta_json(&result);
+        assert_eq!(meta["image"]["origin"], json!({ "x": 10, "y": 20 }));
+        assert_eq!(meta["image"]["scale"], 0.5);
+    }
+
+    // ------------------------------------------------------------------
+    // assert_visual enrichi (ADR-0030).
+    // ------------------------------------------------------------------
+
+    fn scratch_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("deveye-av-{}-{name}", std::process::id()))
+    }
+
+    fn visual_params(path: &std::path::Path) -> AssertVisualParams {
+        serde_json::from_value(json!({ "baseline_path": path.to_str().unwrap() }))
+            .expect("params assert_visual")
+    }
+
+    fn png_with_pixels(w: u32, h: u32, lit: &[(u32, u32)]) -> Vec<u8> {
+        let mut img = image::RgbaImage::from_pixel(w, h, image::Rgba([0, 0, 0, 255]));
+        for &(x, y) in lit {
+            img.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+        }
+        let mut out = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .expect("encodage PNG de test");
+        out
+    }
+
+    #[tokio::test]
+    async fn assert_visual_failure_returns_the_diff_image_and_bbox() {
+        let path = scratch_path("fail.png");
+        let _ = std::fs::remove_file(&path);
+        let renderer = SwitchRenderer::new(png_with_pixels(20, 10, &[]));
+        let server = server_with(|p| p.renderer = Arc::new(renderer.clone()));
+        // 1re passe : crée la baseline.
+        let created = server
+            .assert_visual(Parameters(visual_params(&path)))
+            .await
+            .expect("création");
+        assert_eq!(body_json(&created)["created"], true);
+        // 2e passe : capture différente => échec avec image de différence.
+        renderer.set(png_with_pixels(20, 10, &[(3, 4), (5, 6)]));
+        let mut params = visual_params(&path);
+        params.threshold = Some(0.0);
+        let result = server
+            .assert_visual(Parameters(params))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(result.content.len(), 2, "JSON puis image de différence");
+        let payload = body_json(&result);
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["diff_pixels"], 2);
+        assert_eq!(payload["compared_pixels"], 200);
+        assert_eq!(
+            payload["diff_bbox"],
+            json!({ "x": 3, "y": 4, "width": 3, "height": 3 })
+        );
+        assert_eq!(payload["diff_image"]["scale"], 1.0);
+        let image = result.content[1].as_image().expect("image de différence");
+        let bytes = base64::Engine::decode(&B64, &image.data).expect("base64");
+        let img = image::load_from_memory(&bytes).expect("PNG").to_rgba8();
+        assert_eq!(img.get_pixel(3, 4).0, [255, 0, 0, 255]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn assert_visual_ignore_regions_make_a_moving_zone_pass() {
+        let path = scratch_path("mask.png");
+        let _ = std::fs::remove_file(&path);
+        let renderer = SwitchRenderer::new(png_with_pixels(20, 10, &[]));
+        let server = server_with(|p| p.renderer = Arc::new(renderer.clone()));
+        server
+            .assert_visual(Parameters(visual_params(&path)))
+            .await
+            .expect("création");
+        // Un pixel change dans la zone « horloge » (en haut à droite).
+        renderer.set(png_with_pixels(20, 10, &[(18, 1)]));
+        let mut params = visual_params(&path);
+        params.threshold = Some(0.0);
+        let unmasked = server
+            .assert_visual(Parameters(params))
+            .await
+            .expect("sans masque");
+        assert_eq!(unmasked.is_error, Some(true));
+
+        let mut params = visual_params(&path);
+        params.threshold = Some(0.0);
+        params.ignore_regions = Some(vec![Region {
+            x: 15,
+            y: 0,
+            width: 5,
+            height: 3,
+        }]);
+        let masked = server
+            .assert_visual(Parameters(params))
+            .await
+            .expect("avec masque");
+        assert_eq!(masked.is_error, Some(false));
+        let payload = body_json(&masked);
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["compared_pixels"], 185);
+        assert_eq!(payload["ignored_regions"], 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn assert_visual_update_baseline_replaces_the_reference() {
+        let path = scratch_path("update.png");
+        let _ = std::fs::remove_file(&path);
+        let renderer = SwitchRenderer::new(png_with_pixels(8, 8, &[]));
+        let server = server_with(|p| p.renderer = Arc::new(renderer.clone()));
+        server
+            .assert_visual(Parameters(visual_params(&path)))
+            .await
+            .expect("création");
+        let changed = png_with_pixels(8, 8, &[(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)]);
+        renderer.set(changed.clone());
+        let mut params = visual_params(&path);
+        params.update_baseline = Some(true);
+        let result = server
+            .assert_visual(Parameters(params))
+            .await
+            .expect("mise à jour");
+        assert_eq!(result.is_error, Some(false));
+        let payload = body_json(&result);
+        assert_eq!(payload["updated"], true);
+        assert_eq!(payload["created"], false);
+        assert_eq!(std::fs::read(&path).expect("baseline"), changed);
+        // La nouvelle référence est comparée comme identique.
+        let again = server
+            .assert_visual(Parameters(visual_params(&path)))
+            .await
+            .expect("comparaison");
+        assert_eq!(body_json(&again)["ok"], true);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn assert_visual_dimension_mismatch_has_no_diff_image() {
+        let path = scratch_path("dims.png");
+        let _ = std::fs::remove_file(&path);
+        let renderer = SwitchRenderer::new(png_with_pixels(8, 8, &[]));
+        let server = server_with(|p| p.renderer = Arc::new(renderer.clone()));
+        server
+            .assert_visual(Parameters(visual_params(&path)))
+            .await
+            .expect("création");
+        renderer.set(png_with_pixels(10, 8, &[]));
+        let result = server
+            .assert_visual(Parameters(visual_params(&path)))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(result.content.len(), 1);
+        assert_eq!(body_json(&result)["same_dims"], false);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn assert_visual_empty_mask_is_invalid_params_and_never_captures() {
+        let path = scratch_path("badmask.png");
+        let mut params = visual_params(&path);
+        params.ignore_regions = Some(vec![Region {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 4,
+        }]);
+        let err = server_with(|_| {})
+            .assert_visual(Parameters(params))
+            .await
+            .expect_err("masque vide");
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(!path.exists());
+    }
+
+    // ------------------------------------------------------------------
+    // Outil composite observe (ADR-0029).
+    // ------------------------------------------------------------------
+
+    /// Inspecteur avec un DOM et un state fixés.
+    struct SceneInspector {
+        dom: serde_json::Value,
+        state: BTreeMap<String, serde_json::Value>,
+    }
+    #[async_trait]
+    impl AppInspector for SceneInspector {
+        async fn dom_snapshot(&self) -> PortResult<DomTree> {
+            Ok(DomTree::new(self.dom.clone()))
+        }
+        async fn state_snapshot(&self) -> PortResult<StateDump> {
+            Ok(StateDump::new(self.state.clone()))
+        }
+    }
+
+    /// Source console qui rend ses entrées une seule fois (drain).
+    struct DrainingConsole(Mutex<Vec<ConsoleError>>);
+    #[async_trait]
+    impl ConsoleErrorSource for DrainingConsole {
+        async fn drain_console_errors(&self) -> PortResult<Vec<ConsoleError>> {
+            Ok(std::mem::take(&mut *self.0.lock().unwrap()))
+        }
+    }
+
+    struct UnsupportedRenderer;
+    #[async_trait]
+    impl Renderer for UnsupportedRenderer {
+        async fn screenshot(&self) -> PortResult<Screenshot> {
+            Err(PortError::Unsupported("pas de capture ici".to_string()))
+        }
+        async fn viewport_size(&self) -> PortResult<Size> {
+            Err(PortError::Unsupported("pas de capture ici".to_string()))
+        }
+    }
+
+    struct BrokenLogs;
+    #[async_trait]
+    impl LogSource for BrokenLogs {
+        async fn poll(&self) -> PortResult<Vec<LogEvent>> {
+            Err(PortError::Network("SDK coupé".to_string()))
+        }
+    }
+
+    fn scene_server() -> DeveyeMcpServer {
+        let mut state = BTreeMap::new();
+        state.insert("page".to_string(), json!("Agenda"));
+        state.insert("blob".to_string(), json!("x".repeat(500)));
+        server_with(|p| {
+            p.renderer = Arc::new(SwitchRenderer::new(png_of(2_000, 1_000, [5, 5, 5, 255])));
+            p.inspector = Arc::new(SceneInspector {
+                dom: json!({
+                    "nodeName": "#document",
+                    "children": [{ "nodeName": "BODY", "children": [
+                        { "nodeName": "BUTTON", "attributes": ["id", "ok"] }
+                    ]}]
+                }),
+                state,
+            });
+            p.console_errors = Arc::new(DrainingConsole(Mutex::new(vec![
+                ConsoleError::new(deveye_core::ConsoleLevel::Info, "bruit"),
+                ConsoleError::new(deveye_core::ConsoleLevel::Error, "TypeError: x"),
+                ConsoleError::new(deveye_core::ConsoleLevel::Warning, "déprécié"),
+            ])));
+            p.log_source = Arc::new(ScriptedLogs(Mutex::new(
+                vec![vec![
+                    log(LogLevel::Info, "démarré"),
+                    log(LogLevel::Error, "échec"),
+                ]]
+                .into(),
+            )));
+        })
+    }
+
+    fn observe_json(result: &CallToolResult) -> serde_json::Value {
+        let last = result.content.last().expect("bloc texte");
+        serde_json::from_str(&last.as_text().expect("texte").text).expect("JSON")
+    }
+
+    #[tokio::test]
+    async fn observe_composes_every_section_in_one_call() {
+        let result = scene_server()
+            .observe(Parameters(ObserveParams::default()))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(false));
+        assert!(result.content[0].as_image().is_some(), "image d'abord");
+        let body = observe_json(&result);
+        let s = &body["sections"];
+        // Capture réduite à 1024 px par défaut (source 2000 px).
+        assert_eq!(s["screenshot"]["image"]["width"], 1024);
+        assert_eq!(s["screenshot"]["image"]["source_width"], 2000);
+        assert!((s["screenshot"]["image"]["scale"].as_f64().unwrap() - 0.512).abs() < 1e-9);
+        // Arbre résumé.
+        assert_eq!(s["dom"]["total_nodes"], 3);
+        assert!(s["dom"]["outline"].as_str().unwrap().contains("button#ok"));
+        // État : valeur longue aperçue, pas dumpée.
+        assert_eq!(s["state"]["signals"], 2);
+        let blob = s["state"]["entries"]["blob"].as_str().unwrap();
+        assert!(blob.chars().count() <= 121, "aperçu borné");
+        // Console : error + warning seulement, le reste compté.
+        assert_eq!(s["console"]["total"], 2);
+        assert_eq!(s["console"]["ignored_lower_levels"], 1);
+        // Logs.
+        assert_eq!(s["logs"]["total"], 2);
+        assert_eq!(body["skipped"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn observe_degrades_each_unavailable_section_independently() {
+        let server = server_with(|p| {
+            p.renderer = Arc::new(UnsupportedRenderer);
+            p.inspector = Arc::new(UnsupportedInspectorMock("pas de WebView".to_string()));
+            p.log_source = Arc::new(BrokenLogs);
+        });
+        let result = server
+            .observe(Parameters(ObserveParams::default()))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(false), "jamais d'échec global");
+        assert_eq!(result.content.len(), 1, "pas d'image sans capture");
+        let s = observe_json(&result)["sections"].clone();
+        for name in ["screenshot", "dom", "state"] {
+            assert_eq!(s[name]["available"], false, "{name}");
+            assert_eq!(s[name]["reason"], "unsupported", "{name}");
+            assert!(
+                s[name]["detail"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("indisponible pour cette cible"),
+                "{name}: {}",
+                s[name]
+            );
+        }
+        assert_eq!(s["logs"]["available"], false);
+        assert_eq!(s["logs"]["reason"], "unreachable");
+        // La console, saine, répond malgré tout.
+        assert_eq!(s["console"]["available"], true);
+    }
+
+    #[tokio::test]
+    async fn observe_include_and_exclude_select_sections() {
+        let server = scene_server();
+        let only_logs = server
+            .observe(Parameters(ObserveParams {
+                include: Some(vec!["logs".to_string()]),
+                ..ObserveParams::default()
+            }))
+            .await
+            .expect("include");
+        assert_eq!(only_logs.content.len(), 1, "pas de capture demandée");
+        let body = observe_json(&only_logs);
+        assert_eq!(body["sections"].as_object().unwrap().len(), 1);
+        assert_eq!(
+            body["skipped"],
+            json!(["screenshot", "dom", "state", "console"])
+        );
+
+        let no_shot = scene_server()
+            .observe(Parameters(ObserveParams {
+                exclude: Some(vec!["Screenshot".to_string(), "dom".to_string()]),
+                ..ObserveParams::default()
+            }))
+            .await
+            .expect("exclude");
+        assert!(no_shot.content[0].as_text().is_some());
+        let body = observe_json(&no_shot);
+        assert!(body["sections"].get("screenshot").is_none());
+        assert_eq!(body["skipped"], json!(["screenshot", "dom"]));
+    }
+
+    #[tokio::test]
+    async fn observe_invalid_params_never_drain_anything() {
+        let server = scene_server();
+        for bad in [
+            ObserveParams {
+                include: Some(vec!["reseau".to_string()]),
+                ..ObserveParams::default()
+            },
+            ObserveParams {
+                include: Some(vec!["logs".to_string()]),
+                exclude: Some(vec!["logs".to_string()]),
+                ..ObserveParams::default()
+            },
+        ] {
+            let err = server.observe(Parameters(bad)).await.expect_err("invalide");
+            assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        }
+        // Les buffers n'ont pas été touchés par les appels refusés.
+        let result = server
+            .observe(Parameters(ObserveParams::default()))
+            .await
+            .expect("appel valide");
+        assert_eq!(observe_json(&result)["sections"]["logs"]["total"], 2);
+        // Et un second appel les trouve drainés.
+        let again = server
+            .observe(Parameters(ObserveParams::default()))
+            .await
+            .expect("second appel");
+        assert_eq!(observe_json(&again)["sections"]["logs"]["total"], 0);
+        assert_eq!(observe_json(&again)["sections"]["console"]["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn observe_bounds_events_to_the_most_recent() {
+        let server = scene_server();
+        let result = server
+            .observe(Parameters(ObserveParams {
+                include: Some(vec!["logs".to_string()]),
+                max_events: Some(1),
+                ..ObserveParams::default()
+            }))
+            .await
+            .expect("observe");
+        let logs = &observe_json(&result)["sections"]["logs"];
+        assert_eq!(logs["total"], 2);
+        assert_eq!(logs["truncated"], true);
+        assert_eq!(logs["events"].as_array().unwrap().len(), 1);
+        assert_eq!(logs["events"][0]["message"], "échec");
+    }
+
+    #[tokio::test]
+    async fn observe_explicit_max_width_overrides_the_default() {
+        let result = scene_server()
+            .observe(Parameters(ObserveParams {
+                include: Some(vec!["screenshot".to_string()]),
+                capture: capture_options(Some(200), Some("jpeg"), None),
+                ..ObserveParams::default()
+            }))
+            .await
+            .expect("observe");
+        let image = &observe_json(&result)["sections"]["screenshot"]["image"];
+        assert_eq!(image["width"], 200);
+        assert_eq!(image["format"], "jpeg");
+        assert_eq!(
+            result.content[0].as_image().unwrap().mime_type,
+            "image/jpeg"
+        );
     }
 }
