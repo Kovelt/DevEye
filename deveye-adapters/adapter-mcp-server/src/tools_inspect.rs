@@ -41,30 +41,50 @@ impl DeveyeMcpServer {
         }
         // Le JSON est deja serialise ci-dessus (pour mesurer sa taille) : on
         // le reutilise tel quel plutot que de rappeler json_success (qui
-        // resserialiserait tree.tree en double).
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            serialized,
-        )]))
+        // resserialiserait tree.tree en double). Le second bloc date le
+        // snapshot (ADR-0025).
+        Ok(CallToolResult::success(vec![
+            ContentBlock::text(serialized),
+            meta_block(&serde_json::json!({ "captured_at": tree.captured_at })),
+        ]))
     }
 
     #[tool(
-        description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé). `keys` optionnel restreint la réponse à ce sous-ensemble de clés (les clés absentes du state sont silencieusement omises) — réduit le coût en tokens quand seules quelques clés intéressent l'agent ; absent ou vide, renvoie tout le state (comportement inchangé). Si la cible ne peut pas exposer de state, résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
+        description = "Récupère le state applicatif exposé par le SDK opt-in (JSON sérialisé). `keys` optionnel restreint la réponse à ce sous-ensemble de clés (les clés absentes du state sont silencieusement omises) — réduit le coût en tokens quand seules quelques clés intéressent l'agent ; absent ou vide, renvoie tout le state (comportement inchangé). Un second bloc texte JSON `{ captured_at, signals, note? }` date le snapshot et donne le nombre total de signaux publiés ; `signals: 0` (avec `note`) signifie « SDK joignable mais aucun signal publié », distinct d'un SDK injoignable : résultat isError structuré `{ reason: \"sdk_unavailable\", detail }`. Si la cible ne peut pas exposer de state, résultat isError structuré `{ reason: \"unsupported\" }` (E1)."
     )]
     pub(crate) async fn state(
         &self,
         Parameters(p): Parameters<StateParams>,
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.gate.lock().await;
-        let dump = match unsupported_aware(self.inspector.state_snapshot().await) {
+        let dump = match state_aware(self.inspector.state_snapshot().await) {
             Ok(v) => v,
             Err(issue) => return issue,
         };
         let filtered = filter_state_entries(&dump.entries, p.keys.as_deref());
-        Ok(json_success(&filtered))
+        // Second bloc (ADR-0025) : date du snapshot, nombre de signaux publiés
+        // par l'app et, s'il n'y en a aucun, la distinction avec un SDK
+        // injoignable (qui, lui, est un `isError` `sdk_unavailable`).
+        let mut meta = serde_json::json!({
+            "captured_at": dump.captured_at,
+            "signals": dump.entries.len(),
+        });
+        if dump.entries.is_empty() {
+            meta["note"] = serde_json::Value::String(
+                "SDK joignable mais aucun signal publié : l'app n'a encore appelé set_state pour aucune clé"
+                    .to_string(),
+            );
+        }
+        Ok(CallToolResult::success(vec![
+            ContentBlock::text(
+                serde_json::to_string(&filtered).unwrap_or_else(|_| "null".to_string()),
+            ),
+            meta_block(&meta),
+        ]))
     }
 
     #[tool(
-        description = "Assertion sur le state SDK : `expected` est un objet `{ clé: valeur }` ; chaque clé doit exister dans le state avec exactement cette valeur. Renvoie `{ ok, mismatches: [{ key, expected, actual }] }` ; `isError` si au moins une diverge. Symétrique de assert_selector, mais sur la logique métier. Si la cible ne peut pas exposer de state (pas de SDK), résultat isError structuré `{ reason: \"unsupported\" }` (E1) — distinct d'une divergence d'assertion."
+        description = "Assertion sur le state SDK : `expected` est un objet `{ clé: valeur }` ; chaque clé doit exister dans le state avec exactement cette valeur. Renvoie `{ ok, mismatches: [{ key, expected, actual }] }` ; `isError` si au moins une diverge. Symétrique de assert_selector, mais sur la logique métier. Si la cible ne peut pas exposer de state (pas de SDK), résultat isError structuré `{ reason: \"unsupported\" }` (E1) — distinct d'une divergence d'assertion ; SDK injoignable : `{ reason: \"sdk_unavailable\" }`."
     )]
     pub(crate) async fn assert_state(
         &self,
@@ -80,7 +100,7 @@ impl DeveyeMcpServer {
                 })));
             }
         };
-        let dump = match unsupported_aware(self.inspector.state_snapshot().await) {
+        let dump = match state_aware(self.inspector.state_snapshot().await) {
             Ok(v) => v,
             Err(issue) => return issue,
         };

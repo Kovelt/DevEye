@@ -89,7 +89,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|
-| `screenshot` | aucun | image PNG (contenu image natif MCP, affichée par le client) | « prends un screenshot » (**en CDP, le PNG est à l'échelle CSS** : 1 pixel d'image = 1 pixel CSS, les coordonnées lues sur l'image se passent telles quelles à `click`/`hover`, y compris sur un écran HiDPI — aucun facteur à appliquer) |
+| `screenshot` | aucun | image PNG (contenu image natif MCP, affichée par le client) | « prends un screenshot » (**en CDP, le PNG est à l'échelle CSS** : 1 pixel d'image = 1 pixel CSS, les coordonnées lues sur l'image se passent telles quelles à `click`/`hover`, y compris sur un écran HiDPI — aucun facteur à appliquer ; un second bloc texte `{captured_at, viewport}` date la capture) |
 | `screenshot_region` | `{x, y, width, height}` | image PNG recadrée | « capture la zone (0, 0, 320, 200) » (vérif ciblée, moins de tokens ; seule vérif visuelle de composant en kwin-eis) |
 | `screenshot_element` | `{selector}` | image PNG recadrée (ou `isError {found:false}`) | « capture `#facture` » (résout le rect par JS, gère le DPI ; cdp/sdk) |
 | `assert_visual` | `{baseline_path, threshold?, x?, y?, width?, height?}` | JSON `{ok, diff_ratio, threshold, same_dims, ...}` | « compare au golden `ref.png` » (crée la baseline si absente ; `isError` si > seuil ; **seule assertion déterministe en kwin-eis**) |
@@ -110,8 +110,8 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `clipboard_get` | aucun | JSON `{text}` | « lis le presse-papiers » (Wayland `wl-paste` ; fiable en contexte automatisé) |
 | `clipboard_set` | `{text}` | `"ok"` | « mets ce texte dans le presse-papiers » (Wayland `wl-copy` ; combiner à `key_combo` Ctrl+V) |
 | `eval_js` | `{expression}` | JSON sérialisé ; si l'expression lève une exception : `isError` `{ok: false, reason: "js_exception", message, stack?}` | « renvoie `document.querySelectorAll('button').length` » (Promise awaitée ; une exception est un résultat à corriger, pas une panne : la trace `stack` n'est présente que si le moteur la fournit) |
-| `dom` | aucun | JSON du DOM courant (erreur `isError` si l'arbre dépasse ~100 Ko : cibler avec `find_element`/`eval_js`) | « renvoie le DOM courant » |
-| `state` | `{keys?}` | JSON `{ ... }` (filtré aux clés demandées si `keys` fourni) | « quel est l'état applicatif courant ? » ; `keys: ["count"]` pour un seul signal |
+| `dom` | aucun | JSON du DOM courant, plus un second bloc `{captured_at}` (erreur `isError` si l'arbre dépasse ~100 Ko : cibler avec `find_element`/`eval_js`) | « renvoie le DOM courant » |
+| `state` | `{keys?}` | JSON `{ ... }` (filtré aux clés demandées si `keys` fourni), plus un second bloc `{captured_at, signals, note?}` ; `signals: 0` = SDK joignable mais aucun signal publié ; SDK injoignable = `isError` `{reason: "sdk_unavailable"}` | « quel est l'état applicatif courant ? » ; `keys: ["count"]` pour un seul signal |
 | `assert_state` | `{expected}` | JSON `{ok, mismatches}` | « vérifie `{count: 3, page: "Agenda"}` dans le state » (`isError` si divergence) |
 | `target_info` | aucun | JSON `{target, eyes, hands, eval_js, dom, state, console_errors, list_windows, notes}` | « quelles capacités a la cible ? » (à appeler en premier ; dit si `eval_js`/`dom` répondront) |
 | `logs_tail` | `{limit?}` | JSON `{events: [{level, target, message, ...}], truncated, total}` (défaut 200 events les plus récents ; `total` = nombre réellement drainé) | « affiche les derniers logs » |
@@ -132,6 +132,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 
 **Conseils d'usage** :
 
+- **Sorties d'observation** : `screenshot`, `dom` et `state` renvoient leur contenu habituel dans le **premier** bloc (inchangé) et un **second bloc texte JSON** de métadonnées : `captured_at` (RFC 3339, UTC) pour savoir l'âge de ce qu'on lit, `viewport` pour `screenshot`, `signals` pour `state`. Un `state` vide se lit alors sans ambiguïté : `signals: 0` + `note` = le SDK répond mais l'app n'a publié aucun signal ; `isError` `sdk_unavailable` = le SDK est injoignable (app non lancée, mauvais `--sdk-url`).
 - **Coordonnées validées** : `click`, `right_click`, `double_click`, `hover`, `drag_drop` et l'ancrage de `scroll` refusent (erreur `invalid_params`, rien n'est envoyé) une coordonnée négative, ou hors du viewport quand sa taille est connue. Un clic hors fenêtre en kwin-eis/x11 échoue donc au lieu de réussir à vide ; un menu système qui déborde de la fenêtre n'est pas atteignable par coordonnées.
 - Pour les UI qui dépendent d'un hover (sidebar rétractable, menus contextuels), envoyer `hover(x, y)` d'abord, puis `click_text` / `click_selector` pour cibler l'élément révélé.
 - Préférer `click_text` / `click_selector` aux coordonnées brutes : elles ne cassent pas quand le layout bouge (responsive, animations, refactor CSS) et déclenchent un vrai clic CDP (`mousedown`/`mouseup`/`pointer`), au même titre que `click(x, y)`.

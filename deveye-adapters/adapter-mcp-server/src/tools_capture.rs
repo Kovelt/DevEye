@@ -9,7 +9,7 @@ use super::*;
 #[tool_router(router = capture_router, vis = "pub(crate)")]
 impl DeveyeMcpServer {
     #[tool(
-        description = "Capture un screenshot PNG du viewport de l'app cible (image MCP). En CDP, le PNG est à l'échelle CSS même sur un écran HiDPI : 1 pixel de l'image = 1 pixel CSS = l'unité des coordonnées de `click`/`hover`/`scroll`, sans facteur à appliquer. Sur les autres cibles, le PNG est en pixels de la fenêtre capturée."
+        description = "Capture un screenshot PNG du viewport de l'app cible (image MCP). En CDP, le PNG est à l'échelle CSS même sur un écran HiDPI : 1 pixel de l'image = 1 pixel CSS = l'unité des coordonnées de `click`/`hover`/`scroll`, sans facteur à appliquer. Sur les autres cibles, le PNG est en pixels de la fenêtre capturée. Un second bloc texte JSON `{ captured_at, viewport: { width, height } }` date la capture (RFC 3339, UTC) et donne la taille du viewport en pixels CSS."
     )]
     pub(crate) async fn screenshot(&self) -> Result<CallToolResult, McpError> {
         let _serial = self.acquire_gate("screenshot").await;
@@ -21,11 +21,15 @@ impl DeveyeMcpServer {
         };
         let b64 = B64.encode(&shot.bytes);
         // Contenu `image` (et non `text`) : le client MCP affiche le PNG —
-        // c'est ce qui rend l'outil utilisable comme « yeux ».
-        Ok(CallToolResult::success(vec![ContentBlock::image(
-            b64,
-            "image/png",
-        )]))
+        // c'est ce qui rend l'outil utilisable comme « yeux ». Un second bloc
+        // texte date la capture et donne la taille du viewport (ADR-0025).
+        Ok(CallToolResult::success(vec![
+            ContentBlock::image(b64, "image/png"),
+            meta_block(&serde_json::json!({
+                "captured_at": shot.captured_at,
+                "viewport": { "width": shot.viewport.width, "height": shot.viewport.height },
+            })),
+        ]))
     }
 
     #[tool(

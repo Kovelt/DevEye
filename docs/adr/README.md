@@ -88,3 +88,4 @@ Option retenue, en une phrase.
 | [0022](0022-capture-cdp-a-l-echelle-css.md) | Capture CDP à l'échelle CSS | Proposé |
 | [0023](0023-exceptions-js-en-resultat-d-outil-en-erreur.md) | Exceptions JS en résultat d'outil en erreur (`PortError::Script`) | Proposé |
 | [0024](0024-serialisation-sans-panic-et-arguments-stringifies.md) | Sérialisation sans panic et arguments `invoke_command` stringifiés | Proposé |
+| [0025](0025-captured-at-et-etat-sdk-vide-ou-indisponible.md) | Contrat de sortie : `captured_at` et distinction état SDK vide ou indisponible | Proposé |

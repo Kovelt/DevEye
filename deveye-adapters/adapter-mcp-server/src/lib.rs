@@ -108,7 +108,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, WaitPredicate};
+use deveye_core::{InteractionCommand, LogLevel, MouseButton, Position, StateDump, WaitPredicate};
 use deveye_ports::{
     AppInspector, Clipboard, CommandRouter, ConsoleErrorSource, InteractionSink, JsEvaluator,
     LogSource, PortError, PortResult, Renderer, WaitCondition, WindowGeometry, WindowLister,
@@ -857,6 +857,36 @@ fn script_error(message: String, stack: Option<String>) -> CallToolResult {
         payload["stack"] = serde_json::Value::String(stack);
     }
     json_error(&payload)
+}
+
+/// Bloc texte de métadonnées joint, en **second** bloc, à la sortie des outils
+/// d'observation (`screenshot`, `dom`, `state`) : le premier bloc garde sa forme
+/// d'origine (ADR-0025), les clients qui n'en lisent qu'un n'y voient rien changer.
+fn meta_block(meta: &serde_json::Value) -> ContentBlock {
+    ContentBlock::text(meta.to_string())
+}
+
+/// Payload `isError` quand le SDK de l'app est injoignable (`PortError::Network`
+/// sur le state) : distinct d'un SDK joignable qui n'a publié aucun signal
+/// (succès avec `signals: 0`) — ADR-0025.
+fn sdk_unavailable_error(detail: String) -> CallToolResult {
+    json_error(&serde_json::json!({
+        "ok": false,
+        "reason": "sdk_unavailable",
+        "detail": detail,
+    }))
+}
+
+/// Comme [`unsupported_aware`], pour un `state_snapshot` : une coupure de
+/// liaison avec le SDK devient un résultat `sdk_unavailable` structuré plutôt
+/// qu'une erreur protocolaire opaque.
+fn state_aware(
+    result: PortResult<StateDump>,
+) -> Result<StateDump, Result<CallToolResult, McpError>> {
+    match result {
+        Err(PortError::Network(detail)) => Err(Ok(sdk_unavailable_error(detail))),
+        other => unsupported_aware(other),
+    }
 }
 
 /// E1 : deroule un `PortResult<T>` en distinguant « capacite absente sur la
@@ -2113,6 +2143,150 @@ mod dispatch_tests {
             .expect("E1 : pas d'erreur protocolaire");
         assert_eq!(result.is_error, Some(true));
         assert_eq!(body_json(&result)["reason"], "unsupported");
+    }
+
+    // ------------------------------------------------------------------
+    // G42 : captured_at, state vide vs SDK indisponible, type_text sans focus.
+    // ------------------------------------------------------------------
+
+    /// Extrait le second bloc texte (métadonnées) d'un résultat.
+    fn meta_json(result: &CallToolResult) -> serde_json::Value {
+        let text = result.content[1]
+            .as_text()
+            .expect("second bloc texte attendu")
+            .text
+            .clone();
+        serde_json::from_str(&text).expect("JSON attendu")
+    }
+
+    fn is_rfc3339(value: &serde_json::Value) -> bool {
+        // Forme `AAAA-MM-JJTHH:MM:SS[.fff]Z` (pas de dépendance à chrono ici).
+        value.as_str().is_some_and(|s| {
+            let b = s.as_bytes();
+            b.len() >= 20 && b[4] == b'-' && b[7] == b'-' && b[10] == b'T' && s.ends_with('Z')
+        })
+    }
+
+    #[tokio::test]
+    async fn screenshot_carries_captured_at_and_viewport_in_a_second_block() {
+        let server = server_with(|ports| {
+            ports.renderer = Arc::new(SizedRenderer(Some(Size::new(800, 600))));
+        });
+        let result = server
+            .screenshot()
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.content.len(), 2);
+        assert!(result.content[0].as_image().is_some(), "image d'abord");
+        let meta = meta_json(&result);
+        assert!(is_rfc3339(&meta["captured_at"]), "{meta}");
+        assert_eq!(meta["viewport"], json!({ "width": 2, "height": 2 }));
+    }
+
+    #[tokio::test]
+    async fn dom_keeps_its_tree_first_and_adds_captured_at() {
+        let result = server_with(|_| {})
+            .dom()
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.content.len(), 2);
+        assert_eq!(body_json(&result), json!({}));
+        assert!(is_rfc3339(&meta_json(&result)["captured_at"]));
+    }
+
+    /// Inspecteur dont `state_snapshot` renvoie un résultat fixé par le test.
+    struct StateResult(Mutex<Option<PortResult<StateDump>>>);
+    impl StateResult {
+        fn new(result: PortResult<StateDump>) -> Self {
+            Self(Mutex::new(Some(result)))
+        }
+    }
+    #[async_trait]
+    impl AppInspector for StateResult {
+        async fn dom_snapshot(&self) -> PortResult<DomTree> {
+            Ok(DomTree::new(json!({})))
+        }
+        async fn state_snapshot(&self) -> PortResult<StateDump> {
+            self.0
+                .lock()
+                .unwrap()
+                .take()
+                .expect("un seul appel attendu")
+        }
+    }
+
+    #[tokio::test]
+    async fn state_with_signals_reports_their_count_and_captured_at() {
+        let mut entries = BTreeMap::new();
+        entries.insert("page".to_string(), json!("Agenda"));
+        entries.insert("count".to_string(), json!(3));
+        let server = server_with(|ports| {
+            ports.inspector = Arc::new(StateResult::new(Ok(StateDump::new(entries))));
+        });
+        let result = server
+            .state(Parameters(StateParams { keys: None }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(body_json(&result), json!({ "count": 3, "page": "Agenda" }));
+        let meta = meta_json(&result);
+        assert_eq!(meta["signals"], 2);
+        assert!(is_rfc3339(&meta["captured_at"]));
+        assert!(meta.get("note").is_none());
+    }
+
+    #[tokio::test]
+    async fn state_with_no_signal_says_the_sdk_is_reachable_but_empty() {
+        let server = server_with(|ports| {
+            ports.inspector = Arc::new(StateResult::new(Ok(StateDump::empty())));
+        });
+        let result = server
+            .state(Parameters(StateParams { keys: None }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        // Succès (pas isError) : le SDK répond, il n'a simplement rien publié.
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(body_json(&result), json!({}));
+        let meta = meta_json(&result);
+        assert_eq!(meta["signals"], 0);
+        assert!(meta["note"].as_str().unwrap().contains("SDK joignable"));
+    }
+
+    #[tokio::test]
+    async fn state_with_an_unreachable_sdk_is_a_structured_is_error() {
+        let server = server_with(|ports| {
+            ports.inspector = Arc::new(StateResult::new(Err(PortError::Network(
+                "GET http://127.0.0.1:31337/devtools/state : connexion refusée".to_string(),
+            ))));
+        });
+        let result = server
+            .state(Parameters(StateParams { keys: None }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        let body = body_json(&result);
+        assert_eq!(body["reason"], "sdk_unavailable");
+        assert!(body["detail"]
+            .as_str()
+            .unwrap()
+            .contains("connexion refusée"));
+    }
+
+    #[tokio::test]
+    async fn assert_state_with_an_unreachable_sdk_is_sdk_unavailable_not_a_mismatch() {
+        let server = server_with(|ports| {
+            ports.inspector = Arc::new(StateResult::new(Err(PortError::Network(
+                "connexion refusée".to_string(),
+            ))));
+        });
+        let result = server
+            .assert_state(Parameters(AssertStateParams {
+                expected: json!({ "page": "Agenda" }),
+            }))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(body_json(&result)["reason"], "sdk_unavailable");
     }
 
     // ------------------------------------------------------------------
