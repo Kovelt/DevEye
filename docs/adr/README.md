@@ -141,3 +141,4 @@ Les ADR rédigés pendant la préparation de la 1.0 avec le statut « Proposé �
 | [0071](0071-depot-heberge-dans-l-organisation-github-kovelt.md) | Dépôt hébergé dans l'organisation GitHub Kovelt | Accepté |
 | [0072](0072-references-d-elements-stables-et-outils-snapshot-act.md) | Références d'éléments stables et outils `snapshot` et `act` | Accepté |
 | [0073](0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md) | Widgets natifs, `snapshot` et `act` : relocalisation à l'action, candidats et surface expérimentale | Accepté |
+| [0074](0074-pont-js-d-elements-pour-webkitgtk.md) | Pont JS d'éléments pour WebKitGTK : références `e<n>` sans CDP | Accepté |
