@@ -14,7 +14,7 @@ dx serve --platform desktop --features deveye
 
 Passer par `dx serve` : un `cargo run` nu n'a pas ses ressources `asset!()` et la page s'affiche sans CSS. Donner à la fenêtre un **titre** distinctif : il sert à la repérer pour la capture.
 
-Sous KDE Plasma Wayland, rien d'autre n'est requis. Sous une autre session, la capture passe par `xcap` : lancer l'app avec `GDK_BACKEND=x11` (XWayland requis).
+Sous KDE Plasma Wayland, rien d'autre n'est requis pour lancer l'app (le backend de capture `kwin` demande en plus une variable d'environnement, voir la section 3). Sous une autre session, la capture passe par `xcap` : lancer l'app avec `GDK_BACKEND=x11` (XWayland requis).
 
 ## 3. Brancher DevEye
 

@@ -1,11 +1,11 @@
 # Webview ou navigateur Chromium (CDP)
 
-Toute webview Chromium (une app Dioxus desktop sur WebView2, un navigateur Chrome, Chromium ou Brave, une tête WASM servie en local) peut être pilotée par le **Chrome DevTools Protocol**. C'est la cible la plus complète : DOM, JavaScript, sélecteurs, événements navigateur réels, `resize`, `upload_file`, `handle_dialog`.
+Toute cible Chromium (un navigateur Chrome, Chromium ou Brave, une tête WASM servie en local, une app embarquant une webview Chromium) peut être pilotée par le **Chrome DevTools Protocol**. C'est la cible la plus complète : DOM, JavaScript, sélecteurs, événements navigateur réels, `resize`, `upload_file`, `handle_dialog`.
 
 ## 1. Ouvrir le port de débogage
 
 - **Navigateur** : le lancer avec `--remote-debugging-port=9222` (par exemple `chromium --remote-debugging-port=9222 http://localhost:5000`). Sans profil dédié, certains navigateurs ignorent le flag si une instance tourne déjà : ajouter `--user-data-dir=/tmp/profil-dev`.
-- **Webview d'une app** : lui passer l'argument de lancement équivalent. Pour une app Dioxus desktop sur WebView2, `with_windows_browser_args("--remote-debugging-port=9222")` dans la configuration de la fenêtre, en debug seulement.
+- **Webview d'une app** : lui passer l'argument de lancement équivalent, en debug seulement. Ce chemin n'est **pas testé** par DevEye : une app Dioxus desktop sous Linux utilise WebKitGTK, qui n'expose pas le CDP ; elle se pilote par le pont SDK ([dioxus-desktop-linux.md](dioxus-desktop-linux.md)). Les webviews Chromium d'autres systèmes (WebView2 sous Windows, par exemple) sont hors du périmètre supporté en 1.0 ([platforms.md](../platforms.md)).
 
 Vérifier : `curl http://localhost:9222/json` liste les pages.
 
