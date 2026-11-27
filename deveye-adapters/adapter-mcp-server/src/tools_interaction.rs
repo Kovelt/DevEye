@@ -10,7 +10,7 @@ use super::*;
 #[tool_router(router = interaction_router, vis = "pub(crate)")]
 impl DeveyeMcpServer {
     #[tool(
-        description = "Effectue un clic sur le viewport de l'app cible aux coordonnées absolues fournies. `button` optionnel (E6) : \"left\" (défaut), \"right\", \"middle\"."
+        description = "Effectue un clic sur le viewport de l'app cible aux coordonnées absolues fournies. `button` optionnel (E6) : \"left\" (défaut), \"right\", \"middle\". Les coordonnées sont validées avant le dispatch : négatives, ou hors du viewport quand sa taille est connue, elles donnent une erreur `invalid_params` (même garde pour right_click, double_click, hover, drag_drop et l'ancrage de scroll)."
     )]
     pub(crate) async fn click(
         &self,
@@ -18,6 +18,7 @@ impl DeveyeMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let _serial = self.acquire_gate("click").await;
         let button = parse_mouse_button(p.button.as_deref())?;
+        self.ensure_in_viewport(&[(p.x, p.y)]).await?;
         let cmd = InteractionCommand::Click {
             position: Position::new(p.x, p.y),
             button,
@@ -36,7 +37,7 @@ impl DeveyeMcpServer {
             position: Position::new(p.x, p.y),
             button: MouseButton::Right,
         };
-        self.dispatch_ok(cmd).await
+        self.dispatch_at_ok(cmd, &[(p.x, p.y)]).await
     }
 
     #[tool(
@@ -46,8 +47,11 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<PositionParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.dispatch_ok(InteractionCommand::double_click(Position::new(p.x, p.y)))
-            .await
+        self.dispatch_at_ok(
+            InteractionCommand::double_click(Position::new(p.x, p.y)),
+            &[(p.x, p.y)],
+        )
+        .await
     }
 
     #[tool(description = "Saisit du texte au focus courant de l'app cible.")]
@@ -98,8 +102,11 @@ impl DeveyeMcpServer {
         &self,
         Parameters(p): Parameters<PositionParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.dispatch_ok(InteractionCommand::hover(Position::new(p.x, p.y)))
-            .await
+        self.dispatch_at_ok(
+            InteractionCommand::hover(Position::new(p.x, p.y)),
+            &[(p.x, p.y)],
+        )
+        .await
     }
 
     #[tool(
@@ -174,7 +181,8 @@ impl DeveyeMcpServer {
             Position::new(p.from_x, p.from_y),
             Position::new(p.to_x, p.to_y),
         );
-        self.dispatch_ok(cmd).await
+        self.dispatch_at_ok(cmd, &[(p.from_x, p.from_y), (p.to_x, p.to_y)])
+            .await
     }
 
     #[tool(
@@ -227,6 +235,9 @@ impl DeveyeMcpServer {
         // Le gate reste tenu pendant cette resolution (contrairement a
         // `dispatch_ok`) : garder le meme perimetre de serialisation qu'avant
         // ce sprint plutot que de le retrecir a la seule ligne de dispatch.
+        if let (Some(x), Some(y)) = (p.x, p.y) {
+            self.ensure_in_viewport(&[(x, y)]).await?;
+        }
         let (cx, cy) = if p.x.is_none() || p.y.is_none() {
             match self.renderer.viewport_size().await {
                 Ok(size) => (size.width as i32 / 2, size.height as i32 / 2),

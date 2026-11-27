@@ -84,3 +84,4 @@ Option retenue, en une phrase.
 | [0018](0018-portage-selectif-de-l-ancienne-lignee-github.md) | Portage sélectif de l'ancienne lignée GitHub | Accepté |
 | [0019](0019-resize-variante-d-interaction-command.md) | Redimensionnement du viewport : variante `InteractionCommand::Resize` | Accepté |
 | [0020](0020-logs-wait-long-poll-des-logs.md) | `logs_wait` : long-poll des logs et niveau invalide en `invalid_params` | Proposé |
+| [0021](0021-validation-des-coordonnees-des-gestes.md) | Validation des coordonnées des gestes avant dispatch | Proposé |

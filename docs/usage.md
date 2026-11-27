@@ -132,6 +132,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 
 **Conseils d'usage** :
 
+- **Coordonnées validées** : `click`, `right_click`, `double_click`, `hover`, `drag_drop` et l'ancrage de `scroll` refusent (erreur `invalid_params`, rien n'est envoyé) une coordonnée négative, ou hors du viewport quand sa taille est connue. Un clic hors fenêtre en kwin-eis/x11 échoue donc au lieu de réussir à vide ; un menu système qui déborde de la fenêtre n'est pas atteignable par coordonnées.
 - Pour les UI qui dépendent d'un hover (sidebar rétractable, menus contextuels), envoyer `hover(x, y)` d'abord, puis `click_text` / `click_selector` pour cibler l'élément révélé.
 - Préférer `click_text` / `click_selector` aux coordonnées brutes : elles ne cassent pas quand le layout bouge (responsive, animations, refactor CSS) et déclenchent un vrai clic CDP (`mousedown`/`mouseup`/`pointer`), au même titre que `click(x, y)`.
 - `eval_js` est le couteau-suisse pour tout cas non couvert : lire un `getBoundingClientRect`, sonder un état frontend, déclencher du JS interne au framework, ou injecter des événements clavier (`new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })`).

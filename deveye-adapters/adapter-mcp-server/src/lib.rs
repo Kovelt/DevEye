@@ -711,6 +711,54 @@ impl DeveyeMcpServer {
         }
     }
 
+    /// Valide les coordonnées d'un geste avant tout dispatch (ADR-0021).
+    ///
+    /// - une coordonnée **négative** est refusée sans aucune I/O, sur toutes
+    ///   les cibles ;
+    /// - la borne haute est vérifiée **au mieux** : si le renderer fournit la
+    ///   taille du viewport (non nulle), un point `x >= largeur` ou
+    ///   `y >= hauteur` est refusé ; s'il ne sait pas la fournir, le geste
+    ///   passe plutôt que de bloquer un geste légitime.
+    ///
+    /// Dans les deux cas l'erreur est `invalid_params` : une faute d'appel que
+    /// l'agent corrige, pas une panne. Sans cette garde, un clic hors fenêtre
+    /// en `kwin-eis` ou `x11` atteint une autre application sans erreur.
+    async fn ensure_in_viewport(&self, points: &[(i32, i32)]) -> Result<(), McpError> {
+        if let Some(&(x, y)) = points.iter().find(|&&(x, y)| x < 0 || y < 0) {
+            return Err(McpError::invalid_params(
+                format!("coordonnées hors viewport : ({x}, {y}) — les valeurs négatives sont interdites"),
+                None,
+            ));
+        }
+        if let Ok(size) = self.renderer.viewport_size().await {
+            if size.width > 0 && size.height > 0 {
+                let (w, h) = (i64::from(size.width), i64::from(size.height));
+                if let Some(&(x, y)) = points
+                    .iter()
+                    .find(|&&(x, y)| i64::from(x) >= w || i64::from(y) >= h)
+                {
+                    return Err(McpError::invalid_params(
+                        format!("coordonnées hors viewport : ({x}, {y}) dépasse {w}x{h}"),
+                        None,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Comme [`Self::dispatch_ok`], pour un geste ancré à des points : les
+    /// coordonnées sont validées sous le gate, avant le dispatch.
+    async fn dispatch_at_ok(
+        &self,
+        cmd: InteractionCommand,
+        points: &[(i32, i32)],
+    ) -> Result<CallToolResult, McpError> {
+        let _serial = self.gate.lock().await;
+        self.ensure_in_viewport(points).await?;
+        ok_or_unsupported(self.interaction.dispatch(cmd).await)
+    }
+
     /// H3 : factorise le triptyque commun a la majorite des outils
     /// d'interaction « fire-and-forget » (right_click, double_click,
     /// type_text, press_key, key_combo, navigate, hover, drag_drop,
@@ -1620,11 +1668,137 @@ mod dispatch_tests {
         assert!(parse_mouse_button(Some("scroll")).is_err());
     }
 
+    /// Renderer dont la taille de viewport est fixée par le test (`None` : la
+    /// cible ne sait pas la fournir).
+    struct SizedRenderer(Option<Size>);
+    #[async_trait]
+    impl Renderer for SizedRenderer {
+        async fn screenshot(&self) -> PortResult<Screenshot> {
+            Ok(Screenshot::new_png(vec![0u8; 4], Size::new(2, 2)))
+        }
+        async fn viewport_size(&self) -> PortResult<Size> {
+            self.0
+                .ok_or_else(|| PortError::Render("taille inconnue".to_string()))
+        }
+    }
+
+    fn click_params(x: i32, y: i32) -> ClickParams {
+        ClickParams { x, y, button: None }
+    }
+
+    #[tokio::test]
+    async fn click_with_negative_coordinates_is_invalid_params_and_never_dispatches() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(spy.clone());
+            ports.renderer = Arc::new(SizedRenderer(Some(Size::new(800, 600))));
+        });
+        for (x, y) in [(-1, 10), (10, -1), (-5, -5)] {
+            let err = server
+                .click(Parameters(click_params(x, y)))
+                .await
+                .expect_err("coordonnées négatives");
+            assert_eq!(
+                err.code,
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "({x}, {y})"
+            );
+        }
+        assert!(spy.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn gestures_beyond_the_viewport_are_invalid_params_when_its_size_is_known() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(spy.clone());
+            ports.renderer = Arc::new(SizedRenderer(Some(Size::new(800, 600))));
+        });
+        let invalid = rmcp::model::ErrorCode::INVALID_PARAMS;
+        let position = |x, y| PositionParams { x, y };
+        // Dernier pixel valide : 799 x 599 ; 800 ou 600 est déjà dehors.
+        assert_eq!(
+            server
+                .click(Parameters(click_params(800, 10)))
+                .await
+                .unwrap_err()
+                .code,
+            invalid
+        );
+        assert_eq!(
+            server
+                .hover(Parameters(position(10, 600)))
+                .await
+                .unwrap_err()
+                .code,
+            invalid
+        );
+        assert_eq!(
+            server
+                .right_click(Parameters(position(900, 900)))
+                .await
+                .unwrap_err()
+                .code,
+            invalid
+        );
+        assert_eq!(
+            server
+                .double_click(Parameters(position(-3, 4)))
+                .await
+                .unwrap_err()
+                .code,
+            invalid
+        );
+        let drag = DragDropParams {
+            from_x: 10,
+            from_y: 10,
+            to_x: 801,
+            to_y: 10,
+        };
+        assert_eq!(
+            server.drag_drop(Parameters(drag)).await.unwrap_err().code,
+            invalid
+        );
+        let scroll = ScrollParams {
+            x: Some(10),
+            y: Some(700),
+            dx: None,
+            dy: Some(100),
+        };
+        assert_eq!(
+            server.scroll(Parameters(scroll)).await.unwrap_err().code,
+            invalid
+        );
+        assert!(spy.calls.lock().unwrap().is_empty());
+
+        // Les bords valides passent.
+        server
+            .click(Parameters(click_params(799, 599)))
+            .await
+            .expect("dernier pixel valide");
+        assert_eq!(spy.calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn gestures_pass_when_the_viewport_size_is_unknown() {
+        let spy = DispatchSpy::default();
+        let server = server_with(|ports| {
+            ports.interaction = Arc::new(spy.clone());
+            ports.renderer = Arc::new(SizedRenderer(None));
+        });
+        server
+            .click(Parameters(click_params(5000, 5000)))
+            .await
+            .expect("taille inconnue : on laisse passer");
+        assert_eq!(spy.calls.lock().unwrap().len(), 1);
+    }
+
     #[tokio::test]
     async fn click_dispatches_with_requested_button() {
         let spy = DispatchSpy::default();
         let server = server_with(|ports| {
             ports.interaction = Arc::new(spy.clone());
+            ports.renderer = Arc::new(SizedRenderer(Some(Size::new(800, 600))));
         });
         let result = server
             .click(Parameters(ClickParams {
