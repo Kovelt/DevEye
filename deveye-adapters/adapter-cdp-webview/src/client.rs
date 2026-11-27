@@ -65,8 +65,19 @@ struct CdpInner {
     /// Permet à l'appelant de jeter ce client et d'en reconnecter un autre
     /// — la session page se ré-attache toute seule, pas le WS navigateur.
     closed: AtomicBool,
-    /// Filtre de sélection de la page cible (configurable ; défaut Dioxus).
+    /// Filtre de sélection de la page cible (configurable ; défaut permissif).
     filter: TargetFilter,
+    /// Pages vues par la découverte de cibles (ordre d'apparition), pour
+    /// expliquer à l'appelant pourquoi aucune ne correspond au filtre.
+    seen: Mutex<Vec<SeenPage>>,
+}
+
+/// Page `type=page` observée via `Target.targetCreated` / `targetInfoChanged`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SeenPage {
+    target_id: String,
+    title: String,
+    url: String,
 }
 
 #[derive(Clone, Debug)]
@@ -166,6 +177,7 @@ impl CdpClient {
             attached: Notify::new(),
             closed: AtomicBool::new(false),
             filter,
+            seen: Mutex::new(Vec::new()),
         });
 
         spawn_writer(sink, cmd_rx);
@@ -194,7 +206,8 @@ impl CdpClient {
     /// Envoie une commande CDP rattachée à la session page courante (flatten).
     ///
     /// Si aucune session n'est attachée au moment de l'appel, attend jusqu'à
-    /// 10 s qu'une page Dioxus apparaisse — utile pendant les recompilations.
+    /// 10 s qu'une page correspondant au filtre apparaisse — utile pendant les
+    /// recompilations.
     pub async fn call<P, R>(&self, method: &str, params: P) -> Result<R, CdpError>
     where
         P: Serialize,
@@ -303,9 +316,11 @@ impl CdpClient {
                     // session vide apres notification (race hot-reload) : reboucle.
                 }
                 Err(_) => {
-                    return Err(CdpError::Connect(
-                        "timeout en attente d'une page CDP attachable (10 s)".into(),
-                    ));
+                    let seen = self.inner.seen.lock().await.clone();
+                    return Err(CdpError::Connect(no_target_message(
+                        &self.inner.filter,
+                        &seen,
+                    )));
                 }
             }
         }
@@ -381,10 +396,27 @@ async fn handle_event(inner: &Arc<CdpInner>, method: &str, params: Value) {
             let Ok(p) = serde_json::from_value::<TargetCreatedParams>(params) else {
                 return;
             };
+            record_seen(inner, &p.target_info).await;
             if !inner.filter.matches(&p.target_info) {
                 return;
             }
+            // Filtre ouvert : la cible est la première page rencontrée ; les
+            // suivantes (fenêtres secondaires, popups) ne la détrônent pas.
+            if inner.filter.is_open() && inner.session.lock().await.is_some() {
+                return;
+            }
             attach_to(inner, &p.target_info.target_id);
+        }
+        // Une page `about:blank` à sa création change d'URL en navigant (boot
+        // d'une webview) : on la rattrape ici si rien n'est encore attaché.
+        "Target.targetInfoChanged" => {
+            let Ok(p) = serde_json::from_value::<TargetCreatedParams>(params) else {
+                return;
+            };
+            record_seen(inner, &p.target_info).await;
+            if inner.filter.matches(&p.target_info) && inner.session.lock().await.is_none() {
+                attach_to(inner, &p.target_info.target_id);
+            }
         }
         "Target.attachedToTarget" => {
             let Ok(p) = serde_json::from_value::<AttachedToTargetParams>(params) else {
@@ -416,6 +448,11 @@ async fn handle_event(inner: &Arc<CdpInner>, method: &str, params: Value) {
             let Ok(p) = serde_json::from_value::<TargetDestroyedParams>(params) else {
                 return;
             };
+            inner
+                .seen
+                .lock()
+                .await
+                .retain(|s| s.target_id != p.target_id);
             let mut guard = inner.session.lock().await;
             if guard
                 .as_ref()
@@ -427,6 +464,70 @@ async fn handle_event(inner: &Arc<CdpInner>, method: &str, params: Value) {
         }
         _ => {}
     }
+}
+
+async fn record_seen(inner: &Arc<CdpInner>, info: &TargetInfo) {
+    if info.kind != "page" {
+        return;
+    }
+    let page = SeenPage {
+        target_id: info.target_id.clone(),
+        title: info.title.clone(),
+        url: info.url.clone(),
+    };
+    let mut seen = inner.seen.lock().await;
+    match seen.iter_mut().find(|s| s.target_id == page.target_id) {
+        Some(existing) => *existing = page,
+        None => seen.push(page),
+    }
+}
+
+/// Nombre maximal de caractères d'un titre ou d'une URL cités dans une erreur.
+const SEEN_FIELD_MAX_CHARS: usize = 60;
+/// Nombre maximal de pages citées dans une erreur.
+const SEEN_PAGES_MAX: usize = 10;
+
+fn truncate_chars(text: &str) -> String {
+    let mut chars = text.chars();
+    let head: String = chars.by_ref().take(SEEN_FIELD_MAX_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+/// Message d'erreur quand aucune page ne correspond au filtre : il liste les
+/// pages vues (titre et URL tronqués) pour que l'agent corrige son filtre.
+fn no_target_message(filter: &TargetFilter, seen: &[SeenPage]) -> String {
+    let mut msg = format!(
+        "timeout en attente d'une page CDP attachable (10 s) : aucune page ne correspond au filtre ({})",
+        filter.describe()
+    );
+    if seen.is_empty() {
+        msg.push_str(" ; aucune page vue par le navigateur");
+    } else {
+        msg.push_str(" ; pages vues : ");
+        let shown: Vec<String> = seen
+            .iter()
+            .take(SEEN_PAGES_MAX)
+            .map(|p| {
+                format!(
+                    "« {} » ({})",
+                    truncate_chars(&p.title),
+                    truncate_chars(&p.url)
+                )
+            })
+            .collect();
+        msg.push_str(&shown.join(", "));
+        if seen.len() > SEEN_PAGES_MAX {
+            msg.push_str(&format!(" … (+{})", seen.len() - SEEN_PAGES_MAX));
+        }
+    }
+    msg.push_str(
+        ". Ajuster --cdp-target-filter-url / --cdp-target-filter-title, ou --cdp-accept-blank si la page est encore about:blank",
+    );
+    msg
 }
 
 fn attach_to(inner: &Arc<CdpInner>, target_id: &str) {
@@ -444,76 +545,71 @@ fn attach_to(inner: &Arc<CdpInner>, target_id: &str) {
 
 /// Filtre de sélection de la page CDP cible.
 ///
-/// Conditions évaluées en **OU** sur un même target `type=page` : URL contenant
-/// `url_contains`, titre contenant `title_contains`, ou `about:blank` si
-/// `accept_blank`. Comparaisons insensibles à la casse. Configurable depuis la
-/// CLI (`--cdp-target-filter-url` / `--cdp-target-filter-title`) — **aucun nom
-/// d'app n'est codé en dur** ici (règle de découplage, cf. `architecture.md`).
+/// Sur un target `type=page` : `about:blank` n'est accepté que si
+/// `accept_blank` ; sinon, **sans critère** (`url_contains` et `title_contains`
+/// à `None`) toute page est acceptée (filtre ouvert) ; avec critère(s), il faut
+/// que l'URL contienne `url_contains` **ou** que le titre contienne
+/// `title_contains`. Comparaisons insensibles à la casse. Configurable depuis
+/// la CLI (`--cdp-target-filter-url` / `--cdp-target-filter-title` /
+/// `--cdp-accept-blank`) — **aucun nom d'app ni de framework n'est codé en
+/// dur** ici (règle de découplage, cf. `architecture.md`).
 ///
-/// `Default` reproduit le comportement historique pour les webviews **Dioxus**
-/// (URL ou titre contenant `dioxus`, ou `about:blank` transitoire au boot wry).
-/// Une app Dioxus desktop expose typiquement `url = http://dioxus.index.html/`.
-///
-/// # Comportement avec double-None
-///
-/// Si `url_contains = None` **et** `title_contains = None`, `matches` renvoie
-/// `false` pour toute page non-blank : chaque `Option::unwrap_or(false)` vaut
-/// `false`, donc leur OU vaut `false` également.
-/// - `accept_blank = false` : **rejette absolument tout**.
-/// - `accept_blank = true` : accepte uniquement `about:blank` (garde anticipée
-///   avant les vérifications des `Option`).
-///
-/// Ce comportement n'est **pas** « pas de filtre = tout accepter » : un
-/// `TargetFilter` double-None sans `accept_blank` est un filtre qui refuse
-/// toutes les pages — ne pas l'utiliser comme filtre ouvert.
-#[derive(Clone, Debug)]
+/// `Default` est le filtre **ouvert** : la première page qui n'est pas
+/// `about:blank` est la cible (ADR-0014). Si plusieurs pages sont ouvertes,
+/// cibler explicitement avec un critère.
+#[derive(Clone, Debug, Default)]
 pub struct TargetFilter {
     /// Sous-chaîne attendue dans l'URL de la page (insensible à la casse).
     pub url_contains: Option<String>,
     /// Sous-chaîne attendue dans le titre de la page (insensible à la casse).
     pub title_contains: Option<String>,
-    /// Accepte les pages `about:blank` (transitoire wry au boot).
+    /// Accepte les pages `about:blank` (transitoire d'une webview au boot).
     pub accept_blank: bool,
 }
 
-impl Default for TargetFilter {
-    fn default() -> Self {
-        Self {
-            url_contains: Some("dioxus".to_string()),
-            title_contains: Some("dioxus".to_string()),
-            accept_blank: true,
-        }
-    }
-}
-
 impl TargetFilter {
+    /// Vrai si aucun critère d'URL ni de titre n'est posé (filtre ouvert).
+    pub fn is_open(&self) -> bool {
+        self.url_contains.is_none() && self.title_contains.is_none()
+    }
+
+    /// Description lisible du filtre, pour les messages d'erreur.
+    fn describe(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(u) = &self.url_contains {
+            parts.push(format!("url contient « {u} »"));
+        }
+        if let Some(t) = &self.title_contains {
+            parts.push(format!("titre contient « {t} »"));
+        }
+        if parts.is_empty() {
+            parts.push("première page non about:blank".to_string());
+        }
+        if self.accept_blank {
+            parts.push("about:blank accepté".to_string());
+        }
+        parts.join(" ou ")
+    }
+
     /// Vrai si `t` est une page acceptée par ce filtre.
     ///
-    /// # Logique de décision
-    ///
     /// 1. Rejette tout ce qui n'est pas `kind == "page"`.
-    /// 2. Si `accept_blank` est vrai et `url == "about:blank"`, accepte
-    ///    immédiatement (page transitoire wry au boot — avant tout autre test).
-    /// 3. `url_ok = url_contains.is_some() && url.contains(url_contains)`
-    ///    (comparaison insensible à la casse).
-    /// 4. `title_ok = title_contains.is_some() && title.contains(title_contains)`
-    ///    (comparaison insensible à la casse).
-    /// 5. Retourne `url_ok || title_ok`.
-    ///
-    /// **Cas double-None** : si `url_contains` et `title_contains` sont tous
-    /// deux `None`, les étapes 3-4 valent toutes les deux `false`
-    /// (`Option::unwrap_or(false)`), donc l'étape 5 retourne `false`.
-    /// Toute page non-blank est rejetée dans ce cas.
-    /// Voir aussi la documentation de [`TargetFilter`] pour les détails.
+    /// 2. `about:blank` : accepté si et seulement si `accept_blank`.
+    /// 3. Filtre ouvert (aucun critère) : accepte toute autre page.
+    /// 4. Sinon : `url_contains` apparaît dans l'URL **ou** `title_contains`
+    ///    apparaît dans le titre (insensible à la casse).
     fn matches(&self, t: &TargetInfo) -> bool {
         if t.kind != "page" {
             return false;
         }
-        let title = t.title.to_lowercase();
         let url = t.url.to_lowercase();
-        if self.accept_blank && url == "about:blank" {
+        if url == "about:blank" {
+            return self.accept_blank;
+        }
+        if self.is_open() {
             return true;
         }
+        let title = t.title.to_lowercase();
         let url_ok = self
             .url_contains
             .as_deref()
@@ -550,6 +646,7 @@ mod tests {
             attached: Notify::new(),
             closed: AtomicBool::new(false),
             filter: TargetFilter::default(),
+            seen: Mutex::new(Vec::new()),
         })
     }
 
@@ -691,20 +788,36 @@ mod tests {
     }
 
     #[test]
-    fn default_filter_matches_dioxus_url() {
-        assert!(TargetFilter::default().matches(&page("Dioxus app", "http://dioxus.index.html/")));
+    fn default_filter_accepts_any_non_blank_page() {
+        let f = TargetFilter::default();
+        assert!(f.matches(&page("Mon app", "http://localhost:8080/")));
+        assert!(f.matches(&page("", "http://app.local/index.html")));
+        assert!(f.matches(&page("Dioxus app", "http://dioxus.index.html/")));
+    }
+
+    #[test]
+    fn default_filter_rejects_about_blank() {
+        let f = TargetFilter::default();
+        assert!(f.is_open());
+        assert!(!f.accept_blank);
+        assert!(!f.matches(&page("", "about:blank")));
     }
 
     #[test]
     fn default_filter_rejects_service_worker() {
-        let mut t = page("Dioxus app", "http://dioxus.index.html/");
+        let mut t = page("Mon app", "http://localhost:8080/");
         t.kind = "service_worker".into();
         assert!(!TargetFilter::default().matches(&t));
     }
 
     #[test]
-    fn default_filter_accepts_about_blank_page() {
-        assert!(TargetFilter::default().matches(&page("", "about:blank")));
+    fn open_filter_accepts_blank_only_when_asked() {
+        let filter = TargetFilter {
+            accept_blank: true,
+            ..TargetFilter::default()
+        };
+        assert!(filter.matches(&page("", "about:blank")));
+        assert!(filter.matches(&page("Mon app", "http://localhost:8080/")));
     }
 
     #[test]
@@ -714,62 +827,33 @@ mod tests {
             title_contains: None,
             accept_blank: false,
         };
-        assert!(filter.matches(&page("Atlas", "http://localhost:5000/")));
+        assert!(filter.matches(&page("Mon app", "http://localhost:5000/")));
         // accept_blank=false : la page transitoire about:blank est rejetée.
         assert!(!filter.matches(&page("", "about:blank")));
         // une autre URL ne matche pas.
-        assert!(!filter.matches(&page("Atlas", "http://localhost:9999/")));
+        assert!(!filter.matches(&page("Mon app", "http://localhost:9999/")));
     }
 
     #[test]
     fn filter_title_contains_is_case_insensitive() {
         let filter = TargetFilter {
             url_contains: None,
-            title_contains: Some("Atlas".to_string()),
+            title_contains: Some("Mon App".to_string()),
             accept_blank: false,
         };
-        // filtre "Atlas" (majuscule) doit matcher un titre "atlas" (minuscule).
-        assert!(filter.matches(&page("atlas", "http://localhost:5000/")));
+        // filtre "Mon App" (majuscules) doit matcher un titre "mon app".
+        assert!(filter.matches(&page("mon app", "http://localhost:5000/")));
     }
 
-    // -------------------------------------------------------------------------
-    // N20 — TargetFilter double-None
-    // -------------------------------------------------------------------------
-
-    // Cas double-None, accept_blank=false : REJETTE toutes les pages sans
-    // exception. Les deux unwrap_or(false) valent false ; leur OU aussi.
-    // Ce n'est PAS un filtre "tout accepter" — c'est un filtre "tout rejeter".
     #[test]
-    fn target_filter_double_none_accept_blank_false_rejects_all_pages() {
+    fn filter_with_criteria_accepts_blank_when_asked() {
         let filter = TargetFilter {
-            url_contains: None,
-            title_contains: None,
-            accept_blank: false,
-        };
-        // page ordinaire
-        assert!(!filter.matches(&page("Any title", "http://example.com/")));
-        // page qui matche le défaut Dioxus (mais le filtre n'a pas de critère)
-        assert!(!filter.matches(&page("Dioxus app", "http://dioxus.index.html/")));
-        // about:blank également rejeté (accept_blank=false)
-        assert!(!filter.matches(&page("", "about:blank")));
-        // page vide
-        assert!(!filter.matches(&page("", "")));
-    }
-
-    // Cas double-None, accept_blank=true : seule about:blank passe (garde
-    // anticipée, avant les vérifications Option). Toute autre page est rejetée.
-    #[test]
-    fn target_filter_double_none_accept_blank_true_only_accepts_blank() {
-        let filter = TargetFilter {
-            url_contains: None,
+            url_contains: Some("localhost:5000".to_string()),
             title_contains: None,
             accept_blank: true,
         };
-        // about:blank : accepté grâce à la garde accept_blank (avant tout le reste)
         assert!(filter.matches(&page("", "about:blank")));
-        // page normale : rejetée même si accept_blank=true
-        assert!(!filter.matches(&page("Any title", "http://example.com/")));
-        assert!(!filter.matches(&page("Dioxus app", "http://dioxus.index.html/")));
+        assert!(!filter.matches(&page("Autre", "http://localhost:9999/")));
     }
 
     // Filtre par url_contains seul (title_contains=None) : seules les pages
@@ -781,9 +865,7 @@ mod tests {
             title_contains: None,
             accept_blank: false,
         };
-        // URL matche => accepté
         assert!(filter.matches(&page("Anything", "http://myapp.local/")));
-        // Titre matche mais pas l'URL => rejeté (title_contains=None)
         assert!(!filter.matches(&page("myapp", "http://other.local/")));
     }
 
@@ -796,9 +878,83 @@ mod tests {
             title_contains: Some("myapp".to_string()),
             accept_blank: false,
         };
-        // Titre matche => accepté
         assert!(filter.matches(&page("MyApp Dashboard", "http://other.local/")));
-        // URL matche mais pas le titre => rejeté (url_contains=None)
         assert!(!filter.matches(&page("Unrelated", "http://myapp.local/")));
+    }
+
+    // -------------------------------------------------------------------------
+    // Erreur « aucune cible » et suivi des pages vues
+    // -------------------------------------------------------------------------
+
+    fn seen(title: &str, url: &str) -> SeenPage {
+        SeenPage {
+            target_id: "x".into(),
+            title: title.into(),
+            url: url.into(),
+        }
+    }
+
+    #[test]
+    fn no_target_message_lists_seen_pages() {
+        let filter = TargetFilter {
+            url_contains: Some("zzz".to_string()),
+            ..TargetFilter::default()
+        };
+        let msg = no_target_message(
+            &filter,
+            &[
+                seen("Accueil", "http://localhost:8080/"),
+                seen("Autre", "http://localhost:9000/"),
+            ],
+        );
+        assert!(msg.contains("url contient « zzz »"), "{msg}");
+        assert!(
+            msg.contains("« Accueil » (http://localhost:8080/)"),
+            "{msg}"
+        );
+        assert!(msg.contains("« Autre » (http://localhost:9000/)"), "{msg}");
+        assert!(msg.contains("--cdp-target-filter-url"), "{msg}");
+    }
+
+    #[test]
+    fn no_target_message_truncates_long_fields() {
+        let long_url = format!("http://localhost/{}", "a".repeat(200));
+        let msg = no_target_message(
+            &TargetFilter::default(),
+            &[seen(&"t".repeat(100), &long_url)],
+        );
+        assert!(msg.contains('…'), "{msg}");
+        assert!(!msg.contains(&"a".repeat(100)), "{msg}");
+    }
+
+    #[test]
+    fn no_target_message_without_pages_says_so() {
+        let msg = no_target_message(&TargetFilter::default(), &[]);
+        assert!(msg.contains("aucune page vue"), "{msg}");
+        assert!(msg.contains("première page non about:blank"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn target_created_records_seen_pages_and_destroy_forgets_them() {
+        let inner = make_inner();
+        let params = |id: &str, url: &str| json!({ "targetInfo": { "targetId": id, "type": "page", "title": "T", "url": url } });
+        handle_event(&inner, "Target.targetCreated", params("p1", "http://a/")).await;
+        handle_event(&inner, "Target.targetCreated", params("p2", "about:blank")).await;
+        handle_event(
+            &inner,
+            "Target.targetInfoChanged",
+            params("p2", "http://b/"),
+        )
+        .await;
+        let seen_now = inner.seen.lock().await.clone();
+        assert_eq!(seen_now.len(), 2);
+        assert_eq!(seen_now[1].url, "http://b/");
+        handle_event(
+            &inner,
+            "Target.targetDestroyed",
+            json!({ "targetId": "p1" }),
+        )
+        .await;
+        assert_eq!(inner.seen.lock().await.len(), 1);
     }
 }

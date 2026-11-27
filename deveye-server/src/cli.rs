@@ -55,9 +55,10 @@ pub(crate) struct Args {
     pub(crate) target: TargetMode,
 
     /// Sous-chaine (insensible a la casse) que doit contenir l'URL de la page
-    /// CDP cible. Sans ce flag ni --cdp-target-filter-title, le filtre par
-    /// defaut "dioxus" (comportement historique) s'applique. Sert a viser une
-    /// tete WASM tierce (ex. `localhost:5000`) sans toucher l'app cible.
+    /// CDP cible. Sans ce flag ni --cdp-target-filter-title, la cible est la
+    /// premiere page qui n'est pas about:blank ; si aucune page ne convient,
+    /// l'erreur liste les pages vues. Sert a viser une page precise quand
+    /// plusieurs sont ouvertes (ex. `localhost:5000`).
     #[arg(long)]
     pub(crate) cdp_target_filter_url: Option<String>,
 
@@ -66,10 +67,9 @@ pub(crate) struct Args {
     #[arg(long)]
     pub(crate) cdp_target_filter_title: Option<String>,
 
-    /// Accepte la page "about:blank" comme cible CDP (transitoire wry au boot).
-    /// Force a true avec le filtre par defaut Dioxus ; sinon false (un filtre
-    /// explicite ne veut pas s'attacher au about:blank d'une tete WASM avant son
-    /// chargement), sauf si ce flag est passe.
+    /// Accepte aussi la page "about:blank" comme cible CDP (transitoire d'une
+    /// webview au boot). Desactive par defaut : un filtre ne doit pas s'attacher
+    /// a l'about:blank d'une page avant son chargement.
     #[arg(long, default_value_t = false)]
     pub(crate) cdp_accept_blank: bool,
 
@@ -85,7 +85,7 @@ pub(crate) enum TargetMode {
     Cdp,
     Sdk,
     /// Mains OS-level via KWin EIS (Wayland natif) ; yeux par screencap (M1).
-    /// Pour les cibles sans WebView ni SDK (atlas Uno desktop / Skia).
+    /// Pour les cibles sans WebView ni SDK (par exemple Uno desktop / Skia).
     KwinEis,
     /// Serveur X11 prive et explicite (`--display`, typiquement Xvfb) : yeux,
     /// mains et fenetres via `adapter-x11`, sans xcap ni KWin. Le DOM vient de

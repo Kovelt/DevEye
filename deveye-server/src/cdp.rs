@@ -14,19 +14,14 @@ use deveye_ports::{
 use crate::cli::{Args, TargetMode};
 
 /// Construit le filtre de selection de la page CDP cible a partir des arguments
-/// CLI. Sans flag explicite, applique le filtre par defaut Dioxus
-/// (retro-compatible). Des qu'un filtre est fourni, `accept_blank` suit
-/// --cdp-accept-blank (false par defaut) pour ne pas s'attacher a la page
-/// about:blank transitoire d'une tete WASM avant son chargement.
+/// CLI. Sans flag de filtre, le filtre est ouvert (premiere page qui n'est pas
+/// about:blank, ADR-0014) ; --cdp-accept-blank (false par defaut) autorise en
+/// plus la page about:blank transitoire d'une webview au boot.
 pub(crate) fn build_cdp_filter(args: &Args) -> TargetFilter {
-    if args.cdp_target_filter_url.is_none() && args.cdp_target_filter_title.is_none() {
-        TargetFilter::default()
-    } else {
-        TargetFilter {
-            url_contains: args.cdp_target_filter_url.clone(),
-            title_contains: args.cdp_target_filter_title.clone(),
-            accept_blank: args.cdp_accept_blank,
-        }
+    TargetFilter {
+        url_contains: args.cdp_target_filter_url.clone(),
+        title_contains: args.cdp_target_filter_title.clone(),
+        accept_blank: args.cdp_accept_blank,
     }
 }
 
