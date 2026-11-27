@@ -29,7 +29,7 @@ Option 3, et trois règles transversales.
 
 - **Fichier unique** `docs/schemas/shared-vectors-1.json` : placeholder `<secret>`, clés sensibles exigées par la spécification (`required_secret_keys`), clés ajoutées par le SDK (`extended_secret_keys`), clés ordinaires qui ne doivent pas être masquées, clés déclarées par l'app, cas de masquage entrée / sortie, et garde `Host` (hôtes acceptés et rejetés, `{port}` substitué). Le SDK Rust et la suite de conformité le consomment par test ; tout SDK tiers doit le reprendre.
 - **Au SDK** : un widget `state.secret` ou de rôle `password` n'a jamais de `value` publiée (`UiTreeBuilder::build`).
-- **Au serveur** : le lecteur masque la valeur de tout widget secret reçu et applique le masquage par clés (ADR-0016) aux valeurs de type objet ; **le même masquage s'applique à la sortie brute de l'outil `dom`** (lot suivant de la 1.1). Les sorties d'`eval_js` et de `invoke_command` restent hors filtre, comme documenté.
+- **Au serveur** : le lecteur masque la valeur de tout widget secret reçu et applique le masquage par clés (ADR-0016) aux valeurs de type objet ; **le même masquage s'applique à la sortie brute de l'outil `dom`** (lot suivant de la 1.1). **Amendement (revue 1.1)** : le masquage ne s'applique qu'aux réponses reconnues comme un arbre de widgets (liste racine ou champ `widgets`) ; toute autre forme est renvoyée intacte, pour ne pas altérer la sortie de `dom` d'un handler quelconque. Pour un widget secret, `value` et `text` (format legacy) sont masqués, les enfants imbriqués (`children`) sont parcourus, et la règle « secret » est la même partout (drapeau `state.secret` ou `secret`, rôle `password` sans égard à la casse ni aux espaces). `invoke_command` passe par le même masquage quand la route est `ui.widgets` (décorateur `MaskingCommandRouter`) ; les sorties d'`eval_js` et des autres commandes restent hors filtre, comme documenté.
 - **Hors périmètre** : le masquage reste un filet par noms de clés et par drapeau, pas une garantie.
 
 **Justification** : seul un fichier partagé empêche la dérive entre implémentations sans outillage ; le double masquage (SDK puis serveur) couvre une app tierce qui publierait la valeur d'un champ qu'elle déclare secret.
@@ -43,7 +43,7 @@ Option 3, et trois règles transversales.
 
 **Coûts et risques**
 
-- un client qui lisait la valeur d'un champ secret par `dom` ne la reçoit plus : changement de contenu de sécurité, à signaler en note de version (CHANGELOG) ;
+- un client qui lisait la valeur d'un champ secret par `dom` ne la reçoit plus : changement de contenu de sécurité, classé « mineure » dans `docs/stability.md` (durcissement) et à signaler en note de version (CHANGELOG, `Security`) ;
 - les tests lisent un fichier hors du crate : ils sont ignorés dans une archive crates.io (la suite complète tourne dans le dépôt).
 
 ## Notes

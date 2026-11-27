@@ -55,7 +55,7 @@ Option 5. Le module `deveye_core::ui` définit `UiTree`, `UiWidget`, `UiState`, 
 
 - un seul vocabulaire pour les cibles sans DOM : egui, Godot, Uno, GTK ;
 - les implémenteurs tiers disposent d'un schéma JSON et de fixtures ;
-- aucun changement d'un élément stable existant ; `dom` renvoie toujours la valeur de la route.
+- aucun changement de forme d'un élément stable existant ; `dom` renvoie la valeur de la route, dont seules les valeurs secrètes sont masquées (amendé par ADR-0064 : la décision initiale « `dom` renvoie toujours la valeur de la route » n'a pas tenu face au masquage).
 
 **Coûts et risques**
 
