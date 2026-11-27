@@ -6,7 +6,7 @@
 
 ## Prérequis
 
-- Sous Windows, WebView2 Runtime à jour (livré avec Edge — toute machine Win10/11 récente l'a déjà).
+- DevEye 1.0 ne supporte que **Linux** (`deveye-server`, ADR-0037) ; les mentions Windows et macOS de ce guide décrivent l'app cible ou l'historique, et ne sont pas testées par la CI. Sous Windows, WebView2 Runtime à jour (livré avec Edge).
 - Sous Linux/macOS (WebKitGTK / WKWebView), pas de CDP : DevEye pilote l'app par le **pont natif** du SDK opt-in (`--target sdk`, ou repli automatique de `--target auto`). Voir « Linux — piloter l'app desktop sans CDP » plus bas.
 - Toolchain Rust stable. Pour une app cible Dioxus : `dx` CLI Dioxus 0.7+ alignée sur le `Cargo.lock` (`dx self-update` si décalage).
 - Un client MCP (Claude Code, par exemple).
@@ -482,7 +482,7 @@ Côté app cible, le seul fichier qui référence DevEye est son `Cargo.toml` (f
 - **CDP = Windows (WebView2) uniquement.** Sur macOS (WKWebView) et Linux (WebKitGTK), CDP n'est pas exposé. Sous Linux, le **pont natif** du SDK (`--target sdk`/`auto`) conserve clic / saisie / DOM / JS / state via la pompe `document::eval` — seul `resize` (émulation des métriques du moteur) reste indisponible. Pour les cibles sans WebView ni SDK (ex. Uno desktop / Skia), utiliser `--target kwin-eis` (injection OS-level KWin EIS — yeux par screencap).
 - **Pas de stream WebSocket** sur les logs : `logs_tail` est un drain ponctuel ; pour attendre de nouveaux événements sans boucle arbitraire, utiliser `wait_condition` (prédicat `state-key` si l'app expose l'état) ou une boucle `logs_tail` côté agent. Pas de flush poussé temps réel (choix assumé).
 - **Commandes logiques** : `invoke_command` / `list_commands` sont opérationnels via `adapter-commands-http`, mais ne renvoient quelque chose que si l'app cible a déclaré des routes avec `deveye_sdk::expose_route` (sinon `list_commands` renvoie une liste vide). C'est à l'app d'exposer ce qu'elle veut rendre pilotable.
-- **Test runtime end-to-end** non automatisé : à valider manuellement à chaque release majeure Dioxus/wry (on dépend de l'option WebView2 `--remote-debugging-port`).
+- **Test runtime end-to-end** : la session MCP complète est automatisée pour la cible `x11` (`just e2e`, bloquant en CI). Les cibles WebView (CDP) restent à valider manuellement à chaque release majeure Dioxus/wry (on dépend de l'option WebView2 `--remote-debugging-port`).
 - **Reconnect du WebSocket browser** : **géré** depuis la feature `--target` / `LazyCdp` (juin 2026). Un navigateur absent au démarrage ou fermé en cours de session n'est plus fatal — chaque appel d'outil retente l'attache (l'outil renvoie une erreur actionnable tant que le CDP manque). Plus besoin de `/mcp reconnect`.
 - **`Click` ajoute ~60 ms de latence** (le `mouseMoved` préalable + sleep pour laisser le re-render). Imperceptible en usage manuel ; à garder en tête pour un test stress.
 

@@ -60,8 +60,9 @@ Contrat complet du wire protocol HTTP SDK : [docs/wire-protocol.md](docs/wire-pr
 
 ### Prérequis
 
+- **Linux** : seule plateforme supportée en 1.0 (ADR-0037) ; la compilation de `deveye-server` hors Linux échoue avec un message explicite
 - Toolchain Rust **stable** (`rustup update stable`) — MSRV : 1.88
-- Bibliothèques système (les mêmes que le `before_script` CI) :
+- Bibliothèques système (les mêmes que le workflow `.github/workflows/ci.yml`) :
   - Fedora : `sudo dnf install libxcb-devel libXrandr-devel dbus-devel libxkbcommon-devel mesa-libgbm-devel`
   - Debian/Ubuntu : `sudo apt install libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev libgbm-dev`
 
@@ -78,7 +79,7 @@ cargo build --release -p deveye-server
 just build
 ```
 
-Le binaire atterrit dans `target/release/deveye-server`.
+Le binaire atterrit dans `target/release/deveye-server`. Pour l'installer dans `~/.local/bin` : `just install` ; ou, dans `~/.cargo/bin`, `cargo install --path deveye-server --locked`. Les archives Linux x86_64 des versions sont jointes aux GitHub Releases, avec leurs sommes SHA-256 (ADR-0038).
 
 ### Lancer le serveur MCP
 
@@ -231,10 +232,11 @@ DevEye/
 ## Développement
 
 ```bash
-# Pipeline CI complet (formatage + lint strict + tests)
+# Pipeline CI complet en local (formatage, lint strict, tests, doc, Xvfb, e2e MCP,
+# cargo deny, conformité, preuve no-op du SDK en release)
 just ci
 
-# Équivalent manuel
+# Équivalent manuel du cœur
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -242,11 +244,14 @@ cargo test --workspace
 
 Les tests live KWin/EIS (session Wayland requise) sont marqués `#[ignore]` et exclus du `cargo test` standard.
 
-Les tests d'intégration de la cible X11 démarrent **leur propre Xvfb privé** (display libre entre `:251` et `:259`, sans écoute TCP, arrêté à la fin) ; ils sont aussi `#[ignore]` :
+Les tests d'intégration de la cible X11 et le test de bout en bout du binaire (session MCP stdio complète) démarrent **leur propre Xvfb privé** (display libre entre `:251` et `:259` pour l'adapter, `:231` et `:239` pour le binaire ; sans écoute TCP, arrêté à la fin) ; ils sont `#[ignore]` mais **bloquants en CI** :
 
 ```bash
-cargo test -p adapter-x11 -- --ignored --test-threads=1
+just x11   # cargo test -p adapter-x11 -- --ignored --test-threads=1
+just e2e   # cargo test -p deveye-server --test e2e_mcp -- --ignored --test-threads=1
 ```
+
+La CI GitHub Actions (`.github/workflows/ci.yml`) exécute les mêmes commandes : voir le `justfile`.
 
 ---
 
