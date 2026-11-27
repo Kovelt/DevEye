@@ -17,6 +17,13 @@ ignore = [
     # atteignable sans bump de xcb/xcap. A lever quand xcap remonte quick-xml.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # chrono 0.4 : declare non maintenu (RUSTSEC-2026-0543), sans version
+    # corrigee. Aucune faille connue : seul le statut de maintenance est en
+    # cause. chrono fait partie de l'API publique de deveye-core
+    # (horodatages des snapshots et des evenements de log) : le remplacer est
+    # un changement cassant, reserve a la 2.0. Exception posee le 27/11/2026,
+    # a rouvrir avant la 2.0.
+    "RUSTSEC-2026-0543",
 ]
 
 [bans]
