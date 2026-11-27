@@ -74,8 +74,16 @@ pub const PROTOCOL_VERSION: &str = "1";
 /// Configuration du SDK. Le `Default` lit `DEVEYE_PORT` si présent, sinon
 /// utilise [`DEFAULT_PORT`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Config {
     pub port: u16,
+}
+
+impl Config {
+    /// Configuration écoutant sur `port` (127.0.0.1 uniquement).
+    pub fn with_port(port: u16) -> Self {
+        Self { port }
+    }
 }
 
 impl Default for Config {
@@ -90,6 +98,7 @@ impl Default for Config {
 
 /// Snapshot du state app servi par `GET /devtools/state`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StatePayload {
     pub entries: BTreeMap<String, serde_json::Value>,
 }
@@ -98,6 +107,7 @@ pub struct StatePayload {
 /// L'appel **draine** le buffer : un second `poll` ne renverra que les
 /// événements arrivés entre-temps.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LogsPayload {
     pub events: Vec<deveye_core::LogEvent>,
 }
@@ -106,6 +116,7 @@ pub struct LogsPayload {
 /// consommée par la **pompe** côté app (cf. [`take_eval_requests`]). L'app
 /// exécute l'expression dans son webview (`document::eval` chez Dioxus) et
 /// répond par le `oneshot`.
+#[non_exhaustive]
 pub struct EvalRequest {
     /// Expression JS (une seule expression — typiquement une IIFE) ; la
     /// pompe l'enveloppe d'un try/catch et l'exécute dans le webview.
@@ -449,10 +460,7 @@ async fn commands_handler(State(registry): State<Arc<Registry>>) -> impl IntoRes
         let guard = registry.routes.read().unwrap();
         guard
             .iter()
-            .map(|(name, route)| CommandDescriptor {
-                name: name.clone(),
-                description: route.description.clone(),
-            })
+            .map(|(name, route)| CommandDescriptor::new(name.clone(), route.description.clone()))
             .collect()
     };
     descriptors.sort_by(|a, b| a.name.cmp(&b.name));

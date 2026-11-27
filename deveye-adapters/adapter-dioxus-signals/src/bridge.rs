@@ -116,23 +116,30 @@ impl JsInteraction {
     }
 }
 
-fn button_code(button: MouseButton) -> u8 {
+/// `None` pour un bouton inconnu (`MouseButton` est `#[non_exhaustive]`).
+fn button_code(button: MouseButton) -> Option<u8> {
     match button {
-        MouseButton::Left => 0,
-        MouseButton::Middle => 1,
-        MouseButton::Right => 2,
+        MouseButton::Left => Some(0),
+        MouseButton::Middle => Some(1),
+        MouseButton::Right => Some(2),
+        _ => None,
     }
 }
 
-fn click_snippet(position: Position, button: MouseButton) -> String {
-    let (x, y, b) = (position.x, position.y, button_code(button));
+fn click_snippet(position: Position, button: MouseButton) -> PortResult<String> {
+    let b = button_code(button).ok_or_else(|| {
+        PortError::Unsupported(format!(
+            "bouton de souris {button:?} non géré par le pont SDK"
+        ))
+    })?;
+    let (x, y) = (position.x, position.y);
     // `click` pour le bouton gauche, `contextmenu` pour le droit — comme un
     // navigateur. `el.focus()` entre press et release : ordre humain.
     let activation = match button {
         MouseButton::Right => "el.dispatchEvent(new MouseEvent('contextmenu', opts));",
         _ => "el.dispatchEvent(new MouseEvent('click', opts));",
     };
-    format!(
+    Ok(format!(
         "(function(){{ const el = document.elementFromPoint({x}, {y}); \
          if (!el) return {{ ok: false, reason: 'aucun élément à ({x}, {y})' }}; \
          const opts = {{ bubbles: true, cancelable: true, composed: true, view: window, \
@@ -148,7 +155,7 @@ fn click_snippet(position: Position, button: MouseButton) -> String {
          el.dispatchEvent(new MouseEvent('mouseup', opts)); \
          {activation} \
          return {{ ok: true }}; }})()"
-    )
+    ))
 }
 
 fn hover_snippet(position: Position) -> String {
@@ -293,7 +300,7 @@ impl InteractionSink for JsInteraction {
     async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
         match command {
             InteractionCommand::Click { position, button } => {
-                self.run(click_snippet(position, button)).await
+                self.run(click_snippet(position, button)?).await
             }
             InteractionCommand::Hover { position } => self.run(hover_snippet(position)).await,
             InteractionCommand::Type { text } => self.run(type_snippet(&text)).await,
@@ -324,6 +331,11 @@ impl InteractionSink for JsInteraction {
                 "upload_file nécessite CDP (DOM.setFileInputFiles) ; la sécurité \
                  navigateur interdit de remplir un input fichier en JS"
                     .to_string(),
+            )),
+            // `InteractionCommand` est `#[non_exhaustive]` : refus explicite.
+            // Pas de `Debug` de la commande : il embarquerait le texte tapé.
+            _ => Err(PortError::Unsupported(
+                "commande non gérée par le pont SDK".to_string(),
             )),
         }
     }
@@ -458,7 +470,7 @@ mod tests {
 
     #[test]
     fn click_snippet_gauche_active_par_click() {
-        let js = click_snippet(Position::new(10, 20), MouseButton::Left);
+        let js = click_snippet(Position::new(10, 20), MouseButton::Left).unwrap();
         assert!(js.contains("elementFromPoint(10, 20)"));
         assert!(js.contains("new MouseEvent('click'"));
         assert!(js.contains("el.focus()"));
@@ -466,7 +478,7 @@ mod tests {
 
     #[test]
     fn click_snippet_droit_active_par_contextmenu() {
-        let js = click_snippet(Position::new(1, 2), MouseButton::Right);
+        let js = click_snippet(Position::new(1, 2), MouseButton::Right).unwrap();
         assert!(js.contains("contextmenu"));
         assert!(!js.contains("new MouseEvent('click'"));
     }

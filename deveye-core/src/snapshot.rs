@@ -34,6 +34,7 @@ impl Position {
 /// MCP servers savent le passer en base64) et la fidélité (loss-less, important
 /// pour des outils de VRT futurs).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Screenshot {
     pub bytes: Vec<u8>,
     pub captured_at: DateTime<Utc>,
@@ -56,6 +57,7 @@ impl Screenshot {
 /// résultat brut de CDP `DOM.getDocument`, soit un arbre simplifié. Un type
 /// fort viendra quand un consommateur le réclamera (sprint VRT).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DomTree {
     pub tree: serde_json::Value,
     pub captured_at: DateTime<Utc>,
@@ -76,6 +78,7 @@ impl DomTree {
 /// `entries` est une map `nom → valeur JSON` — chaque clé correspond à un
 /// signal nommé par `deveye_sdk::expose_signal::<T>(name)`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StateDump {
     pub entries: std::collections::BTreeMap<String, serde_json::Value>,
     pub captured_at: DateTime<Utc>,

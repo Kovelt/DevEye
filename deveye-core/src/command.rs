@@ -5,6 +5,7 @@ use crate::snapshot::Position;
 /// Bouton de souris pour les commandes de clic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum MouseButton {
     #[default]
     Left,
@@ -19,6 +20,7 @@ pub enum MouseButton {
 /// (sprint DE-2+).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum InteractionCommand {
     /// Clic à une position absolue du viewport.
     Click {
@@ -80,12 +82,22 @@ pub enum InteractionCommand {
 /// description, closure)` ; un agent (Claude) les découvre par cette liste
 /// puis les déclenche par `POST /devtools/command` / `invoke_command`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CommandDescriptor {
     /// Identifiant de la commande, identique au champ `route` de l'invocation.
     pub name: String,
     /// Description lisible par un agent — à quoi sert la commande et ce
     /// qu'attend son `payload`.
     pub description: String,
+}
+
+impl CommandDescriptor {
+    pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+        }
+    }
 }
 
 impl InteractionCommand {

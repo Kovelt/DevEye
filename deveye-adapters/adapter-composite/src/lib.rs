@@ -456,6 +456,11 @@ impl CompositeWaitCondition {
                     None => Ok(false),
                 }
             }
+            // `WaitPredicate` est `#[non_exhaustive]` : un prédicat ajouté par le
+            // domaine sans implémentation ici est refusé explicitement.
+            _ => Err(PortError::Unsupported(
+                "prédicat d'attente non géré par ce composite".to_string(),
+            )),
         }
     }
 }
@@ -476,18 +481,18 @@ impl WaitCondition for CompositeWaitCondition {
         let mut stability: Option<StabilityState> = None;
         loop {
             if self.check(&predicate, &mut stability).await? {
-                return Ok(WaitOutcome {
-                    satisfied: true,
-                    elapsed_ms: start.elapsed().as_millis() as u64,
-                    detail: "prédicat satisfait".to_string(),
-                });
+                return Ok(WaitOutcome::new(
+                    true,
+                    start.elapsed().as_millis() as u64,
+                    "prédicat satisfait",
+                ));
             }
             if Instant::now() >= deadline {
-                return Ok(WaitOutcome {
-                    satisfied: false,
-                    elapsed_ms: start.elapsed().as_millis() as u64,
-                    detail: format!("timeout après {} ms", timeout.as_millis()),
-                });
+                return Ok(WaitOutcome::new(
+                    false,
+                    start.elapsed().as_millis() as u64,
+                    format!("timeout après {} ms", timeout.as_millis()),
+                ));
             }
             tokio::time::sleep(POLL).await;
         }

@@ -37,12 +37,7 @@ impl WindowLister for CdpClient {
             .target_infos
             .into_iter()
             .filter(|t| t.kind == "page")
-            .map(|t| WindowInfo {
-                id: t.target_id,
-                title: t.title,
-                url: t.url,
-                kind: t.kind,
-            })
+            .map(|t| WindowInfo::new(t.target_id, t.title, t.url, t.kind))
             .collect())
     }
 }

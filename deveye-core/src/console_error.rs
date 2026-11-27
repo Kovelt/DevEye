@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// disparaissaient silencieusement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ConsoleLevel {
     Debug,
     Log,
@@ -23,6 +24,7 @@ pub enum ConsoleLevel {
 /// `url` et `line` sont optionnels : CDP les fournit pour les messages issus de
 /// fichiers JS référencés, mais pas pour les exceptions synchrones.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ConsoleError {
     pub level: ConsoleLevel,
     pub text: String,
@@ -31,6 +33,27 @@ pub struct ConsoleError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
     pub timestamp: DateTime<Utc>,
+}
+
+impl ConsoleError {
+    /// Message de console horodaté à l'instant de l'appel, sans URL ni ligne.
+    pub fn new(level: ConsoleLevel, text: impl Into<String>) -> Self {
+        Self {
+            level,
+            text: text.into(),
+            url: None,
+            line: None,
+            timestamp: Utc::now(),
+        }
+    }
+
+    /// Ajoute l'emplacement source (URL et ligne) du message.
+    #[must_use]
+    pub fn with_location(mut self, url: Option<String>, line: Option<u32>) -> Self {
+        self.url = url;
+        self.line = line;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -56,6 +79,16 @@ mod tests {
         );
         assert!(ConsoleLevel::Debug < ConsoleLevel::Log);
         assert!(ConsoleLevel::Debug < ConsoleLevel::Error);
+    }
+
+    #[test]
+    fn constructor_sets_location_through_builder() {
+        let e = ConsoleError::new(ConsoleLevel::Warning, "lent")
+            .with_location(Some("app://index".to_string()), Some(12));
+        assert_eq!(e.level, ConsoleLevel::Warning);
+        assert_eq!(e.text, "lent");
+        assert_eq!(e.url.as_deref(), Some("app://index"));
+        assert_eq!(e.line, Some(12));
     }
 
     #[test]

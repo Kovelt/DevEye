@@ -6,6 +6,7 @@ use thiserror::Error;
 /// vers `PortError` via `From` pour faciliter la composition côté binaire
 /// orchestrateur.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PortError {
     #[error("rendu : {0}")]
     Render(String),

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum LogLevel {
     Trace,
     Debug,
@@ -25,6 +26,7 @@ pub enum LogLevel {
 /// les garde en `serde_json::Value` plutôt qu'en `BTreeMap<String,String>` parce
 /// que `tracing` autorise des types arbitraires.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LogEvent {
     pub level: LogLevel,
     pub target: String,

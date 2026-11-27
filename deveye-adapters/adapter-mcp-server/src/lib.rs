@@ -1360,11 +1360,7 @@ mod dispatch_tests {
             _predicate: WaitPredicate,
             _timeout: Duration,
         ) -> PortResult<WaitOutcome> {
-            Ok(WaitOutcome {
-                satisfied: true,
-                elapsed_ms: 0,
-                detail: "mock".to_string(),
-            })
+            Ok(WaitOutcome::new(true, 0, "mock"))
         }
     }
 

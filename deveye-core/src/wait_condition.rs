@@ -9,6 +9,7 @@ use crate::LogLevel;
 /// I/O ici.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum WaitPredicate {
     /// L'element matchant le selecteur CSS est present dans le DOM.
     /// Si `visible` est vrai, l'element doit en plus avoir un
@@ -79,6 +80,7 @@ pub enum WaitPredicate {
 
 /// Résultat d'une attente conditionnelle.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct WaitOutcome {
     /// Vrai si le prédicat a été satisfait avant le timeout.
     pub satisfied: bool,
@@ -86,6 +88,16 @@ pub struct WaitOutcome {
     pub elapsed_ms: u64,
     /// Description pour l'agent (ce qui a été observé si non satisfait).
     pub detail: String,
+}
+
+impl WaitOutcome {
+    pub fn new(satisfied: bool, elapsed_ms: u64, detail: impl Into<String>) -> Self {
+        Self {
+            satisfied,
+            elapsed_ms,
+            detail: detail.into(),
+        }
+    }
 }
 
 #[cfg(test)]

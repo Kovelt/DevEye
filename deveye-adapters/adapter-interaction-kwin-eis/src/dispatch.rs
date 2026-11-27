@@ -27,6 +27,8 @@ fn command_kind(command: &InteractionCommand) -> &'static str {
         InteractionCommand::DoubleClick { .. } => "double-click",
         InteractionCommand::HandleDialog { .. } => "handle-dialog",
         InteractionCommand::UploadFile { .. } => "upload-file",
+        // `InteractionCommand` est `#[non_exhaustive]`.
+        _ => "inconnue",
     }
 }
 
@@ -39,10 +41,17 @@ fn to_action(command: InteractionCommand, origin: (i32, i32)) -> Result<EisActio
     let to_abs = |p: Position| ((p.x + ox) as f64, (p.y + oy) as f64);
 
     let action = match command {
-        InteractionCommand::Click { position, button } => EisAction::Click {
-            abs: to_abs(position),
-            button,
-        },
+        InteractionCommand::Click { position, button } => {
+            if crate::session::button_code(button).is_none() {
+                return Err(PortError::Unsupported(format!(
+                    "bouton de souris {button:?} non géré en kwin-eis"
+                )));
+            }
+            EisAction::Click {
+                abs: to_abs(position),
+                button,
+            }
+        }
         InteractionCommand::Hover { position } => EisAction::Hover {
             abs: to_abs(position),
         },
@@ -81,6 +90,14 @@ fn to_action(command: InteractionCommand, origin: (i32, i32)) -> Result<EisActio
                  indisponible en mode kwin-eis (mains OS-level pures)"
                     .to_string(),
             ));
+        }
+        // `InteractionCommand` est `#[non_exhaustive]` : refus explicite d'une
+        // commande ajoutée par le domaine sans traduction EIS.
+        other => {
+            return Err(PortError::Unsupported(format!(
+                "commande {} non gérée en kwin-eis",
+                command_kind(&other)
+            )));
         }
     };
     Ok(action)

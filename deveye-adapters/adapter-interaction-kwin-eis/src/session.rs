@@ -235,6 +235,8 @@ impl EisSession {
         abs: (f64, f64),
         button: MouseButton,
     ) -> Result<(), EisError> {
+        let code = button_code(button)
+            .ok_or_else(|| EisError::Eis(format!("bouton de souris {button:?} non géré")))?;
         let (serial, seq) = self.begin_emit()?;
         let device = &self.devices[self.pointer_index()?];
         let pa = device
@@ -244,7 +246,6 @@ impl EisSession {
             .interface::<ei::Button>()
             .ok_or_else(|| EisError::Eis("pas d'interface bouton".into()))?;
         let proto = device.device();
-        let code = button_code(button);
         proto.start_emulating(serial, seq);
         pa.motion_absolute(abs.0 as f32, abs.1 as f32);
         proto.frame(serial, monotonic_us());
@@ -448,11 +449,13 @@ fn modifier_to_evdev(name: &str) -> Option<u32> {
 }
 
 /// Bouton DevEye -> code evdev.
-fn button_code(button: MouseButton) -> u32 {
+/// `None` pour un bouton inconnu (`MouseButton` est `#[non_exhaustive]`).
+pub(crate) fn button_code(button: MouseButton) -> Option<u32> {
     match button {
-        MouseButton::Left => BTN_LEFT,
-        MouseButton::Right => BTN_RIGHT,
-        MouseButton::Middle => BTN_MIDDLE,
+        MouseButton::Left => Some(BTN_LEFT),
+        MouseButton::Right => Some(BTN_RIGHT),
+        MouseButton::Middle => Some(BTN_MIDDLE),
+        _ => None,
     }
 }
 
@@ -569,17 +572,17 @@ mod tests {
 
     #[test]
     fn button_code_left_maps_to_btn_left() {
-        assert_eq!(button_code(MouseButton::Left), BTN_LEFT);
+        assert_eq!(button_code(MouseButton::Left), Some(BTN_LEFT));
     }
 
     #[test]
     fn button_code_right_maps_to_btn_right() {
-        assert_eq!(button_code(MouseButton::Right), BTN_RIGHT);
+        assert_eq!(button_code(MouseButton::Right), Some(BTN_RIGHT));
     }
 
     #[test]
     fn button_code_middle_maps_to_btn_middle() {
-        assert_eq!(button_code(MouseButton::Middle), BTN_MIDDLE);
+        assert_eq!(button_code(MouseButton::Middle), Some(BTN_MIDDLE));
     }
 
     // --- modifier_to_evdev : mapping nom -> code evdev (insensible a la casse) ---

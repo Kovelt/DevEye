@@ -67,16 +67,16 @@ fn window_info_from_json(v: &Value) -> WindowInfo {
             .to_string()
     };
     let kind = field("kind");
-    WindowInfo {
-        id: field("id"),
-        title: field("title"),
-        url: String::new(),
-        kind: if kind.is_empty() {
+    WindowInfo::new(
+        field("id"),
+        field("title"),
+        String::new(),
+        if kind.is_empty() {
             "kwin".to_string()
         } else {
             kind
         },
-    }
+    )
 }
 
 /// Génère le script KWin qui liste les fenêtres et renvoie un tableau JSON

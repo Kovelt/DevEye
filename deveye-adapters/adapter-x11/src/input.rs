@@ -99,11 +99,13 @@ fn to_abs(p: Position, origin: (i32, i32)) -> (i16, i16) {
     )
 }
 
-fn button_number(b: MouseButton) -> u8 {
+/// `None` pour un bouton inconnu (`MouseButton` est `#[non_exhaustive]`).
+fn button_number(b: MouseButton) -> Option<u8> {
     match b {
-        MouseButton::Left => BTN_LEFT,
-        MouseButton::Middle => BTN_MIDDLE,
-        MouseButton::Right => BTN_RIGHT,
+        MouseButton::Left => Some(BTN_LEFT),
+        MouseButton::Middle => Some(BTN_MIDDLE),
+        MouseButton::Right => Some(BTN_RIGHT),
+        _ => None,
     }
 }
 
@@ -122,6 +124,8 @@ pub fn command_kind(command: &InteractionCommand) -> &'static str {
         InteractionCommand::DoubleClick { .. } => "double-click",
         InteractionCommand::HandleDialog { .. } => "handle-dialog",
         InteractionCommand::UploadFile { .. } => "upload-file",
+        // `InteractionCommand` est `#[non_exhaustive]`.
+        _ => "inconnue",
     }
 }
 
@@ -176,7 +180,10 @@ pub fn to_steps(command: InteractionCommand, origin: (i32, i32)) -> Result<Vec<S
         InteractionCommand::Click { position, button } => {
             steps.push(motion(to_abs(position, origin)));
             steps.push(Step::Pause(SETTLE));
-            steps.extend(button_click(button_number(button)));
+            let number = button_number(button).ok_or_else(|| {
+                X11Error::Unsupported(format!("bouton de souris {button:?} non géré en X11"))
+            })?;
+            steps.extend(button_click(number));
         }
         InteractionCommand::Hover { position } => {
             steps.push(motion(to_abs(position, origin)));
@@ -239,10 +246,14 @@ pub fn to_steps(command: InteractionCommand, origin: (i32, i32)) -> Result<Vec<S
         InteractionCommand::KeyCombo { modifiers, key } => {
             steps.push(Step::Combo { modifiers, key })
         }
-        // Deja refuses par `check_supported`.
-        InteractionCommand::Navigate { .. }
-        | InteractionCommand::HandleDialog { .. }
-        | InteractionCommand::UploadFile { .. } => unreachable!("filtre par check_supported"),
+        // Navigate, HandleDialog et UploadFile sont deja refuses par
+        // `check_supported` ; toute commande future sans traduction X11 l'est ici.
+        other => {
+            return Err(X11Error::Unsupported(format!(
+                "commande {} non gérée en X11",
+                command_kind(&other)
+            )))
+        }
     }
     Ok(steps)
 }

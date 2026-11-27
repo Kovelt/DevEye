@@ -11,7 +11,9 @@ impl InteractionSink for CdpClient {
     async fn dispatch(&self, command: InteractionCommand) -> PortResult<()> {
         match command {
             InteractionCommand::Click { position, button } => {
-                let label = mouse_button_label(button);
+                let label = mouse_button_label(button).ok_or_else(|| {
+                    PortError::Unsupported(format!("bouton de souris {button:?} non géré en CDP"))
+                })?;
                 // mouseMoved préalable : déclenche mouseover/mouseenter avant
                 // le press. Indispensable pour les UI dont les éléments
                 // n'apparaissent qu'au hover (sidebars rétractables, menus
@@ -184,6 +186,14 @@ impl InteractionSink for CdpClient {
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                 mouse_event(self, "mouseReleased", to, "left").await?;
             }
+            // `InteractionCommand` est `#[non_exhaustive]` : une commande
+            // ajoutée par le domaine sans traduction CDP est refusée.
+            // Pas de `Debug` de la commande : il embarquerait le texte tapé.
+            _ => {
+                return Err(PortError::Unsupported(
+                    "commande non gérée par l'adapter CDP".to_string(),
+                ))
+            }
         }
         Ok(())
     }
@@ -221,11 +231,14 @@ async fn mouse_event_cc(
     Ok(())
 }
 
-fn mouse_button_label(button: MouseButton) -> &'static str {
+/// `None` pour un bouton que cet adapter ne sait pas traduire (`MouseButton`
+/// est `#[non_exhaustive]`).
+fn mouse_button_label(button: MouseButton) -> Option<&'static str> {
     match button {
-        MouseButton::Left => "left",
-        MouseButton::Right => "right",
-        MouseButton::Middle => "middle",
+        MouseButton::Left => Some("left"),
+        MouseButton::Right => Some("right"),
+        MouseButton::Middle => Some("middle"),
+        _ => None,
     }
 }
 
@@ -260,9 +273,9 @@ mod tests {
 
     #[test]
     fn mouse_button_label_covers_all_variants() {
-        assert_eq!(mouse_button_label(MouseButton::Left), "left");
-        assert_eq!(mouse_button_label(MouseButton::Right), "right");
-        assert_eq!(mouse_button_label(MouseButton::Middle), "middle");
+        assert_eq!(mouse_button_label(MouseButton::Left), Some("left"));
+        assert_eq!(mouse_button_label(MouseButton::Right), Some("right"));
+        assert_eq!(mouse_button_label(MouseButton::Middle), Some("middle"));
     }
 
     #[test]

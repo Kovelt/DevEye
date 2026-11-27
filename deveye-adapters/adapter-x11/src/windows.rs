@@ -144,12 +144,12 @@ pub fn listable(nodes: &[WinNode]) -> Vec<&WinNode> {
 
 /// Projection `WindowInfo` (identifiant hexadecimal X, `url` vide, `kind` fixe).
 pub fn to_window_info(n: &WinNode) -> WindowInfo {
-    WindowInfo {
-        id: format!("0x{:x}", n.id),
-        title: n.title().to_string(),
-        url: String::new(),
-        kind: "x11-window".to_string(),
-    }
+    WindowInfo::new(
+        format!("0x{:x}", n.id),
+        n.title(),
+        String::new(),
+        "x11-window",
+    )
 }
 
 /// Decode une propriete texte : `UTF8_STRING` (UTF-8) ou `STRING` (Latin-1).
