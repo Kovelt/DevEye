@@ -1,6 +1,6 @@
 # ADR-0068 — Capacités additives et version du protocole
 
-- **Statut** : Proposé
+- **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0011 (stabilité), ADR-0017 (protocole 1.0 et `/devtools/info`), ADR-0065 (capacité `ui.widgets/1`), ADR-0066 (capacité `logs`)
@@ -29,3 +29,5 @@ Option 2. `protocol_version` reste `1.0` pour toute la série 1.x ; une route de
 **Positives** : aucun changement de code, aucun avertissement de mineure chez les clients 1.0 ; une règle unique.
 
 **Coûts et risques** : la mineure du protocole ne porte plus d'information en 1.x ; un client qui veut savoir si un serveur sert `ui.widgets` doit lire `capabilities`, jamais le numéro. Choix qui engage le mainteneur au-delà de la 1.1 (statut Proposé).
+
+Note de validation : le mainteneur a validé cette décision le 2026-11-27 ; le statut passe de « Proposé » à « Accepté », le fond est inchangé.
