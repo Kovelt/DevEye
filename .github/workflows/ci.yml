@@ -31,7 +31,7 @@ env:
   #   xvfb                 -> serveur X privé des tests x11 et e2e
   APT_DEPS: >-
     pkg-config libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev
-    libgbm-dev libpipewire-0.3-dev libspa-0.2-dev libclang-dev xvfb
+    libgbm-dev libwayland-dev libpipewire-0.3-dev libspa-0.2-dev libclang-dev xvfb
 
 jobs:
   fmt:
@@ -103,9 +103,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: taiki-e/install-action@09dc018eee06ae1c9e0409786563f534210ceb83 # v2.49.50
+      - uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
-          tool: cargo-deny
+          # Version épinglée : celle validée en local (la syntaxe des exceptions
+          # AGPL-3.0-or-later de deny.toml exige cargo-deny >= 0.19).
+          tool: cargo-deny@0.19.8
       - run: cargo deny check
 
   conformance:
@@ -159,7 +161,7 @@ jobs:
       - name: Toolchain
         if: steps.baseline.outputs.tag != ''
         run: rustup toolchain install stable --profile minimal
-      - uses: taiki-e/install-action@09dc018eee06ae1c9e0409786563f534210ceb83 # v2.49.50
+      - uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         if: steps.baseline.outputs.tag != ''
         with:
           tool: cargo-semver-checks
@@ -198,7 +200,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Toolchain
         run: rustup toolchain install stable --profile minimal
-      - uses: taiki-e/install-action@09dc018eee06ae1c9e0409786563f534210ceb83 # v2.49.50
+      - uses: taiki-e/install-action@073e1fd0bc889c9aee68dbaaa927cde1b5653a83 # v2.90.11
         with:
           tool: cargo-cyclonedx
       - name: Génération (un fichier .cdx.json par crate)
