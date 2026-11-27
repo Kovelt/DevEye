@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/1.0/logs-poll.json",
+  "$id": "https://github.com/Kovelt/DevEye/docs/schemas/1.0/logs-poll.json",
   "title": "DevEye 1.0 : réponse de GET /devtools/logs/poll",
   "description": "Événements de log accumulés depuis le dernier poll (le poll est destructif), dans l'ordre d'émission.",
   "type": "object",

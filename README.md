@@ -25,10 +25,10 @@ DevEye est un serveur [MCP](https://modelcontextprotocol.io) (Model Context Prot
 **1. `cargo install` depuis GitHub** (compile le binaire, version épinglée) :
 
 ```bash
-cargo install --git https://github.com/Morgan-Voltz/DevEye --tag v1.1.0 deveye-server --locked
+cargo install --git https://github.com/Kovelt/DevEye --tag v1.1.0 deveye-server --locked
 ```
 
-**2. Archive de release** : télécharger `deveye-server-v1.1.0-x86_64-unknown-linux-gnu.tar.gz` et `SHA256SUMS` depuis les [versions GitHub](https://github.com/Morgan-Voltz/DevEye/releases), puis :
+**2. Archive de release** : télécharger `deveye-server-v1.1.0-x86_64-unknown-linux-gnu.tar.gz` et `SHA256SUMS` depuis les [versions GitHub](https://github.com/Kovelt/DevEye/releases), puis :
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
@@ -41,7 +41,7 @@ L'archive contient le binaire, `LICENSE` (AGPL-3.0), `LICENSE-MIT`, ce README et
 **3. Depuis les sources** :
 
 ```bash
-git clone https://github.com/Morgan-Voltz/DevEye && cd DevEye
+git clone https://github.com/Kovelt/DevEye && cd DevEye
 just install                       # build release, copié dans ~/.local/bin
 # ou : cargo install --path deveye-server --locked
 ```

@@ -43,8 +43,8 @@ edition = "2021"
 rust-version = "1.88"
 license = "AGPL-3.0-or-later"
 authors = ["NuvoraCode / Morgan Voltz"]
-repository = "https://github.com/Morgan-Voltz/DevEye"
-homepage = "https://github.com/Morgan-Voltz/DevEye"
+repository = "https://github.com/Kovelt/DevEye"
+homepage = "https://github.com/Kovelt/DevEye"
 
 # Lints communs (ADR-0009). Chaque crate les active par `[lints] workspace = true`.
 # Seule exception : adapter-interaction-kwin-eis, qui déclare ses propres lints

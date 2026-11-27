@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Signaler une faille de sécurité (privé)
+    url: https://github.com/Kovelt/DevEye/security/advisories/new
+    about: Ne publiez pas de faille dans une issue. Utilisez le signalement privé de vulnérabilité de GitHub.
+  - name: Signaler un comportement contraire au code de conduite
+    url: https://github.com/Kovelt/DevEye/blob/main/CODE_OF_CONDUCT.md#signalement
+    about: Le code de conduite explique comment signaler un contenu aux mainteneurs.

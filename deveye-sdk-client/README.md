@@ -2,7 +2,7 @@
 
 Client HTTP (loopback) du wire protocol du SDK DevEye, partagé par les adapters et utilisable par tout client tiers.
 
-Fait partie de [DevEye](https://github.com/Morgan-Voltz/DevEye), outillage dev-only qui permet à un agent (client MCP) de voir et de piloter une app graphique en cours d'exécution.
+Fait partie de [DevEye](https://github.com/Kovelt/DevEye), outillage dev-only qui permet à un agent (client MCP) de voir et de piloter une app graphique en cours d'exécution.
 
 ## Licence
 

@@ -23,7 +23,7 @@ deveye = ["dep:deveye-sdk"]
 
 ```toml
 [dependencies]
-deveye-sdk = { git = "https://github.com/Morgan-Voltz/DevEye", tag = "v1.0.0", optional = true }
+deveye-sdk = { git = "https://github.com/Kovelt/DevEye", tag = "v1.0.0", optional = true }
 ```
 
 Lancer l'app avec la feature : `cargo run --features deveye` (ou `dx serve --features deveye` pour une app Dioxus).

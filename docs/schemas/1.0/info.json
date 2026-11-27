@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/1.0/info.json",
+  "$id": "https://github.com/Kovelt/DevEye/docs/schemas/1.0/info.json",
   "title": "DevEye 1.0 : réponse de GET /devtools/info",
   "description": "Identité du SDK et capacités actives (wire-protocol.md §3.6).",
   "type": "object",

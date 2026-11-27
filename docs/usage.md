@@ -11,7 +11,7 @@ Référence unique et exacte de l'usage de DevEye : options du binaire, sous-com
 ## Installation et prérequis
 
 - **Linux uniquement** ([platforms.md](platforms.md)) ; un client MCP (Claude Code, par exemple).
-- Installer `deveye-server` : archive de release GitHub, `cargo install --git https://github.com/Morgan-Voltz/DevEye --tag v1.0.0 deveye-server --locked`, ou depuis les sources (`just install`) ; détail dans le [README](../README.md#installation).
+- Installer `deveye-server` : archive de release GitHub, `cargo install --git https://github.com/Kovelt/DevEye --tag v1.0.0 deveye-server --locked`, ou depuis les sources (`just install`) ; détail dans le [README](../README.md#installation).
 - Bibliothèques de compilation (installation depuis les sources) : voir le README.
 - Selon la cible : session KDE Plasma Wayland (`kwin-eis`), `Xvfb` (`x11`), navigateur ou webview Chromium avec le port de débogage ouvert (`cdp`), SDK embarqué dans l'app (`sdk`, état, logs, commandes).
 

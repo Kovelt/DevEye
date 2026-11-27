@@ -48,7 +48,7 @@ Les comportements abusifs, harcelants ou autrement inacceptables peuvent être s
 
 ### Si le signalement de contenu n'est pas disponible
 
-Le menu « Report to repository admins » dépend d'un réglage du dépôt (Settings, Moderation options, Reported content). S'il n'apparaît pas, ou si le comportement a eu lieu **hors de GitHub** (message privé, autre plateforme, événement), procédez ainsi :
+Le dépôt appartient à l'organisation GitHub Kovelt, ce qui rend disponible le menu « Report to repository admins » ; il dépend d'un réglage activé par le mainteneur (Settings, Access, Moderation options, Reported content). S'il n'apparaît pas, ou si le comportement a eu lieu **hors de GitHub** (message privé, autre plateforme, événement), procédez ainsi :
 
 1. ouvrez une issue intitulée « **Demande de contact (code de conduite)** » **sans aucun détail** : ni noms, ni extraits, ni liens vers le comportement. Elle sert seulement à joindre un mainteneur ;
 2. un mainteneur répond en proposant un canal privé adapté (par exemple un avis privé GitHub ou un échange direct par GitHub) et supprime l'issue une fois le contact établi ;

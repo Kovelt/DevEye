@@ -176,7 +176,7 @@
       "type": "object"
     }
   },
-  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/ui-widgets-1.json",
+  "$id": "https://github.com/Kovelt/DevEye/docs/schemas/ui-widgets-1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Arbre de widgets d'une app à un instant.",
   "properties": {

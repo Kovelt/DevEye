@@ -18,6 +18,7 @@ Version mineure « Perception structurée » : contrat des widgets natifs figé,
 - `deveye-server doctor` contrôle l'arbre `ui.widgets` quand le SDK l'annonce (échec sur ids dupliqués, parent ou schéma invalide).
 - Scénarios UI-01 et UI-02 de la suite `deveye-conformance` pour la route `ui.widgets`.
 - `RouteDomInspector::ui_tree()` et avertissement d'arbre périmé (> 2 s).
+- Modèles GitHub : formulaires d'issue (rapport de bogue, demande de fonctionnalité) en français, `config.yml` (issues vierges désactivées, liens vers le signalement privé de vulnérabilités et le code de conduite) et modèle de demande de fusion ([ADR-0071](docs/adr/0071-depot-heberge-dans-l-organisation-github-kovelt.md)).
 - `deveye-sdk` : `log()` et `log_with()` poussent des logs vers `logs_tail` sans abonné `tracing`, `LogLevel` réexporté ; `layer()` / `DeveyeLayer` composent la capture avec le subscriber de l'hôte, et `try_install_tracing_layer()` signale un abonné global déjà installé ([ADR-0066](docs/adr/0066-push-de-logs-et-layer-du-sdk.md)).
 - Sorties structurées MCP : les 28 outils à petite sortie (`target_info`, `wait_*`, `assert_selector`, `assert_state`, `window_geometry`, `focus_window`, `click_selector`, `click_text` et les acquittements) déclarent un `outputSchema` dans `tools/list` et renvoient un `structuredContent` égal à leur texte ; le texte reste identique à celui de la 1.0 ([ADR-0067](docs/adr/0067-sorties-structurees-mcp-palier-a.md)).
 - Erreurs MCP typées `ToolError { ok, reason, detail, hint?, candidates? }` pour `unsupported`, `sdk_unavailable` et `interaction_failed`, avec `structuredContent` identique au texte ; `reason` est une liste ouverte.
@@ -26,6 +27,7 @@ Version mineure « Perception structurée » : contrat des widgets natifs figé,
 
 ### Changed
 
+- Le dépôt est transféré vers `github.com/Kovelt/DevEye` (anciennes adresses redirigées par GitHub) : liens, champs `repository` des crates et identifiants `$id` des schémas mis à jour ([ADR-0071](docs/adr/0071-depot-heberge-dans-l-organisation-github-kovelt.md)).
 - Règle 5 du `CLAUDE.md` amendée : `schemars` est autorisée dans `deveye-core` derrière la feature optionnelle `schema`.
 - Le buffer de logs du SDK est un `std::sync::Mutex` sans canal de drain ; la capacité `logs` est annoncée dès qu'une source de logs est armée.
 - Le numéro de version du protocole reste 1.0 pour tout ajout additif (route de commande, capacité, champ), découvert par `capabilities` ; `docs/stability.md` gagne une section « Surface expérimentale » (features `unstable-*`).
@@ -147,7 +149,7 @@ Les versions `0.1.x` (juin 2026) n'ont pas été taguées ; leur contenu est ré
 
 - **0.1.x (2026-06-02 au 2026-07-03)** : mise en place du workspace hexagonal ; première capture et premières interactions via CDP ; pont natif du SDK quand CDP est indisponible ; audit CI (offline-first) et `cargo deny` ; wire protocol formalisé ; jalons M0 à M7 (réconciliation du SDK, capture KWin ScreenShot2, clic droit, filtre de cible CDP configurable, outils de scénarios `wait_*`, `assert_*` et `drag_drop`, `list_windows`, interaction OS-level Wayland via KWin EIS, domaine d'orchestration, `justfile` et repli plein écran) ; audit qualité du 25 juin et durcissements.
 
-[Non publié]: https://github.com/Morgan-Voltz/DevEye/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/Morgan-Voltz/DevEye/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/Morgan-Voltz/DevEye/compare/v0.2.0...v1.0.0
-[0.2.0]: https://github.com/Morgan-Voltz/DevEye/releases/tag/v0.2.0
+[Non publié]: https://github.com/Kovelt/DevEye/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Kovelt/DevEye/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/Kovelt/DevEye/compare/v0.2.0...v1.0.0
+[0.2.0]: https://github.com/Kovelt/DevEye/releases/tag/v0.2.0

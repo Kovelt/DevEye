@@ -116,7 +116,7 @@ En 1.0 ([ADR-0014](adr/0014-filtre-de-cible-cdp-permissif-par-defaut.md)) :
 
 ## 8. Distribution et vendoring
 
-- **Forge** : GitHub (`github.com/Morgan-Voltz/DevEye`), CI GitHub Actions ; l'ancienne forge est archivée ([ADR-0003](adr/0003-hebergement-github-ci-github-actions.md)).
+- **Forge** : GitHub (`github.com/Kovelt/DevEye`), CI GitHub Actions ; l'ancienne forge est archivée ([ADR-0003](adr/0003-hebergement-github-ci-github-actions.md)).
 - **Binaire** : archive de release et `cargo install --git … --tag v1.0.0` ([ADR-0038](adr/0038-distribution-archives-github-et-cargo-install.md)) ; plus de `cargo run` à chaque démarrage.
 - **Bibliothèques** : dépendance versionnée (crates.io une fois publiée, sinon git et tag) à la place des copies vendorées ([integration.md](integration.md)). Le script `scripts/sync-deveye.sh` est conservé **pour la transition seulement** ([ADR-0040](adr/0040-fin-du-vendoring-script-de-synchronisation-de-transition.md)), avec cibles configurables et sans aucun chemin personnel : il faut lui fournir vos dossiers.
 - **Neutralité** : aucun nom d'app cliente dans le code ni les docs de référence ([ADR-0013](adr/0013-neutralite-apps-clientes-et-archivage-historique.md)) ; les anciens audits sont archivés dans `docs/historique/`.

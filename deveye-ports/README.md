@@ -2,7 +2,7 @@
 
 Ports (traits asynchrones) de l'architecture hexagonale de DevEye. Implémentez-les pour brancher un nouveau type de cible ; les types du domaine viennent de `deveye-core`.
 
-Fait partie de [DevEye](https://github.com/Morgan-Voltz/DevEye), outillage dev-only qui permet à un agent (client MCP) de voir et de piloter une app graphique en cours d'exécution.
+Fait partie de [DevEye](https://github.com/Kovelt/DevEye), outillage dev-only qui permet à un agent (client MCP) de voir et de piloter une app graphique en cours d'exécution.
 
 ## Licence
 

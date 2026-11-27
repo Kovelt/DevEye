@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/1.0/error.json",
+  "$id": "https://github.com/Kovelt/DevEye/docs/schemas/1.0/error.json",
   "title": "DevEye 1.0 : corps d'erreur",
   "description": "Corps des 403 (garde Host) et du 404 de commande inconnue ; recommandé sur les 5xx.",
   "type": "object",

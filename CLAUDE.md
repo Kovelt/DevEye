@@ -114,7 +114,7 @@ DevEye/
 
 ## Workflow Git
 
-**Stratégie : GitHub Flow** sur `github.com/Morgan-Voltz/DevEye`. `main` est toujours propre et publiable. Tout travail se fait sur une branche dédiée dérivée de `main`, fusionnée par pull request.
+**Stratégie : GitHub Flow** sur `github.com/Kovelt/DevEye`. `main` est toujours propre et publiable. Tout travail se fait sur une branche dédiée dérivée de `main`, fusionnée par pull request.
 
 **Nommage des branches** : `<type>/<slug-kebab-case>` (`feat/outil-resize`, `fix/cdp-reconnect-timeout`, `docs/usage-mcp-json`, `release/1.0.0`).
 

@@ -5,7 +5,7 @@ Merci de votre intérêt. DevEye est maintenu par une personne ; ce guide dit co
 ## Avant de commencer
 
 - **Une décision passe par un ADR** (voir plus bas). Un correctif de bogue ou une amélioration de documentation n'en demande pas ; un nouvel outil, une nouvelle dépendance, un changement de contrat, de plateforme ou de licence, si.
-- **Ouvrez d'abord une issue** pour tout changement non trivial (nouvel outil MCP, nouvelle cible, changement de protocole) : on y discute de l'approche avant que vous ne codiez.
+- **Ouvrez d'abord une issue** pour tout changement non trivial (nouvel outil MCP, nouvelle cible, changement de protocole) : on y discute de l'approche avant que vous ne codiez. Des formulaires guident le rapport de bogue et la demande de fonctionnalité (`.github/ISSUE_TEMPLATE/`) ; les issues vierges sont désactivées.
 - **Failles de sécurité** : pas d'issue publique, voir [SECURITY.md](SECURITY.md).
 
 ## Prérequis
@@ -95,7 +95,7 @@ Pas de trailer de signature d'outil dans les messages. Un commit par sujet cohé
 ## Branches et revue
 
 - **GitHub Flow.** `main` est toujours propre et intégrable ; tout travail se fait sur une branche dédiée issue de `main`, nommée `<type>/<slug-kebab>` (`feat/inspecteur-signaux`, `fix/cdp-reconnect-timeout`, `docs/guide-wayland`), fusionnée par demande de fusion.
-- **Une demande de fusion** : décrit le *pourquoi*, renvoie à l'issue et à l'ADR concernés, et passe la CI (format, clippy, tests, documentation, Xvfb et e2e, MSRV, `cargo deny`, conformité, SDK no-op, semver, frontière MIT/AGPL et contenu des paquets).
+- **Une demande de fusion** : suit le modèle `.github/pull_request_template.md` (cases à cocher : tests, ADR, CHANGELOG, documentation, semver, licence), décrit le *pourquoi*, renvoie à l'issue et à l'ADR concernés, et passe la CI (format, clippy, tests, documentation, Xvfb et e2e, MSRV, `cargo deny`, conformité, SDK no-op, semver, frontière MIT/AGPL et contenu des paquets).
 - **Revue** : le mainteneur relit le code, les tests et la documentation ; une contribution qui change du comportement documenté met à jour la documentation dans la même demande.
 - Les `unwrap`, les noms d'app cliente, les dépendances nouvelles et les changements de la surface stable sont les points sur lesquels la revue est la plus stricte.
 

@@ -389,7 +389,7 @@ pub fn json_schema() -> Value {
         object.insert(
             "$id".to_string(),
             Value::String(
-                "https://github.com/Morgan-Voltz/DevEye/docs/schemas/ui-widgets-1.json".to_string(),
+                "https://github.com/Kovelt/DevEye/docs/schemas/ui-widgets-1.json".to_string(),
             ),
         );
         object.insert(
