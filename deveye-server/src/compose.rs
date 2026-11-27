@@ -337,7 +337,9 @@ fn build_target_info(target: TargetMode, host: HostCaps) -> TargetInfo {
                     Attentes : wait_condition (state-key, screenshot-stable, log-message). \
                     Clavier = celui du serveur X ; un caractere absent est injecte par remappage \
                     temporaire. Molette : un cran par tranche de 120 px de dx/dy. Presse-papiers \
-                    indisponible."
+                    indisponible. Limites de capture : l'image est la racine du serveur X \
+                    rognee a la fenetre (une fenetre recouvrante y apparait, la partie hors \
+                    ecran est noire), sans mise a l'echelle HiDPI ni compositeur."
                     .to_string();
         }
     }
