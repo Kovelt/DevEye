@@ -33,6 +33,20 @@ const VALUE_MAX_CHARS: usize = 200;
 /// Nombre maximal de candidats proposés par une erreur `Stale`.
 const MAX_CANDIDATES: usize = 5;
 
+/// Profondeur maximale de parcours des parents d'un arbre de widgets : une chaîne
+/// linéaire de milliers de widgets ne doit pas faire déborder la pile du serveur.
+const MAX_BUILD_DEPTH: usize = 256;
+
+/// Profondeur maximale de la sortie (niveaux de nœuds) : chaque niveau coûte deux
+/// niveaux JSON et les décodeurs usuels (serde_json) refusent au-delà de 128.
+const MAX_OUTPUT_DEPTH: u32 = 50;
+
+/// Âge au-delà duquel `locate` refuse d'agir : l'app a répondu avec un arbre qu'elle
+/// n'a pas republié (le SDK attend au plus 500 ms un rendu frais) depuis ce temps,
+/// elle est gelée ou ne redessine plus. En deçà, un arbre ancien d'une app au repos
+/// reste exact ; au-delà de [`crate::UI_STALE_AFTER_MS`] on le signale seulement.
+const STALE_TREE_MAX_MS: u64 = 10_000;
+
 /// Au-delà, la mémoire des identifiants vus est repartie de zéro : elle ne sert
 /// qu'à nommer des périmés récents, pas à tenir l'historique d'une session.
 const MAX_SEEN: usize = 10_000;
@@ -117,19 +131,25 @@ impl RouteWidgetsElements {
         Ok(tree)
     }
 
-    fn remember(&self, tree: &UiTree) {
+    /// Mémorise rôle et nom des identifiants de l'arbre. `refresh` (un instantané :
+    /// l'agent vient de voir ces éléments) remplace l'entrée existante ; sans lui
+    /// (une action), l'entrée existante est conservée, sinon un identifiant
+    /// synthétisé dont le contenu a changé deviendrait valide à la seconde tentative.
+    fn remember(&self, tree: &UiTree, refresh: bool) {
         let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
         if seen.len() > MAX_SEEN {
             seen.clear();
         }
         for widget in &tree.widgets {
-            seen.insert(
-                widget.id.clone(),
-                Seen {
-                    role: widget.role.as_str().to_string(),
-                    name: widget.label.clone(),
-                },
-            );
+            let entry = Seen {
+                role: widget.role.as_str().to_string(),
+                name: widget.label.clone(),
+            };
+            if refresh {
+                seen.insert(widget.id.clone(), entry);
+            } else {
+                seen.entry(widget.id.clone()).or_insert(entry);
+            }
         }
     }
 
@@ -143,28 +163,48 @@ impl RouteWidgetsElements {
 
     /// Absent de l'arbre : périmé s'il a déjà été vu, inconnu sinon.
     fn missing(&self, reference: &str, id: &str, tree: &UiTree) -> ElementError {
-        let Some(previous) = self.was_seen(id) else {
-            return ElementError::UnknownRef(reference.to_string());
-        };
-        let candidates = match &previous.name {
-            Some(name) => tree
-                .widgets
-                .iter()
-                .filter(|w| {
-                    w.state.visible
-                        && w.role.as_str() == previous.role
-                        && w.label.as_deref() == Some(name.as_str())
-                })
-                .map(|w| format!("{WIDGET_REF_PREFIX}{}", w.id))
-                .take(MAX_CANDIDATES)
-                .collect(),
-            None => Vec::new(),
-        };
-        ElementError::Stale {
-            reference: reference.to_string(),
-            candidates,
+        match self.was_seen(id) {
+            Some(previous) => stale(reference, id, &previous, tree),
+            None => ElementError::UnknownRef(reference.to_string()),
         }
     }
+}
+
+/// Référence périmée, avec les widgets vivants de même rôle et de même nom que
+/// `previous` pour candidats (jamais choisis à la place de l'agent).
+fn stale(reference: &str, id: &str, previous: &Seen, tree: &UiTree) -> ElementError {
+    let candidates = match &previous.name {
+        Some(name) => tree
+            .widgets
+            .iter()
+            .filter(|w| {
+                w.id != id
+                    && w.state.visible
+                    && w.role.as_str() == previous.role
+                    && w.label.as_deref() == Some(name.as_str())
+            })
+            .map(|w| format!("{WIDGET_REF_PREFIX}{}", w.id))
+            .take(MAX_CANDIDATES)
+            .collect(),
+        None => Vec::new(),
+    };
+    ElementError::Stale {
+        reference: reference.to_string(),
+        candidates,
+    }
+}
+
+/// Âge de l'arbre publié, quand l'app date ses publications.
+fn tree_age_ms(tree: &UiTree) -> Option<u64> {
+    let published = tree.published_at_ms?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(
+        u64::try_from(now.as_millis())
+            .unwrap_or(u64::MAX)
+            .saturating_sub(published),
+    )
 }
 
 fn is_interactive(widget: &UiWidget) -> bool {
@@ -177,10 +217,26 @@ fn is_context(widget: &UiWidget) -> bool {
         || CONTEXT_ROLES.contains(&widget.role.as_str())
 }
 
-/// Rect entièrement hors de la fenêtre connue, ou rogné par un conteneur.
+/// Aucune surface : un rect de largeur ou de hauteur nulle ne se clique pas.
+fn has_no_surface(widget: &UiWidget) -> bool {
+    widget.rect[2] <= 0 || widget.rect[3] <= 0
+}
+
+/// « Hors vue » au sens de l'instantané et de l'action (une seule définition) :
+/// hors de la fenêtre, rogné, ou sans surface.
+fn is_out_of_view(widget: &UiWidget, window: (u32, u32)) -> bool {
+    has_no_surface(widget) || is_offscreen(widget, window)
+}
+
+/// Rect entièrement hors de la fenêtre connue, ou rogné par un conteneur. Un rect
+/// sans surface relève de [`has_no_surface`], pas d'ici : un conteneur de mise en
+/// page de taille nulle garde ses enfants, qui ont leur propre rect.
 fn is_offscreen(widget: &UiWidget, window: (u32, u32)) -> bool {
     if widget.clipped == Some(true) {
         return true;
+    }
+    if has_no_surface(widget) {
+        return false;
     }
     let [x, y, w, h] = widget.rect;
     let (right, bottom) = (i64::from(x) + i64::from(w), i64::from(y) + i64::from(h));
@@ -217,6 +273,8 @@ struct Builder<'a> {
     query: &'a SnapshotQuery,
     window: (u32, u32),
     visiting: HashSet<usize>,
+    /// Vrai si la profondeur maximale de parcours a coupé une branche.
+    truncated: bool,
 }
 
 impl<'a> Builder<'a> {
@@ -241,6 +299,7 @@ impl<'a> Builder<'a> {
             query,
             window: (tree.window.width, tree.window.height),
             visiting: HashSet::new(),
+            truncated: false,
         }
     }
 
@@ -257,15 +316,21 @@ impl<'a> Builder<'a> {
 
     /// Nœuds produits par le widget `index` : lui-même, ou ses descendants
     /// remontés d'un cran quand il n'est pas gardé.
-    fn build(&mut self, index: usize) -> Vec<ElementNode> {
+    fn build(&mut self, index: usize, depth: usize) -> Vec<ElementNode> {
+        if depth > MAX_BUILD_DEPTH {
+            self.truncated = true;
+            return Vec::new();
+        }
         let widget = &self.tree.widgets[index];
         // Un cycle de parents n'a pas de racine : le parcours depuis les racines
         // ne l'atteint pas, la garde protège le parcours depuis un `scope`.
         if !widget.state.visible || !self.visiting.insert(index) {
             return Vec::new();
         }
-        let offscreen = is_offscreen(widget, self.window);
-        if self.query.viewport_only && offscreen {
+        let offscreen = is_out_of_view(widget, self.window);
+        // Hors fenêtre ou rogné : tout le sous-arbre l'est. Sans surface : seul le
+        // widget est écarté, ses enfants ont leur propre rect.
+        if self.query.viewport_only && is_offscreen(widget, self.window) {
             self.visiting.remove(&index);
             return Vec::new();
         }
@@ -276,13 +341,14 @@ impl<'a> Builder<'a> {
             .unwrap_or_default();
         let mut nested = Vec::new();
         for kid in kids {
-            nested.extend(self.build(kid));
+            nested.extend(self.build(kid, depth + 1));
         }
         self.visiting.remove(&index);
 
-        let keep = !self.query.interactive_only
-            || is_interactive(widget)
-            || (!nested.is_empty() && is_context(widget));
+        let keep = (!self.query.viewport_only || !has_no_surface(widget))
+            && (!self.query.interactive_only
+                || is_interactive(widget)
+                || (!nested.is_empty() && is_context(widget)));
         if !keep {
             return nested;
         }
@@ -354,12 +420,21 @@ fn contains_ref(nodes: &[ElementNode], reference: &str) -> bool {
 impl ElementInspector for RouteWidgetsElements {
     async fn snapshot(&self, query: &SnapshotQuery) -> ElementResult<ElementSnapshot> {
         let tree = self.fetch().await?;
-        self.remember(&tree);
+        self.remember(&tree, true);
+        if let Some(age) = tree_age_ms(&tree).filter(|age| *age > crate::UI_STALE_AFTER_MS) {
+            tracing::warn!(
+                age_ms = age,
+                "arbre ui.widgets non republié : l'instantané peut être périmé"
+            );
+        }
         let mut builder = Builder::new(&tree, query);
         let mut nodes = match query.scope.as_deref() {
             None => {
                 let roots = builder.roots();
-                roots.into_iter().flat_map(|i| builder.build(i)).collect()
+                roots
+                    .into_iter()
+                    .flat_map(|i| builder.build(i, 0))
+                    .collect()
             }
             Some(scope) => match parse_ref(scope) {
                 Some(RefKind::Widget(id)) => {
@@ -379,7 +454,7 @@ impl ElementInspector for RouteWidgetsElements {
                             self.missing(scope, id, &tree)
                         });
                     };
-                    builder.build(index)
+                    builder.build(index, 0)
                 }
                 _ => {
                     return Err(ElementError::Unsupported {
@@ -390,10 +465,9 @@ impl ElementInspector for RouteWidgetsElements {
                 }
             },
         };
-        let mut truncated = false;
-        if let Some(depth) = query.max_depth {
-            truncated |= limit_depth(&mut nodes, depth.max(1));
-        }
+        let mut truncated = builder.truncated;
+        let depth = query.max_depth.unwrap_or(MAX_OUTPUT_DEPTH);
+        truncated |= limit_depth(&mut nodes, depth.clamp(1, MAX_OUTPUT_DEPTH));
         let mut budget = query.max_nodes.max(1);
         truncated |= limit_nodes(&mut nodes, &mut budget);
         let focus = tree
@@ -411,7 +485,12 @@ impl ElementInspector for RouteWidgetsElements {
             return Err(ElementError::UnknownRef(reference.to_string()));
         };
         let tree = self.fetch().await?;
-        self.remember(&tree);
+        if let Some(age_ms) = tree_age_ms(&tree).filter(|age| *age > STALE_TREE_MAX_MS) {
+            return Err(ElementError::StaleTree { age_ms });
+        }
+        // Lu avant `remember` : ce que l'agent a vu à ce nom, pas l'arbre courant.
+        let previous = self.was_seen(id);
+        self.remember(&tree, false);
         let mut matching = tree.widgets.iter().filter(|w| w.id == id);
         let Some(widget) = matching.next() else {
             return Err(self.missing(reference, id, &tree));
@@ -423,15 +502,43 @@ impl ElementInspector for RouteWidgetsElements {
                 count: extra + 1,
             });
         }
-        let [_, _, w, h] = widget.rect;
+        // Un identifiant synthétisé (par position) peut désigner un autre widget
+        // après une insertion : on ne clique que si rôle et nom sont ceux vus.
+        if widget.id_ephemeral {
+            if let Some(previous) = previous.filter(|p| {
+                p.role != widget.role.as_str() || p.name.as_deref() != widget.label.as_deref()
+            }) {
+                return Err(stale(reference, id, &previous, &tree));
+            }
+        }
+        let window = (tree.window.width, tree.window.height);
         let offscreen = !widget.state.visible
-            || w <= 0
-            || h <= 0
-            || is_offscreen(widget, (tree.window.width, tree.window.height));
+            || is_out_of_view(widget, window)
+            || ancestor_hides(&tree, widget, window);
         Ok(ElementLocation::new(reference, widget.rect)
             .with_offscreen(offscreen)
             .with_disabled(!widget.state.enabled))
     }
+}
+
+/// Un ancêtre invisible ou rogné cache le widget, même si son propre état dit
+/// `visible` (l'instantané élague le sous-arbre, l'action doit refuser de même).
+fn ancestor_hides(tree: &UiTree, widget: &UiWidget, window: (u32, u32)) -> bool {
+    let mut current = widget;
+    // La garde borne la remontée : un cycle de parents n'est pas une racine.
+    for _ in 0..tree.widgets.len() {
+        let Some(parent_id) = current.parent.as_deref() else {
+            return false;
+        };
+        let Some(parent) = tree.widgets.iter().find(|w| w.id == parent_id) else {
+            return false;
+        };
+        if !parent.state.visible || is_offscreen(parent, window) {
+            return true;
+        }
+        current = parent;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -820,5 +927,166 @@ mod tests {
             name.value.as_ref().unwrap().chars().count(),
             VALUE_MAX_CHARS + 1
         );
+    }
+
+    fn now_ms() -> u64 {
+        u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_old_tree_refuses_the_action_but_a_fresh_one_is_fine() {
+        let mut tree = form();
+        tree.published_at_ms = Some(now_ms());
+        let live = Live::serving(&tree);
+        let inspector = inspector(&live);
+        assert!(inspector.locate("w:save").await.is_ok());
+        // Rendu à la demande qui ne s'est pas déclenché : arbre vieux d'une minute.
+        tree.published_at_ms = Some(now_ms() - 60_000);
+        live.set(&tree);
+        match inspector.locate("w:save").await.unwrap_err() {
+            ElementError::StaleTree { age_ms } => assert!(age_ms >= 60_000),
+            other => panic!("attendu StaleTree : {other:?}"),
+        }
+        // L'instantané, lui, reste servi (avertissement seulement).
+        assert!(inspector.snapshot(&SnapshotQuery::new()).await.is_ok());
+        // Une app qui ne date pas ses publications n'est jamais refusée.
+        tree.published_at_ms = None;
+        live.set(&tree);
+        assert!(inspector.locate("w:save").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_hidden_or_clipped_ancestor_makes_the_child_offscreen() {
+        let mut tree = form();
+        // Le panneau est masqué seul : `save` garde `visible = true` dans l'arbre.
+        tree.widgets[1].state = UiState::new().with_visible(false);
+        let live = Live::serving(&tree);
+        let inspector = inspector(&live);
+        assert!(inspector.locate("w:save").await.unwrap().offscreen);
+        let snap = inspector.snapshot(&SnapshotQuery::new()).await.unwrap();
+        assert!(!all_refs(&snap).contains(&"w:save".to_string()));
+        // Panneau visible mais rogné par son conteneur.
+        let mut tree = form();
+        tree.widgets[1] = UiWidget::new("panel", "panel")
+            .with_parent("root")
+            .with_rect([0, 0, 400, 300])
+            .with_clipped(true);
+        live.set(&tree);
+        assert!(inspector.locate("w:save").await.unwrap().offscreen);
+        // Une chaîne de parents cyclique ne bloque pas la remontée.
+        let mut tree = form();
+        tree.widgets[0] = UiWidget::new("root", "window")
+            .with_parent("panel")
+            .with_rect([0, 0, 400, 300]);
+        live.set(&tree);
+        assert!(!inspector.locate("w:save").await.unwrap().offscreen);
+    }
+
+    #[tokio::test]
+    async fn a_synthesized_id_whose_content_changed_is_stale_not_rebound() {
+        let mut tree = form();
+        tree.widgets[5].id = "button[1]".to_string();
+        tree.widgets[5].id_ephemeral = true;
+        let live = Live::serving(&tree);
+        let inspector = inspector(&live);
+        inspector.snapshot(&SnapshotQuery::new()).await.unwrap();
+        assert!(inspector.locate("w:button[1]").await.is_ok());
+        // Un bouton est inséré avant : `button[1]` désigne maintenant « Supprimer ».
+        tree.widgets[5].label = Some("Supprimer".to_string());
+        live.set(&tree);
+        for _ in 0..2 {
+            assert!(
+                matches!(
+                    inspector.locate("w:button[1]").await.unwrap_err(),
+                    ElementError::Stale { .. }
+                ),
+                "pas de rebind silencieux, même à la seconde tentative"
+            );
+        }
+        // Un nouvel instantané fait voir le changement à l'agent : la référence redevient valide.
+        inspector.snapshot(&SnapshotQuery::new()).await.unwrap();
+        assert!(inspector.locate("w:button[1]").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn zero_surface_widgets_are_offscreen_for_snapshot_and_act_alike() {
+        let mut tree = form();
+        // Conteneur de mise en page sans surface, avec un enfant mesuré.
+        tree.widgets[1] = UiWidget::new("panel", "panel")
+            .with_parent("root")
+            .with_label("Zone")
+            .with_rect([0, 0, 0, 0]);
+        let live = Live::serving(&tree);
+        let inspector = inspector(&live);
+        let snap = inspector
+            .snapshot(&SnapshotQuery::new().with_viewport_only(true))
+            .await
+            .unwrap();
+        // Le conteneur est écarté, ses enfants non.
+        let refs = all_refs(&snap);
+        assert!(!refs.contains(&"w:panel".to_string()), "{refs:?}");
+        assert!(refs.contains(&"w:save".to_string()), "{refs:?}");
+        let snap = inspector.snapshot(&SnapshotQuery::new()).await.unwrap();
+        let panel = snap.nodes[0]
+            .children
+            .iter()
+            .find(|n| n.reference == "w:panel")
+            .expect("conteneur gardé hors viewport_only");
+        assert!(panel.offscreen);
+        assert!(inspector.locate("w:panel").await.unwrap().offscreen);
+        // Largeur nulle collée au bord gauche : pas d'élagage du sous-arbre.
+        tree.widgets[1] = UiWidget::new("panel", "panel")
+            .with_parent("root")
+            .with_rect([0, 0, 0, 300]);
+        live.set(&tree);
+        let snap = inspector
+            .snapshot(&SnapshotQuery::new().with_viewport_only(true))
+            .await
+            .unwrap();
+        assert!(all_refs(&snap).contains(&"w:save".to_string()));
+    }
+
+    #[tokio::test]
+    async fn max_depth_zero_means_one_level() {
+        let live = Live::serving(&form());
+        let snap = inspector(&live)
+            .snapshot(&SnapshotQuery::new().with_max_depth(0))
+            .await
+            .unwrap();
+        assert_eq!(all_refs(&snap), ["w:root"]);
+    }
+
+    #[tokio::test]
+    async fn a_very_long_parent_chain_is_cut_instead_of_overflowing_the_stack() {
+        let mut tree = UiTree::new(deveye_core::UiWindow::new(400, 300));
+        for i in 0..5_000 {
+            let mut widget = UiWidget::new(format!("n{i}"), "group")
+                .with_label(format!("niveau {i}"))
+                .with_rect([0, 0, 100, 100]);
+            if i > 0 {
+                widget = widget.with_parent(format!("n{}", i - 1));
+            }
+            tree.widgets.push(widget);
+        }
+        tree.widgets.push(
+            UiWidget::new("leaf", "button")
+                .with_parent("n4999")
+                .with_rect([0, 0, 10, 10]),
+        );
+        let live = Live::serving(&tree);
+        let snap = inspector(&live)
+            .snapshot(&SnapshotQuery::new().with_interactive_only(false))
+            .await
+            .unwrap();
+        assert!(snap.truncated);
+        // Sortie bornée aux niveaux décodables par serde_json.
+        let json = serde_json::to_string(&snap).unwrap();
+        serde_json::from_str::<serde_json::Value>(&json).expect("décodable");
     }
 }
