@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Une fenêtre/onglet listé par un [`WindowLister`](../../deveye_ports/trait.WindowLister.html).
+/// Une fenêtre/onglet listé par un `WindowLister` (trait du crate `deveye-ports`).
 ///
 /// En pratique : les cibles CDP de `type = "page"` (onglets d'un Chromium).
 /// Le pont SDK ne connaît pas les autres fenêtres → liste vide.

@@ -15,7 +15,7 @@
 //! - [`WindowLister`] — énumération des fenêtres de l'app cible
 //! - [`WindowManager`] — activation (focus OS) d'une fenêtre
 //!
-//! Voir [`deveye.md`](../../../../../docs/architecture/deveye.md) pour le
+//! Voir [`docs/architecture.md`](https://github.com/Morgan-Voltz/DevEye/blob/main/docs/architecture.md) pour le
 //! détail de l'architecture.
 
 #![forbid(unsafe_code)]

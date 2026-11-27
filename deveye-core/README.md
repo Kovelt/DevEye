@@ -1,6 +1,6 @@
 # deveye-core
 
-Domaine pur de DevEye : types de session, de snapshot, de commande d'interaction, d'enregistrement et de diff. Rust pur (`chrono`, `serde`, `thiserror`), sans dépendance technique.
+Domaine pur de DevEye : types de commande d'interaction, de snapshot, de prédicat d'attente, de log, d'erreur console et de fenêtre. Rust pur (`chrono`, `serde`, `thiserror`), sans dépendance technique.
 
 Fait partie de [DevEye](https://github.com/Morgan-Voltz/DevEye), outillage dev-only qui permet à un agent (client MCP) de voir et de piloter une app graphique en cours d'exécution.
 
