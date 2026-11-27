@@ -1,6 +1,6 @@
 # ADR-0015 — Retrait du script de synchronisation des copies vendored
 
-- **Statut** : Accepté
+- **Statut** : Remplacé par ADR-0040
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
 - **ADR liés** : ADR-0004 (publication crates.io préparée), ADR-0013 (neutralité)

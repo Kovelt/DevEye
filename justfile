@@ -63,5 +63,11 @@ install:
     cargo build --release --locked -p deveye-server
     install -Dm755 target/release/deveye-server "$HOME/.local/bin/deveye-server"
 
+# Synchronise les copies des bibliotheques vers VOS cibles (outil de transition
+# deprecie, ADR-0040) : `just sync-deveye --target app=/chemin/copie`, ou avec
+# un fichier scripts/sync-targets ; options --check, --dry-run, --force.
+sync-deveye *args:
+    ./scripts/sync-deveye.sh {{args}}
+
 # Pipeline CI complet en local (hors msrv et sbom, qui exigent des outils a part)
 ci: fmt-check lint test doc x11 e2e deny conformance release-noop

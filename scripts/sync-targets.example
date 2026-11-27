@@ -1,0 +1,10 @@
+# Modele de fichier de cibles pour scripts/sync-deveye.sh (outil de transition,
+# ADR-0040). Copier ce fichier en scripts/sync-targets (non versionne), puis
+# remplacer les chemins fictifs ci-dessous par vos dossiers de copie.
+#
+# Une entree par ligne : DOSSIER, ou ETIQUETTE=DOSSIER. Le dossier recevra un
+# sous-dossier par crate (deveye-core, deveye-ports, deveye-sdk) et un
+# VENDORED.md. Les lignes vides et les commentaires (#) sont ignores.
+#
+# app-exemple=/chemin/vers/app-exemple/vendor/deveye
+# /chemin/vers/autre-projet/deveye

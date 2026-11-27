@@ -78,7 +78,7 @@ Option retenue, en une phrase.
 | [0012](0012-application-de-non-exhaustive-et-choix-limites.md) | Application de `#[non_exhaustive]` et choix limites avant le gel | Proposé |
 | [0013](0013-neutralite-apps-clientes-et-archivage-historique.md) | Neutralité vis-à-vis des apps clientes et archivage des documents historiques | Accepté |
 | [0014](0014-filtre-de-cible-cdp-permissif-par-defaut.md) | Filtre de cible CDP permissif par défaut | Accepté |
-| [0015](0015-retrait-du-script-de-synchronisation-des-copies.md) | Retrait du script de synchronisation des copies vendored | Accepté |
+| [0015](0015-retrait-du-script-de-synchronisation-des-copies.md) | Retrait du script de synchronisation des copies vendored | Remplacé par ADR-0040 |
 | [0016](0016-masquage-des-secrets-par-cles-dans-le-sdk.md) | Masquage des secrets par clés dans le SDK | Accepté |
 | [0017](0017-protocole-1-0-version-info-et-limites.md) | Protocole 1.0 : version, compatibilité côté client, `/devtools/info` et limites de taille | Accepté |
 | [0018](0018-portage-selectif-de-l-ancienne-lignee-github.md) | Portage sélectif de l'ancienne lignée GitHub | Accepté |
@@ -103,3 +103,4 @@ Option retenue, en une phrase.
 | [0037](0037-linux-seul-supporte-en-1-0.md) | Linux seul supporté en 1.0 | Accepté |
 | [0038](0038-distribution-archives-github-et-cargo-install.md) | Distribution du binaire : archives de release GitHub et cargo install | Accepté |
 | [0039](0039-tests-de-bout-en-bout-et-preuves-dev-only-en-ci.md) | Tests de bout en bout et preuves dev-only en CI | Proposé |
+| [0040](0040-fin-du-vendoring-script-de-synchronisation-de-transition.md) | Fin du vendoring : dépendance versionnée, script de synchronisation de transition | Accepté |

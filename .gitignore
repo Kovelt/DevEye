@@ -5,3 +5,6 @@ Cargo.lock.bak
 
 # IDE JetBrains
 .idea/
+
+# Cibles locales du script de synchronisation de transition (ADR-0040)
+/scripts/sync-targets
