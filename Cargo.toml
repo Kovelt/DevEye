@@ -1,4 +1,4 @@
-# DevEye — workspace Cargo (16 crates, architecture hexagonale).
+# DevEye — workspace Cargo (17 crates, architecture hexagonale).
 #
 # Outil d'observation et de pilotage d'apps graphiques en développement
 # (capture, interaction, inspection, logs), exposé en serveur MCP. Les crates
@@ -22,6 +22,7 @@ members = [
     "deveye-sdk",
     "deveye-sdk-client",
     "deveye-server",
+    "deveye-conformance",
     "deveye-adapters/adapter-cdp-webview",
     "deveye-adapters/adapter-screencap-xcap",
     "deveye-adapters/adapter-dioxus-signals",

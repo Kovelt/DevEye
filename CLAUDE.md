@@ -18,7 +18,7 @@ Architecture **hexagonale** (ports & adapters) sur un **workspace Cargo multi-cr
 
 DevEye n'est **pas un produit** : c'est un accélérateur de dev. Projet **open source** à partir de la 1.0, hébergé sur GitHub, sous deux licences selon le rôle du crate :
 
-- **`AGPL-3.0-or-later`** pour l'outil : `deveye-server`, tous les adapters, l'outillage (licence par défaut du dépôt) ;
+- **`AGPL-3.0-or-later`** pour l'outil : `deveye-server`, tous les adapters, `deveye-conformance`, l'outillage (licence par défaut du dépôt) ;
 - **`MIT`** pour les bibliothèques qu'une app embarque ou qu'un tiers réutilise : `deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`. Intégrer le SDK dans une app ne lui impose rien.
 
 ---
@@ -79,7 +79,9 @@ DevEye/
     adapter-composite/          compositions génériques de ports (attente, console, DOM par route)
     adapter-mcp-server/         expose les ports au Model Context Protocol (outils MCP)
   deveye-server/                binaire orchestrateur (CLI, composition selon --target)
-  docs/                         architecture, usage, wire protocol, stabilité, plateformes
+  deveye-conformance/           suite de conformité boîte noire du wire protocol (lib + binaire
+                                `--url`) ; AGPL-3.0-or-later, `publish = false` (ADR-0035)
+  docs/                         architecture, usage, wire protocol (+ schemas/), stabilité, plateformes
   docs/adr/                     décisions d'architecture (ADR) et leur index
   docs/historique/              archives de conception datées (non normatives)
 ```
@@ -113,7 +115,7 @@ DevEye/
 
 - **Sujet** en français, impératif, minuscule, sans point final, **en ASCII sans accents** (les accents restent la règle partout ailleurs). Aucun emoji.
 - **Types** : `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`, `build`, `ci`.
-- **Scope = crate concerné** (omis si transverse) : `core`, `ports`, `sdk`, `sdk-client`, `server`, `adapter-cdp`, `adapter-xcap`, `adapter-kwin`, `adapter-eis`, `adapter-x11`, `adapter-clipboard`, `adapter-dioxus`, `adapter-logs`, `adapter-commands`, `adapter-composite`, `adapter-mcp` ; transverse : `workspace`, `docs`, `ci`, `release`.
+- **Scope = crate concerné** (omis si transverse) : `core`, `ports`, `sdk`, `sdk-client`, `server`, `adapter-cdp`, `adapter-xcap`, `adapter-kwin`, `adapter-eis`, `adapter-x11`, `adapter-clipboard`, `adapter-dioxus`, `adapter-logs`, `adapter-commands`, `adapter-composite`, `adapter-mcp`, `conformance` ; transverse : `workspace`, `docs`, `ci`, `release`.
 - **Aucun trailer** dans les messages de commit (pas de `Co-Authored-By`, pas de signature d'outil).
 - Adresse d'auteur : l'adresse noreply GitHub du mainteneur (la protection de confidentialité de GitHub refuse les pushs exposant une adresse privée).
 

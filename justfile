@@ -24,5 +24,9 @@ fmt:
 fmt-check:
     cargo fmt --all --check
 
+# Conformite du wire protocol : SDK Rust en processus, ou `just conformance <url>` pour une implementation tierce
+conformance url="":
+    if [ -z "{{url}}" ]; then cargo test -p deveye-conformance -- --nocapture; else cargo run -q -p deveye-conformance -- --url "{{url}}"; fi
+
 # Pipeline CI complet en local
 ci: fmt-check lint test

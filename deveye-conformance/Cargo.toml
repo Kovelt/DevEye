@@ -1,0 +1,35 @@
+[package]
+name = "deveye-conformance"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Suite de conformité boîte noire du wire protocol DevEye : valide toute implémentation de SDK via son URL."
+publish = false  # interne, non publie
+
+[lints]
+workspace = true
+
+[lib]
+name = "deveye_conformance"
+path = "src/lib.rs"
+
+[[bin]]
+name = "deveye-conformance"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+
+[dev-dependencies]
+# SDK Rust démarré en processus pour exiger 100 % de conformité (AGPL -> MIT : sens permis).
+deveye-sdk = { path = "../deveye-sdk" }
+tracing = "0.1"

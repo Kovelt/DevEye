@@ -844,6 +844,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 
 [[package]]
+name = "deveye-conformance"
+version = "0.2.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "deveye-sdk",
+ "reqwest",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "deveye-core"
 version = "0.2.0"
 dependencies = [

@@ -47,6 +47,7 @@ allow = [
 # nom : aucune dependance tierce AGPL n'est acceptee implicitement. ADR-0002.
 exceptions = [
     { crate = "deveye-server", allow = ["AGPL-3.0-or-later"] },
+    { crate = "deveye-conformance", allow = ["AGPL-3.0-or-later"] },
     { crate = "adapter-cdp-webview", allow = ["AGPL-3.0-or-later"] },
     { crate = "adapter-clipboard-wayland", allow = ["AGPL-3.0-or-later"] },
     { crate = "adapter-commands-http", allow = ["AGPL-3.0-or-later"] },
