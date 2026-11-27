@@ -3,7 +3,7 @@
 - **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
-- **ADR liés** : ADR-0003 (hébergement GitHub), ADR-0016 (masquage des secrets, premier portage), ADR-0019 (resize), ADR-0020 à ADR-0024 (autres portages et contrat d'erreur MCP)
+- **ADR liés** : ADR-0003 (hébergement GitHub), ADR-0016 (masquage des secrets, premier portage), ADR-0019 (resize), ADR-0020 à ADR-0026 (autres portages et contrat de sortie MCP)
 
 ## Contexte et problème
 
