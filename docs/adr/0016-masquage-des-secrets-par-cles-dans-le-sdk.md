@@ -55,3 +55,5 @@ Option 2, portée de la lignée GitHub (`redact.rs`) et adaptée au SDK actuel ;
 Application : `deveye-sdk/src/redact.rs`, `deveye-sdk/src/lib.rs` (`Config`, `state_handler`, `logs_poll_handler`), tests dans `deveye-sdk/tests/wire_protocol.rs`. Documentation : `docs/wire-protocol.md` §2.4 et `docs/architecture.md` (Sécurité).
 
 Limites complémentaires (revue 1.0) : les champs de log formatés par `Debug` (`?valeur`) arrivent en chaîne et ne sont pas analysés, seul leur nom l'est ; la liste par défaut couvre les pluriels (`tokens`, `cookies`), `*_key` usuels (`access_key`, `signing_key`), `database_url` et quelques termes français (`mdp`, `jeton`). Voir `docs/wire-protocol.md` §2.4.
+
+**Mise à jour (1.1, ADR-0064 et ADR-0065)** : la réponse de la route `ui.widgets` n'est plus hors périmètre : la valeur d'un widget secret n'est jamais publiée par le SDK et le serveur la masque, y compris dans la sortie de l'outil `dom`. Les sorties d'`eval` et de commandes restent non filtrées.
