@@ -22,6 +22,8 @@ name = "deveye-conformance"
 path = "src/main.rs"
 
 [dependencies]
+# Types du contrat `deveye.ui/1` (AGPL -> MIT : sens permis, ADR-0002).
+deveye-core = { path = "../deveye-core", version = "1.0.0" }
 chrono = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 reqwest = { workspace = true }

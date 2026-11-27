@@ -43,6 +43,21 @@ async fn sdk_rust_passes_the_whole_suite() {
             |_| serde_json::json!({ "ok": true }),
         );
     }
+    // Helper ui : route `ui.widgets`, avec un champ secret dont la valeur est retirée.
+    deveye_sdk::ui::publish(
+        deveye_sdk::ui::builder(640, 480)
+            .widget(
+                deveye_sdk::ui::UiWidget::new("login", deveye_sdk::ui::UiRole::TEXTBOX)
+                    .with_rect([10, 10, 200, 24])
+                    .with_value("alice"),
+            )
+            .widget(
+                deveye_sdk::ui::UiWidget::new("pw", deveye_sdk::ui::UiRole::PASSWORD)
+                    .with_rect([10, 40, 200, 24])
+                    .with_value("hunter2"),
+            )
+            .build(),
+    );
     let url = format!("http://127.0.0.1:{port}");
 
     // Phase 1 : ni pompe d'évaluation ni couche tracing (eval répond 503).

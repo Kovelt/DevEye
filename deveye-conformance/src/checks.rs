@@ -707,6 +707,94 @@ pub(crate) fn redaction(reads: &Reads, caps: &[String]) -> Outcome {
     Outcome::Pass
 }
 
+// --- Route ui.widgets (deveye.ui/1) -------------------------------------------
+
+/// Capacité qui engage l'implémentation à servir la route `ui.widgets`.
+const UI_CAPABILITY: &str = "ui.widgets/1";
+
+/// Lit la route `ui.widgets` avec le payload `{}` (négociation du payload non
+/// engagée tant que `/devtools/info` n'annonce pas plus, ADR-0065).
+async fn fetch_ui_tree(t: &Target) -> Result<Value, String> {
+    let resp = t
+        .post_json(
+            "/devtools/command",
+            &json!({ "route": "ui.widgets", "payload": {} }),
+        )
+        .await?;
+    status_is(&resp, 200)?;
+    with_version(&resp)?;
+    resp.json()
+}
+
+/// Arbre conforme à `deveye.ui/1` : schéma déclaré, ids uniques, parents connus,
+/// pas de cycle. Les avertissements (widget hors fenêtre) ne sont pas des écarts.
+fn check_ui_tree(value: &Value) -> Check {
+    if value.get("schema").and_then(Value::as_str) != Some(deveye_core::UI_SCHEMA) {
+        return Err(format!(
+            "champ \"schema\" : {:?} attendu",
+            deveye_core::UI_SCHEMA
+        ));
+    }
+    let tree = deveye_core::UiTree::from_value(value).map_err(|e| e.to_string())?;
+    let errors: Vec<String> = tree
+        .validate()
+        .iter()
+        .filter(|issue| issue.is_error())
+        .map(ToString::to_string)
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join(" ; "))
+    }
+}
+
+/// Chemins (jamais les valeurs) des widgets secrets dont la valeur est publiée.
+fn ui_secret_leaks(value: &Value) -> Result<(usize, Vec<String>), String> {
+    let tree = deveye_core::UiTree::from_value(value).map_err(|e| e.to_string())?;
+    let secrets: Vec<_> = tree.widgets.iter().filter(|w| w.is_secret()).collect();
+    let leaks = secrets
+        .iter()
+        .filter(|w| {
+            w.value
+                .as_ref()
+                .is_some_and(|v| v.as_str() != Some(REDACTED))
+        })
+        .map(|w| format!("widgets/{}", w.id))
+        .collect();
+    Ok((secrets.len(), leaks))
+}
+
+pub(crate) async fn ui_widgets(t: &Target, caps: &[String]) -> (Outcome, Outcome) {
+    let not_applicable = || {
+        Outcome::NotApplicable(format!(
+            "capacité {UI_CAPABILITY} non annoncée par l'implémentation"
+        ))
+    };
+    if !caps.iter().any(|c| c == UI_CAPABILITY) {
+        return (not_applicable(), not_applicable());
+    }
+    let value = match fetch_ui_tree(t).await {
+        Ok(value) => value,
+        Err(why) => return (Outcome::Fail(why.clone()), Outcome::Fail(why)),
+    };
+    let shape = verdict(check_ui_tree(&value));
+    let secrets = match ui_secret_leaks(&value) {
+        Err(why) => Outcome::Fail(why),
+        Ok((_, leaks)) if !leaks.is_empty() => Outcome::Fail(format!(
+            "valeur publiée pour un widget secret : {}",
+            leaks.join(", ")
+        )),
+        Ok((0, _)) => Outcome::Skip(
+            "aucun widget secret dans l'arbre : rien à vérifier (publier par exemple un champ \
+             de rôle password)"
+                .into(),
+        ),
+        Ok(_) => Outcome::Pass,
+    };
+    (shape, secrets)
+}
+
 /// Point d'entrée commun : exécute toutes les vérifications dans l'ordre.
 pub(crate) async fn run_all(t: &Target, opts: &Options) -> crate::Report {
     let mut report = crate::Report::default();
@@ -883,6 +971,19 @@ pub(crate) async fn run_all(t: &Target, opts: &Options) -> crate::Report {
         "Masquage des clés sensibles dans l'état et les logs",
         redaction(&reads, &caps),
     );
+    let (ui_shape, ui_secrets) = ui_widgets(t, &caps).await;
+    report.record(
+        "UI-01",
+        "§3.7",
+        "Route ui.widgets : arbre deveye.ui/1 valide (ids uniques, parents connus)",
+        ui_shape,
+    );
+    report.record(
+        "UI-02",
+        "§3.7",
+        "Route ui.widgets : aucune valeur publiée pour un widget secret",
+        ui_secrets,
+    );
     report
 }
 
@@ -994,5 +1095,43 @@ mod tests {
         let resp = Resp::for_test(500, "mot-de-passe-secret");
         let message = status_is(&resp, 200).unwrap_err();
         assert!(!message.contains("secret"), "{message}");
+    }
+
+    #[test]
+    fn ui_tree_check_accepts_a_valid_tree_and_rejects_duplicate_ids() {
+        let valid = json!({
+            "schema": "deveye.ui/1",
+            "window": { "width": 100, "height": 100 },
+            "widgets": [
+                { "id": "a", "role": "button", "rect": [0, 0, 10, 10] },
+                { "id": "b", "parent": "a", "role": "label", "rect": [1, 1, 5, 5] }
+            ]
+        });
+        assert!(check_ui_tree(&valid).is_ok());
+
+        let mut duplicate = valid.clone();
+        duplicate["widgets"][1]["id"] = json!("a");
+        assert!(check_ui_tree(&duplicate).is_err());
+
+        let legacy = json!({ "widgets": [] });
+        let why = check_ui_tree(&legacy).unwrap_err();
+        assert!(why.contains("schema"), "{why}");
+    }
+
+    #[test]
+    fn ui_secret_leak_reports_paths_never_values() {
+        let leaking = json!({
+            "schema": "deveye.ui/1",
+            "window": { "width": 100, "height": 100 },
+            "widgets": [
+                { "id": "pw", "role": "password", "value": "hunter2", "rect": [0, 0, 10, 10] },
+                { "id": "ok", "role": "password", "value": "<secret>", "rect": [0, 20, 10, 10] },
+                { "id": "name", "role": "textbox", "value": "alice", "rect": [0, 40, 10, 10] }
+            ]
+        });
+        let (secrets, leaks) = ui_secret_leaks(&leaking).unwrap();
+        assert_eq!(secrets, 2);
+        assert_eq!(leaks, vec!["widgets/pw".to_string()]);
+        assert!(!leaks.concat().contains("hunter2"));
     }
 }
