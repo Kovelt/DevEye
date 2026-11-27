@@ -36,8 +36,9 @@ pub use deveye_core::ui::{
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(debug_assertions)]
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 #[cfg(debug_assertions)]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Nom de la route de commande qui sert l'arbre.
 pub const ROUTE: &str = "ui.widgets";
