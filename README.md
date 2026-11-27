@@ -97,7 +97,7 @@ Le binaire atterrit dans `target/release/deveye-server`.
 # Mode kwin-eis (app native Wayland sans WebView, ex. Uno/Skia)
 ./target/release/deveye-server \
   --target kwin-eis \
-  --screencap-window atlas \
+  --screencap-window mon_app \
   --serve-mcp
 
 # Mode x11 (app X11 native dans un Xvfb privé — display >= 100, jamais la session vivante)
@@ -243,11 +243,9 @@ cargo test -p adapter-x11 -- --ignored --test-threads=1
 
 ## Statut / contexte
 
-Jalons **M0 à M7 livrés** (25 juin 2026) : infrastructure hexagonale, adapter CDP avec reconnexion paresseuse, pont natif SDK Linux, capture KWin Wayland, injection KWin EIS, CI GitLab. Surface étendue ensuite à **12 ports / 41 outils MCP** (sprints d'outils, juin 2026 — cf. [docs/tools-backlog-2026-06-26.md](docs/tools-backlog-2026-06-26.md)).
+Infrastructure hexagonale (12 ports, 41 outils MCP), adapter CDP avec reconnexion paresseuse, pont natif SDK Linux, capture KWin Wayland, injection KWin EIS, pilotage X11 isolé. La politique de stabilité de la 1.0 est décrite dans [docs/stability.md](docs/stability.md).
 
-Audit post-M7 (108 constats priorisés, dont le gate MCP T1/M1 bloquant) : [docs/audit-2026-06-25.md](docs/audit-2026-06-25.md).
-
-> **Note** : **ce dépôt est la source de vérité de DevEye** (depuis M0, 25/06/2026). Les apps cibles (Chronos, Atelier) consomment des copies vendored de `deveye-core`/`deveye-ports`/`deveye-sdk`, régénérées par `scripts/sync-deveye.sh` — à ne jamais éditer côté copie : tout correctif naît ici puis est propagé. (Historiquement, DevEye est né dans Chronos `crates/deveye`, d'où les métadonnées de package figées.)
+Les audits, la feuille de route et les notes de conception des premiers jalons sont conservés comme archives datées, non normatives, dans [docs/historique/](docs/historique/README.md).
 
 ---
 
@@ -256,6 +254,7 @@ Audit post-M7 (108 constats priorisés, dont le gate MCP T1/M1 bloquant) : [docs
 - [docs/usage.md](docs/usage.md) — outils MCP détaillés, configuration client MCP, modes Linux/kwin-eis/x11/WASM, troubleshooting
 - [docs/architecture.md](docs/architecture.md) — architecture hexagonale, 12 ports, robustesse CDP, sécurité
 - [docs/wire-protocol.md](docs/wire-protocol.md) — contrat HTTP du SDK (5 endpoints, formes JSON, garde Host, checklist implémentation tierce)
+- [docs/historique/README.md](docs/historique/README.md) — archives de conception datées (audits, feuille de route, spike), non normatives
 - [docs/stability.md](docs/stability.md) — politique semver de la 1.0 : surface stable, dépréciation, MSRV, versionnage du protocole
 
 ---

@@ -7,7 +7,7 @@ Source de vérité canonique : ce fichier (`docs/wire-protocol.md`).
 
 ## Périmètre et objectif
 
-Ce document spécife le contrat HTTP que tout **SDK DevEye** doit implémenter pour être piloté par `deveye-server`. L'implémentation de référence est `deveye-sdk` (Rust/axum, workspace DevEye). Une implémentation vendored pour Atelier existe dans `Projets/Atelier/deveye/deveye-sdk/`. Le shim .NET `Atlas.DevEye` (jalon M3) devra satisfaire ce même contrat.
+Ce document spécife le contrat HTTP que tout **SDK DevEye** doit implémenter pour être piloté par `deveye-server`. L'implémentation de référence est `deveye-sdk` (Rust/axum, workspace DevEye). Toute implémentation dans un autre langage (par exemple un shim .NET) doit satisfaire ce même contrat ; la checklist de la section 6 sert de guide.
 
 La spec est **agnostique du langage** : n'importe quelle techno capable de servir du HTTP/1.1 sur localhost peut implémenter un SDK conforme. Elle est volontairement minimale : aucun WebSocket, aucun streaming, aucune authentification — la sécurité repose sur le bind loopback et la garde `Host`.
 
@@ -83,7 +83,7 @@ X-DevEye-Protocol-Version: 1
 
 Le client (adapters DevEye) peut utiliser ce header pour détecter une incompatibilité de version et produire un message d'erreur exploitable plutôt qu'un échec JSON silencieux. La valeur courante est `1` ; elle sera incrémentée en cas de changement cassant du contrat.
 
-**État** : émis par l'implémentation de référence depuis M0. Le middleware `add_protocol_version` est posé en **couche externe** de la garde Host, de sorte que *chaque* réponse porte le header — y compris le `403` de `guard_local_host`. Ref. code : `deveye-sdk/src/lib.rs` (`PROTOCOL_VERSION`, `add_protocol_version`).
+**État** : émis par l'implémentation de référence. Le middleware `add_protocol_version` est posé en **couche externe** de la garde Host, de sorte que *chaque* réponse porte le header — y compris le `403` de `guard_local_host`. Ref. code : `deveye-sdk/src/lib.rs` (`PROTOCOL_VERSION`, `add_protocol_version`).
 
 ---
 
@@ -396,25 +396,20 @@ Ref. code : `deveye-sdk/src/lib.rs` — handler `commands_handler` (tri par `a.n
 
 ---
 
-## 4. État de la réconciliation (jalon M0 — fait)
+## 4. Garanties de l'implémentation de référence
 
-Au démarrage de M0, l'export canonique `deveye-sdk` et les copies vendored (Atelier `deveye/deveye-sdk`, Chronos `crates/deveye/deveye-sdk`) étaient **byte-identiques** : tous trois servaient `/devtools/state`, `/devtools/logs/poll` et `/devtools/eval` (pompe d'évaluation, runtime tokio dédié via `once_cell`, locks `tokio::sync`), mais **aucun** n'avait la garde `Host` ni la surface commandes — l'inverse exact de ce que décrivait l'audit initial (qui supposait un canonique avec commandes mais sans eval).
+`deveye-sdk` implémente le contrat complet de ce document :
 
-M0 a aligné les trois sur le contrat complet de ce document :
+| Fonctionnalité | Statut |
+|---|---|
+| `GET /devtools/state`, `GET /devtools/logs/poll`, `POST /devtools/eval` | oui |
+| `POST /devtools/command` (`command_handler`) et `GET /devtools/commands` (`commands_handler`, tri par `name`) | oui |
+| Garde `Host` (`guard_local_host`, middleware, `403` hors localhost) | oui |
+| Header `X-DevEye-Protocol-Version` (toutes réponses, y compris `403`) | oui |
+| `expose_route` (enregistrement de commandes) | oui |
+| `504` sur dépassement de l'évaluation, traduit en `PortError::Timeout` côté `adapter-dioxus-signals` | oui |
 
-| Fonctionnalité | Avant M0 (3 SDK identiques) | Après M0 |
-|---|---|---|
-| `GET /devtools/state` | oui | oui |
-| `GET /devtools/logs/poll` | oui | oui |
-| `POST /devtools/eval` | oui | oui |
-| `POST /devtools/command` | **absent** | oui (`command_handler`) |
-| `GET /devtools/commands` | **absent** | oui (`commands_handler`, tri par `name`) |
-| Garde `Host` (`guard_local_host`) | **absente** | oui (middleware, `403` hors localhost) |
-| Header `X-DevEye-Protocol-Version` | **absent** | oui (toutes réponses, y compris `403`) |
-| `expose_route` (enregistrement de commandes) | **absent** | oui |
-| `PortError::Timeout` (mapping `504` côté client) | **absent** | oui (`adapter-dioxus-signals`) |
-
-Runtime tokio dédié (`once_cell::sync::Lazy`) et locks `tokio::sync` sont conservés à l'identique sur les trois. Le canonique `deveye-sdk` est l'**implémentation de référence** ; les vendored Atelier/Chronos sont resynchronisés byte pour byte. À terme, ces vendored peuvent être remplacés par une dépendance directe à `deveye-sdk` sous `cfg(all(feature = "deveye", debug_assertions))`. Le shim .NET `Atlas.DevEye` (M3) implémentera ce même contrat.
+Un runtime tokio dédié (`std::sync::LazyLock`) et des locks `tokio::sync` isolent le SDK du runtime de l'app hôte. `deveye-sdk` est l'**implémentation de référence** : en cas de divergence entre ce document et une autre implémentation, c'est le code de `deveye-sdk` qui fait foi.
 
 ---
 
@@ -436,7 +431,7 @@ Note sur le timeout de `/devtools/eval` : le SDK impose en plus un timeout **int
 
 ## 6. Checklist : implémenter un SDK conforme
 
-Cette liste est le guide opérationnel pour le shim .NET `Atlas.DevEye` (jalon M3) ou tout autre SDK dans un langage tiers.
+Cette liste est le guide opérationnel pour tout SDK dans un langage tiers (par exemple .NET).
 
 ### Prérequis
 

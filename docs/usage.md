@@ -106,7 +106,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `scroll` | `{x?, y?, dx?, dy?}` | `"ok"` | « scrolle vers le bas de 600 px » (`dy > 0` = bas ; ancrage au centre par défaut ; cible le bon conteneur) |
 | `handle_dialog` | `{accept, prompt_text?}` | `"ok"` | « accepte la confirmation » (CDP : pendant un `alert`/`confirm`/`prompt`, `eval_js` est impossible) |
 | `upload_file` | `{selector, paths}` | `"ok"` | « charge `/tmp/a.png` dans `input[type=file]` » (CDP `DOM.setFileInputFiles` ; non faisable en JS) |
-| `focus_window` | `{title_pattern?}` | JSON `{ok, title}` | « donne le focus à la fenêtre `atlas` » (KWin ; crucial avant une séquence kwin-eis) |
+| `focus_window` | `{title_pattern?}` | JSON `{ok, title}` | « donne le focus à la fenêtre `mon_app` » (KWin ; crucial avant une séquence kwin-eis) |
 | `clipboard_get` | aucun | JSON `{text}` | « lis le presse-papiers » (Wayland `wl-paste` ; fiable en contexte automatisé) |
 | `clipboard_set` | `{text}` | `"ok"` | « mets ce texte dans le presse-papiers » (Wayland `wl-copy` ; combiner à `key_combo` Ctrl+V) |
 | `eval_js` | `{expression}` | JSON sérialisé | « renvoie `document.querySelectorAll('button').length` » (Promise awaitée) |
@@ -168,11 +168,11 @@ cargo run -p deveye-server -- --serve-mcp --target sdk
 
 ## Linux — piloter une app native Wayland (kwin-eis)
 
-Pour une cible **sans WebView ni SDK** — notamment atlas Uno desktop (rendu Skia) — DevEye injecte des événements d'entrée au niveau OS via **KWin EIS** (`org.kde.KWin.EIS.RemoteDesktop`), sans XWayland, sans shim dans l'app.
+Pour une cible **sans WebView ni SDK** — par exemple une app Uno desktop (rendu Skia) — DevEye injecte des événements d'entrée au niveau OS via **KWin EIS** (`org.kde.KWin.EIS.RemoteDesktop`), sans XWayland, sans shim dans l'app.
 
 ```bash
 # Terminal 1 — l'app native (Skia/Uno, .NET ou autre)
-dotnet run --project src/Atlas.App -f net10.0-desktop -c Debug
+dotnet run --project src/MonApp -f net10.0-desktop -c Debug
 
 # Terminal 2 — le serveur MCP en mode kwin-eis
 cargo run -p deveye-server -- --serve-mcp --target kwin-eis
@@ -192,7 +192,7 @@ cargo run -p deveye-server -- --serve-mcp --target kwin-eis
       "command": "/chemin/vers/DevEye/target/release/deveye-server",
       "args": [
         "--target", "kwin-eis",
-        "--screencap-window", "atlas",
+        "--screencap-window", "mon_app",
         "--serve-mcp"
       ]
     }
@@ -309,7 +309,7 @@ cargo test -p adapter-x11 -- --ignored --test-threads=1
 
 ## Piloter une app WASM via un Chromium externe
 
-Pour une tête **WASM** (ex. Uno/atlas `net10.0-browserwasm`, ou toute SPA) servie par un Chromium externe plutôt qu'un webview Dioxus, on pilote en **CDP pur** (`--target cdp`) avec un **filtre de cible explicite** (le défaut `dioxus` ne matcherait pas).
+Pour une tête **WASM** (ex. Uno `net10.0-browserwasm`, ou toute SPA) servie par un Chromium externe plutôt qu'un webview Dioxus, on pilote en **CDP pur** (`--target cdp`). Sans filtre, la cible est la **première page qui n'est pas `about:blank`** ; avec plusieurs pages ouvertes, poser un **filtre de cible explicite**.
 
 ```bash
 # Terminal 1 — l'app WASM (dotnet, dx, vite…), ex. sur http://localhost:5000
@@ -344,31 +344,26 @@ claude
 }
 ```
 
-Variante par titre : `--cdp-target-filter-title atlas` (les deux flags se combinent en OU). En cible CDP pure, le SDK opt-in n'est pas embarqué (cible .NET/WASM) → `state`, `logs_tail`, `invoke_command`, `list_commands` renvoient une erreur réseau explicite ; seules les capacités CDP (`screenshot`, `click`, `right_click`, `hover`, `click_selector`, `click_text`, `type_text`, `eval_js`, `dom`, `find_element`, `assert_selector`, `wait_for_selector`, `wait_condition`, `drag_drop`, `collect_console_errors`, `list_windows`) répondent.
+Variante par titre : `--cdp-target-filter-title mon_app` (les deux flags se combinent en OU). `--cdp-accept-blank` autorise en plus la page `about:blank` transitoire d'une webview au boot (désactivé par défaut). En cible CDP pure, le SDK opt-in n'est pas embarqué (cible .NET/WASM) → `state`, `logs_tail`, `invoke_command`, `list_commands` renvoient une erreur réseau explicite ; seules les capacités CDP (`screenshot`, `click`, `right_click`, `hover`, `click_selector`, `click_text`, `type_text`, `eval_js`, `dom`, `find_element`, `assert_selector`, `wait_for_selector`, `wait_condition`, `drag_drop`, `collect_console_errors`, `list_windows`) répondent.
 
 ---
 
-## Piloter atlas (.NET / Uno) — shim Atlas.DevEye
+## Piloter une app non Rust (.NET, autre) via le wire protocol
 
-atlas n'embarque ni CDP ni le SDK Rust (c'est du .NET 10 / Uno). Le pont est le **shim `Atlas.DevEye`** (projet C# injecté **en Debug uniquement**) qui sert le même wire protocol HTTP que le SDK Rust, sur deux sources / deux ports :
-
-| Source | Port | Capacités |
-|---|---|---|
-| **Atlas.App** — tête desktop Skia (Debug) | `31337` | `state` (ViewModels), `logs_tail` (logs client), `invoke_command` / `list_commands` |
-| **Atlas.Api** — backend ASP.NET (Debug) | `31338` | `logs_tail` (Serilog), `invoke_command` / `list_commands` |
+Une app qui n'embarque ni CDP ni le SDK Rust (par exemple une app .NET / Uno) peut quand même fournir `state`, `logs_tail` et les commandes logiques : il suffit qu'elle serve le **wire protocol HTTP** de DevEye ([wire-protocol.md](./wire-protocol.md)) sur `127.0.0.1`, en build debug uniquement. Une instance de `deveye-server` par port :
 
 ```bash
-# Tête desktop atlas en Debug → lance le shim sur 127.0.0.1:31337
-dotnet run --project src/Atlas.App -f net10.0-desktop -c Debug
+# Tête desktop de l'app en Debug → serveur du wire protocol sur 127.0.0.1:31337
+dotnet run --project src/MonApp -f net10.0-desktop -c Debug
 
-# deveye-server : état + logs du CLIENT atlas (port 31337)
+# deveye-server : état + logs de l'app (port 31337)
 cargo run -p deveye-server -- --target sdk --sdk-url http://localhost:31337 --serve-mcp
 ```
 
-- **Logs backend** (Serilog) : pointer une seconde instance sur `--sdk-url http://localhost:31338`.
-- **Yeux** sur la tête **WASM** d'atlas : passer par le mode CDP (cf. section précédente), p. ex. `--target cdp --cdp-target-filter-title atlas`. La tête desktop Skia n'est pas un webview ; pour la voir, le screencap OS (`--screencap-window atlas`) reste possible.
-- `eval_js` répond **503** côté .NET (pas de pompe webview) — les capacités JS/DOM passent par le CDP de la tête WASM.
-- Le shim n'existe **qu'en build Debug** (référence `Atlas.DevEye` conditionnée Debug + `#if DEBUG`) : aucun binaire Release d'atlas n'embarque DevEye.
+- Un second composant (par exemple un backend) se pilote avec une seconde instance sur un autre port : `--sdk-url http://localhost:31338`.
+- **Yeux** : en CDP (`--target cdp`) pour une tête WASM, ou par screencap OS (`--screencap-window mon_app`) pour une tête desktop non webview.
+- `eval_js` répond **503** côté app sans webview (pas de pompe) — les capacités JS/DOM passent alors par le CDP d'une tête WASM.
+- Le serveur du protocole ne doit exister **qu'en build debug** : aucun binaire release n'embarque DevEye.
 
 ---
 
@@ -411,7 +406,7 @@ Côté app cible, le seul fichier qui référence DevEye est son `Cargo.toml` (f
 | Symptôme | Cause probable | Fix |
 |----------|----------------|-----|
 | `CDP injoignable au demarrage (...) — reconnexion automatique au premier appel d'outil.` | App cible pas lancée avec `--features deveye`, navigateur CDP absent, ou WebView2 pas prêt | Lancer l'app/navigateur puis **rappeler l'outil** : l'attache est paresseuse, inutile de relancer `deveye-server`. En natif Linux, utiliser `--target sdk`. |
-| `timeout en attente d'une page CDP attachable (10 s)` | Aucune page ouverte ne matche le filtre de cible | Vérifier que le navigateur/l'app est chargé(e) ; passer `--cdp-target-filter-url <sous-chaine>` ou `--cdp-target-filter-title <sous-chaine>` pour viser une autre page (ex. tête WASM) |
+| `timeout en attente d'une page CDP attachable (10 s) : aucune page ne correspond au filtre (…) ; pages vues : …` | Aucune page ouverte ne correspond au filtre de cible ; le message liste les pages vues (titre et URL tronqués) | Corriger le filtre d'après la liste : `--cdp-target-filter-url <sous-chaine>` ou `--cdp-target-filter-title <sous-chaine>` ; `--cdp-accept-blank` si la page est encore `about:blank` ; vérifier que le navigateur/l'app est chargé(e) |
 | `Connection refused: 127.0.0.1:31337` côté `state` ou `logs_tail` | Feature `deveye` absente du build de l'app | Vérifier `dx serve --features deveye`. Le SDK refuse de bind sinon |
 | Le client ne voit pas `deveye` dans `/mcp` | `.mcp.json` mal placé, syntaxe JSON invalide, ou chemin du binaire faux | Vérifier `.mcp.json` à la racine ; valider la syntaxe ; vérifier que `target\release\deveye-server.exe` existe |
 | `Tool execution failed: ...` quand on appelle un outil | Erreur côté adapter (CDP injoignable, SDK crashé, etc.) | Regarder les logs `deveye-server` dans le panneau MCP du client ; relancer l'app si besoin |
@@ -422,7 +417,7 @@ Côté app cible, le seul fichier qui référence DevEye est son `Cargo.toml` (f
 
 ## Limitations connues
 
-- **CDP = Windows (WebView2) uniquement.** Sur macOS (WKWebView) et Linux (WebKitGTK), CDP n'est pas exposé. Sous Linux, le **pont natif** du SDK (`--target sdk`/`auto`) conserve clic / saisie / DOM / JS / state via la pompe `document::eval` — seul `resize` (métriques moteur) reste indisponible. Pour les cibles sans WebView ni SDK (ex. atlas Uno desktop / Skia), utiliser `--target kwin-eis` (injection OS-level KWin EIS — yeux par screencap).
+- **CDP = Windows (WebView2) uniquement.** Sur macOS (WKWebView) et Linux (WebKitGTK), CDP n'est pas exposé. Sous Linux, le **pont natif** du SDK (`--target sdk`/`auto`) conserve clic / saisie / DOM / JS / state via la pompe `document::eval` — seul `resize` (métriques moteur) reste indisponible. Pour les cibles sans WebView ni SDK (ex. Uno desktop / Skia), utiliser `--target kwin-eis` (injection OS-level KWin EIS — yeux par screencap).
 - **Pas de stream WebSocket** sur les logs : `logs_tail` est un drain ponctuel ; pour attendre de nouveaux événements sans boucle arbitraire, utiliser `wait_condition` (prédicat `state-key` si l'app expose l'état) ou une boucle `logs_tail` côté agent. Pas de flush poussé temps réel (choix assumé).
 - **Commandes logiques** : `invoke_command` / `list_commands` sont opérationnels via `adapter-commands-http`, mais ne renvoient quelque chose que si l'app cible a déclaré des routes avec `deveye_sdk::expose_route` (sinon `list_commands` renvoie une liste vide). C'est à l'app d'exposer ce qu'elle veut rendre pilotable.
 - **Test runtime end-to-end** non automatisé : à valider manuellement à chaque release majeure Dioxus/wry (on dépend de l'option WebView2 `--remote-debugging-port`).

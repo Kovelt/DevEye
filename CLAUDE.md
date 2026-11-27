@@ -81,7 +81,7 @@ DevEye/
   deveye-server/                binaire orchestrateur (CLI, composition selon --target)
   docs/                         architecture, usage, wire protocol, stabilité, plateformes
   docs/adr/                     décisions d'architecture (ADR) et leur index
-  scripts/                      outillage (synchronisation des copies embarquées)
+  docs/historique/              archives de conception datées (non normatives)
 ```
 
 **Sources de vérité** : `docs/architecture.md` (conception), `docs/usage.md` (utilisation), `docs/wire-protocol.md` (contrat HTTP du SDK).
