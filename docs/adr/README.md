@@ -100,3 +100,6 @@ Option retenue, en une phrase.
 | [0034](0034-capacites-completes-de-target-info-et-repli-observable.md) | Capacités complètes de `target_info`, repli observable et choix unique du backend OS | Proposé |
 | [0035](0035-suite-de-conformite-boite-noire-du-protocole.md) | Suite de conformité boîte noire du protocole | Accepté |
 | [0036](0036-statut-du-shim-dotnet-implementation-tierce.md) | Statut du shim .NET : implémentation tierce validée par la suite de conformité | Accepté |
+| [0037](0037-linux-seul-supporte-en-1-0.md) | Linux seul supporté en 1.0 | Accepté |
+| [0038](0038-distribution-archives-github-et-cargo-install.md) | Distribution du binaire : archives de release GitHub et cargo install | Accepté |
+| [0039](0039-tests-de-bout-en-bout-et-preuves-dev-only-en-ci.md) | Tests de bout en bout et preuves dev-only en CI | Proposé |
