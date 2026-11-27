@@ -1,6 +1,6 @@
 # cargo-deny — audit des dependances (audit du 04/07/2026, item I3).
 # Lancer : `cargo deny check` (advisories, bans, licenses, sources), comme le
-# job CI `audit-deps`. Decisions : ADR-0002 (licences), ADR-0006 et ADR-0007
+# job CI `deny`. Decisions : ADR-0002 (licences), ADR-0006 et ADR-0007
 # (exceptions d'avis).
 
 [advisories]
