@@ -47,8 +47,12 @@ usage() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dry-run) MODE="dry-run"; RSYNC_DRY=(--dry-run) ;;
-    --check) MODE="check" ;;
+    --dry-run)
+      [[ "${MODE}" != "check" ]] || { echo "--check et --dry-run sont exclusifs" >&2; usage; exit 2; }
+      MODE="dry-run"; RSYNC_DRY=(--dry-run) ;;
+    --check)
+      [[ "${MODE}" != "dry-run" ]] || { echo "--check et --dry-run sont exclusifs" >&2; usage; exit 2; }
+      MODE="check" ;;
     --force) FORCE=1 ;;
     --target)
       [[ $# -ge 2 ]] || { echo "--target attend une valeur" >&2; usage; exit 2; }
@@ -121,8 +125,10 @@ if [[ "${MODE}" != "check" ]] && ! command -v rsync >/dev/null 2>&1; then
 fi
 
 # --- Hash et VENDORED.md ---------------------------------------------------
-# Hash stable d'une crate : contenu des .rs + Cargo.toml, chemins relatifs
-# tries -- comparable entre le dépôt et une copie quel que soit le prefixe.
+# Hash stable d'une crate : contenu de tous les fichiers que rsync copie
+# (README, LICENSE-MIT, etc. compris ; target/ et Cargo.lock exclus comme dans
+# rsync), chemins relatifs tries -- comparable entre le dépôt et une copie
+# quel que soit le prefixe.
 hash_crate() {
   local root="$1" crate="$2"
   if [[ ! -d "${root}/${crate}" ]]; then
@@ -130,7 +136,7 @@ hash_crate() {
     return
   fi
   (cd "${root}/${crate}" \
-    && find . -type f \( -name '*.rs' -o -name 'Cargo.toml' \) -not -path './target/*' \
+    && find . -type f -not -path './target/*' -not -name 'Cargo.lock' \
        | LC_ALL=C sort | xargs -r sha256sum | sha256sum | cut -d' ' -f1)
 }
 
@@ -183,25 +189,27 @@ if [[ "${MODE}" == "check" ]]; then
 fi
 
 # --- Synchronisation ---------------------------------------------------------
-sync_to() {
-  local dest_root="$1" label="$2" crate rec cur
-  echo "=== ${label} : ${dest_root} ==="
+# Garde anti-ecrasement : si la copie a ete editee depuis la derniere sync
+# (hash courant != hash consigne dans VENDORED.md), on refuse d'ecraser.
+# --force outrepasse, une fois les changements rapatries. Elle est evaluee sur
+# TOUTES les cibles avant la moindre ecriture : aucune sync partielle.
+guard_target() {
+  local dest_root="$1" crate rec cur
+  for crate in "${CRATES[@]}"; do
+    rec="$(recorded_hash "${dest_root}" "${crate}")"
+    cur="$(hash_crate "${dest_root}" "${crate}")"
+    if [[ -n "${rec}" && "${cur}" != "ABSENT" && "${rec}" != "${cur}" ]]; then
+      echo "ABANDON : ${dest_root}/${crate} a ete edite depuis la dernière sync" >&2
+      echo "          (hash consigne ${rec}, hash courant ${cur})." >&2
+      echo "          Rapatrier les changements dans DevEye, puis relancer avec --force." >&2
+      return 1
+    fi
+  done
+}
 
-  # Garde anti-ecrasement : si la copie a ete editee depuis la derniere sync
-  # (hash courant != hash consigne dans VENDORED.md), on refuse d'ecraser.
-  # --force outrepasse, une fois les changements rapatries.
-  if [[ "${FORCE}" -ne 1 ]]; then
-    for crate in "${CRATES[@]}"; do
-      rec="$(recorded_hash "${dest_root}" "${crate}")"
-      cur="$(hash_crate "${dest_root}" "${crate}")"
-      if [[ -n "${rec}" && "${cur}" != "ABSENT" && "${rec}" != "${cur}" ]]; then
-        echo "ABANDON : ${dest_root}/${crate} a ete edite depuis la dernière sync" >&2
-        echo "          (hash consigne ${rec}, hash courant ${cur})." >&2
-        echo "          Rapatrier les changements dans DevEye, puis relancer avec --force." >&2
-        exit 1
-      fi
-    done
-  fi
+sync_to() {
+  local dest_root="$1" label="$2" crate
+  echo "=== ${label} : ${dest_root} ==="
 
   for crate in "${CRATES[@]}"; do
     rsync -a --delete "${RSYNC_DRY[@]}" \
@@ -217,6 +225,12 @@ sync_to() {
 }
 
 [[ "${MODE}" == "dry-run" ]] && echo "[dry-run] aucune ecriture sur le disque"
+
+if [[ "${FORCE}" -ne 1 ]]; then
+  for i in "${!DIRS[@]}"; do
+    guard_target "${DIRS[$i]}" || exit 1
+  done
+fi
 
 for i in "${!DIRS[@]}"; do
   sync_to "${DIRS[$i]}" "${LABELS[$i]}"
