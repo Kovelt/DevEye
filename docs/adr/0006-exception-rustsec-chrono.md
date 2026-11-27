@@ -23,7 +23,7 @@
 
 ## Décision
 
-Option 3 (commit `a2951ed`) : `RUSTSEC-2026-0543` est ignoré dans `deny.toml`, avec commentaire et date (27/11/2026). Le remplacement de chrono est réservé à la 2.0.
+Option 3 (commit `d2a496e`) : `RUSTSEC-2026-0543` est ignoré dans `deny.toml`, avec commentaire et date (27/11/2026). Le remplacement de chrono est réservé à la 2.0.
 
 **Justification** : un statut de maintenance ne justifie pas de casser l'API publique avant la 1.0 ; l'exception est bornée, datée et visible.
 

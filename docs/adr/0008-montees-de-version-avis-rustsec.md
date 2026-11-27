@@ -24,8 +24,8 @@ L'audit de santé de la base de la release a relevé douze avis RUSTSEC, dont ne
 
 Option 2.
 
-- Commit `a2951ed` : `h2`, `rustls`, `rustls-webpki`, `webpki-roots`, `url`, `rustix`, `tokio` et `async-executor` montent dans leurs plages semver (`Cargo.lock` seul) ; chrono reçoit une exception (ADR-0006) et rmcp une migration (ADR-0005).
-- Commit `691f48a` : `deveye-sdk` migre vers `axum` 0.8 et `tower-http` 0.7 ; le code du SDK compile sans changement (pas de paramètres de route) et le test du wire protocol reste vert. Le seul doublon `tower-http` restant (0.6) vient de `reqwest` 0.12.
+- Commit `d2a496e` : `h2`, `rustls`, `rustls-webpki`, `webpki-roots`, `url`, `rustix`, `tokio` et `async-executor` montent dans leurs plages semver (`Cargo.lock` seul) ; chrono reçoit une exception (ADR-0006) et rmcp une migration (ADR-0005).
+- Commit `5458d00` : `deveye-sdk` migre vers `axum` 0.8 et `tower-http` 0.7 ; le code du SDK compile sans changement (pas de paramètres de route) et le test du wire protocol reste vert. Le seul doublon `tower-http` restant (0.6) vient de `reqwest` 0.12.
 
 **Justification** : les vulnérabilités sont corrigées sans toucher aux surfaces stables (wire protocol inchangé, vérifié par le test `wire_protocol`).
 

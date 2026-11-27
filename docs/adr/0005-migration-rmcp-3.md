@@ -23,7 +23,7 @@
 
 ## Décision
 
-Option 3 (commit `001da2a`). Adaptations : `Content` devient `ContentBlock`, `ServerInfo` devient `ServerConfig` ; les macros `#[tool]` restent compatibles ; les 37 tests de l'adapter passent.
+Option 3 (commit `5694df1`). Adaptations : `Content` devient `ContentBlock`, `ServerInfo` devient `ServerConfig` ; les macros `#[tool]` restent compatibles ; les 37 tests de l'adapter passent.
 
 **Justification** : l'avis est corrigé à la source, sans fork, et l'impact sur le code est limité à des renommages ; les noms et schémas des outils MCP sont inchangés.
 
