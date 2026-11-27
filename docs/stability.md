@@ -14,7 +14,7 @@ Tant que la version majeure ne change pas, ces éléments ne cassent pas.
 | `deveye-ports` | traits des ports, `PortError`, `PortResult` |
 | `deveye-sdk` | API publique embarquée dans l'app cible (`init`, `Config`, `set_state`, `expose_route`, `take_eval_requests`, constantes publiques) |
 | `deveye-sdk-client` | client HTTP et constantes partagés avec les adapters |
-| **Wire protocol v1** | endpoints, formes JSON et en-têtes décrits dans [wire-protocol.md](wire-protocol.md), dont `X-DevEye-Protocol-Version: 1` |
+| **Wire protocol v1** | endpoints, formes JSON et en-têtes décrits dans [wire-protocol.md](wire-protocol.md), dont `X-DevEye-Protocol-Version: 1.0` (la mineure augmente à chaque ajout, la majeure à chaque rupture) |
 | **Outils MCP** | le nom de chaque outil, le nom et le type de chaque paramètre, la forme de chaque réponse |
 | **`deveye-server`** | les options (`--target`, `--display`, `--cdp-url`, `--sdk-url`, `--screencap-window`, etc.), leurs valeurs possibles et leurs valeurs par défaut |
 
@@ -45,7 +45,8 @@ Aucune promesse de compatibilité sur :
 | Rendre un paramètre optionnel obligatoire, changer son type ou la sémantique d'une valeur | majeure |
 | Ajouter un champ à une variante existante d'un enum (les variantes restent constructibles par littéral) | majeure |
 | Ajouter un champ à un struct **non** `#[non_exhaustive]` (`Size`, `Position`, `WindowRect`) | majeure |
-| Changer la version du wire protocol | majeure |
+| Ajouter une route, un champ de réponse ou un paramètre optionnel au wire protocol (mineure du protocole, `1.0` vers `1.1`) | mineure |
+| Changer la version **majeure** du wire protocol (rupture) | majeure |
 
 Un consommateur Rust doit donc écrire un bras `_` dans tout `match` sur un enum `#[non_exhaustive]` et construire les structs `#[non_exhaustive]` par leurs constructeurs, pas par littéral.
 

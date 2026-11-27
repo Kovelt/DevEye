@@ -4,6 +4,10 @@ SDK à intégrer dans l'app cible, **uniquement en `cfg(debug_assertions)`** : d
 
 Fait partie de [DevEye](https://github.com/Morgan-Voltz/DevEye), outillage dev-only qui permet à un agent (client MCP) de voir et de piloter une app graphique en cours d'exécution.
 
+## Secrets et limites
+
+Les valeurs des clés sensibles (`password`, `token`, `api_key`, `authorization`, `cookie`…) sont masquées dans l'état et les champs de logs servis ; `Config::with_secret_keys` ajoute les clés propres à l'app. Les résultats d'`eval`, de commandes et de `ui.widgets` ne sont pas filtrés. Les corps de requête sont limités à 1 Mio. Le contrat complet (version de protocole `1.0`, route `/devtools/info`) est dans `docs/wire-protocol.md` du dépôt.
+
 ## Licence
 
 MIT, voir [LICENSE-MIT](LICENSE-MIT). Les bibliothèques de DevEye (`deveye-core`, `deveye-ports`, `deveye-sdk`, `deveye-sdk-client`) sont sous MIT pour pouvoir être embarquées sans contrainte ; l'outil `deveye-server` est sous AGPL-3.0-or-later.

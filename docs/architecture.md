@@ -360,13 +360,14 @@ Pour que DevEye reste un outil générique réutilisable par n'importe quelle ap
 
 ## Sécurité
 
-Tout DevEye est **dev-only**. Cinq garde-fous côté SDK (la cible `x11` ajoute une garde d'isolation propre, cf. [`usage.md`](./usage.md)) :
+Tout DevEye est **dev-only**. Six garde-fous côté SDK (la cible `x11` ajoute une garde d'isolation propre, cf. [`usage.md`](./usage.md)) :
 
 1. **SDK strictement `cfg(debug_assertions)`** — le binaire release de l'app cible n'embarque aucune ligne DevEye. Filet de sécurité en plus de la garde côté appelant : `deveye_sdk::init` est un **no-op en build release**, donc le serveur de debug ne peut pas fuiter en production même si l'intégrateur oublie son `#[cfg(debug_assertions)]`.
 2. **Bind localhost uniquement** — le mini serveur SDK écoute sur `127.0.0.1`, jamais `0.0.0.0`.
-3. **Garde Host anti DNS-rebinding** — le middleware `guard_local_host` rejette en `403` toute requête dont le header `Host` n'est pas `localhost`/`127.0.0.1`/`[::1]`, **avant** la route. Le bind loopback seul ne suffit pas : une page malveillante peut résoudre un domaine sous son contrôle vers `127.0.0.1`. Chaque réponse porte aussi `X-DevEye-Protocol-Version` (détection d'incompatibilité de version).
+3. **Garde Host anti DNS-rebinding** — le middleware `guard_local_host` rejette en `403` toute requête dont le header `Host` n'est pas `localhost`/`127.0.0.1`/`[::1]`, **avant** la route. Le bind loopback seul ne suffit pas : une page malveillante peut résoudre un domaine sous son contrôle vers `127.0.0.1`. Chaque réponse porte aussi `X-DevEye-Protocol-Version` (`1.0`), que les clients lisent pour détecter une incompatibilité (cf. [`wire-protocol.md`](./wire-protocol.md) §2.3).
 4. **Port configurable** — par défaut `31337`, surchargable par `DEVEYE_PORT`.
-5. **Pas de secret exposé** — l'inspecteur de signaux ne traverse pas les types annotés `#[deveye(secret)]` (à implémenter dans le SDK).
+5. **Masquage des secrets par clés** — le SDK remplace par `<secret>` la valeur des clés sensibles (`password`, `token`, `api_key`, `authorization`, `cookie`…, sans casse ni séparateurs ; extensibles par `Config::secret_keys`), à toute profondeur, dans l'état (`GET /devtools/state`) et dans les champs structurés des logs (`GET /devtools/logs/poll`). **Périmètre exact** : le résultat de `eval_js`, les valeurs de retour des commandes (dont la réponse de la route `ui.widgets`) et le texte libre des messages de log ne sont **pas** filtrés, de même qu'un secret stocké sous un nom de clé neutre non déclaré. C'est un filet par noms de clés, pas une garantie ([ADR-0016](adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md)).
+6. **Corps de requête bornés** — au plus 1 Mio (`MAX_REQUEST_BODY_BYTES`), `413` au-delà ([ADR-0017](adr/0017-protocole-1-0-version-info-et-limites.md)).
 
 Le contrat complet des routes HTTP du SDK (codes de statut, formes des corps, garde Host) est figé dans [`wire-protocol.md`](./wire-protocol.md).
 

@@ -1,7 +1,8 @@
 # Wire Protocol DevEye — Spécification du contrat HTTP SDK
 
-Version du document : 2026-07-04  
-Source de vérité canonique : ce fichier (`docs/wire-protocol.md`).
+Version du document : 2026-11-27  
+**Version du protocole : 1.0 (figée pour la série 1.x de DevEye)**  
+Source de vérité canonique : ce fichier (`docs/wire-protocol.md`). Décision : [ADR-0017](adr/0017-protocole-1-0-version-info-et-limites.md).
 
 ---
 
@@ -73,23 +74,65 @@ evil.com:31337
 
 Rationale : le bind sur `127.0.0.1` empêche les connexions extérieures, mais ne suffit pas contre le DNS-rebinding — une page web malveillante peut résoudre un domaine sous son contrôle vers `127.0.0.1` et envoyer des requêtes avec un `Host` étranger. La garde coupe ce vecteur.
 
-### 2.3 Header de version protocole
+### 2.3 Version du protocole et compatibilité
 
 Chaque réponse du SDK DOIT inclure le header :
 
 ```
-X-DevEye-Protocol-Version: 1
+X-DevEye-Protocol-Version: 1.0
 ```
 
-Le client (adapters DevEye) peut utiliser ce header pour détecter une incompatibilité de version et produire un message d'erreur exploitable plutôt qu'un échec JSON silencieux. La valeur courante est `1` ; elle sera incrémentée en cas de changement cassant du contrat.
+La valeur est `MAJEURE.MINEURE`. **Ce document décrit le protocole `1.0`, figé.**
 
-**État** : émis par l'implémentation de référence. Le middleware `add_protocol_version` est posé en **couche externe** de la garde Host, de sorte que *chaque* réponse porte le header — y compris le `403` de `guard_local_host`. Ref. code : `deveye-sdk/src/lib.rs` (`PROTOCOL_VERSION`, `add_protocol_version`).
+**Règle d'incrément**
+
+| Changement | Incrément |
+|---|---|
+| Retirer ou renommer une route, un champ, un code de statut ; changer le type ou la sémantique d'un champ ; rendre un champ de requête optionnel obligatoire | **majeure** (`2.0`) |
+| Ajouter une route, un champ de réponse, un champ **optionnel** de requête, une capacité | **mineure** (`1.1`) |
+| Corriger un comportement sans changer le contrat écrit | aucun |
+
+Les clients ignorent les champs de réponse inconnus ; un SDK `1.x` reste donc utilisable par un client `1.y`.
+
+**Comportement du client** (`deveye-sdk-client`, appelé par les adapters après chaque réponse) :
+
+| Cas | Comportement |
+|---|---|
+| Majeure et mineure identiques à celles du client | silencieux |
+| En-tête absent, illisible (dont l'ancienne valeur `1` sans mineure) ou mineure différente | `tracing::warn!` **une seule fois par processus**, la requête continue |
+| Majeure différente | erreur `PortError::Protocol` explicite (versions des deux côtés, action à mener) ; aucune requête n'est exploitée |
+
+Un SDK tiers DOIT donc émettre `1.0` sous la forme `MAJEURE.MINEURE`.
+
+**État** : émis par l'implémentation de référence. Le middleware `add_protocol_version` est posé en **couche externe** de la garde Host, de sorte que *chaque* réponse porte le header — y compris le `403` de `guard_local_host` et le `413` de la limite de corps. Ref. code : `deveye-sdk/src/lib.rs` (`PROTOCOL_VERSION`, `add_protocol_version`) ; client : `deveye-sdk-client/src/lib.rs` (`check_protocol_version`).
+
+### 2.4 Masquage des secrets (périmètre exact)
+
+Le SDK remplace par `"<secret>"` (constante `deveye_sdk::REDACTED`) la valeur de toute clé JSON jugée sensible, à toute profondeur, **au moment de servir** :
+
+- `GET /devtools/state` : les entrées de premier niveau (le nom passé à `set_state`) et leurs sous-objets ;
+- `GET /devtools/logs/poll` : les champs structurés (`fields`) de chaque événement.
+
+Clés masquées par défaut, comparées sans casse ni séparateurs (`api_key` = `apiKey` = `API-KEY`) : toute clé **contenant** `password`, `passwd`, `secret`, `apikey`, `privatekey`, `credential` ou `authorization` ; toute clé **finissant** par `token`, `cookie` ou `sessionid` ; les clés exactes `pwd`, `auth`, `jwt`, `bearer`, `otp`. `token_count`, `max_tokens` ou `cookie_banner` ne sont pas masquées. L'app ajoute ses propres clés par `Config::secret_keys` (correspondance exacte sur la clé entière). Une clé sensible remplace son sous-arbre entier.
+
+**Ce qui n'est PAS filtré** :
+
+- le résultat de `POST /devtools/eval` ;
+- les valeurs de retour de `POST /devtools/command`, dont la route `ui.widgets` ;
+- le texte libre des messages de log (`message`) ;
+- tout secret stocké sous un nom de clé neutre non déclaré.
+
+Le masquage est un filet par noms de clés, pas une garantie : une app qui manipule des secrets ne doit pas les passer à `set_state` ni les journaliser. Décision : [ADR-0016](adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md). Un SDK tiers n'est pas tenu d'implémenter le masquage, mais doit alors documenter la limite.
+
+### 2.5 Limite de taille des requêtes
+
+Le corps d'une requête est limité à **1 Mio** (`MAX_REQUEST_BODY_BYTES`). Au-delà, le SDK répond `413 Payload Too Large` sans traiter la route (header de version présent). Le `413` n'a pas de corps JSON normalisé : un client ne doit pas le décoder.
 
 ---
 
 ## 3. Endpoints
 
-Le SDK expose cinq routes. Toutes retournent `Content-Type: application/json`.
+Le SDK expose six routes. Toutes retournent `Content-Type: application/json`.
 
 ### 3.1 `GET /devtools/state`
 
@@ -396,16 +439,46 @@ Ref. code : `deveye-sdk/src/lib.rs` — handler `commands_handler` (tri par `a.n
 
 ---
 
+### 3.6 `GET /devtools/info`
+
+**Objectif** : identifier le SDK et découvrir ses capacités (ajoutée en `1.0`, additive).
+
+**Requête** : aucun corps.
+
+**Réponse 200** :
+
+```json
+{
+  "sdk_version": "1.0.0",
+  "protocol_version": "1.0",
+  "capabilities": ["state", "commands", "info", "logs", "eval"]
+}
+```
+
+| Champ | Type | Description |
+|---|---|---|
+| `sdk_version` | string | Version du SDK (crate `deveye-sdk` ou implémentation tierce) |
+| `protocol_version` | string | Version du protocole, `MAJEURE.MINEURE`, identique au header |
+| `capabilities` | tableau de string | Capacités **actives** : `state`, `commands` et `info` toujours ; `logs` quand la collecte des logs est installée ; `eval` quand une pompe d'évaluation est enregistrée. De nouvelles valeurs peuvent apparaître en `1.x` : les ignorer si inconnues |
+
+**Codes HTTP** : 200 ; 403 (Host invalide).
+
+Ref. code : `deveye-sdk/src/lib.rs` (`info_handler`). Côté client : `deveye_sdk_client::fetch_info` (`SdkInfo`) ; un `404` y est traduit en `PortError::Protocol` (SDK antérieur à la 1.0).
+
+---
+
 ## 4. Garanties de l'implémentation de référence
 
 `deveye-sdk` implémente le contrat complet de ce document :
 
 | Fonctionnalité | Statut |
 |---|---|
-| `GET /devtools/state`, `GET /devtools/logs/poll`, `POST /devtools/eval` | oui |
+| `GET /devtools/state`, `GET /devtools/logs/poll`, `POST /devtools/eval`, `GET /devtools/info` | oui |
 | `POST /devtools/command` (`command_handler`) et `GET /devtools/commands` (`commands_handler`, tri par `name`) | oui |
 | Garde `Host` (`guard_local_host`, middleware, `403` hors localhost) | oui |
-| Header `X-DevEye-Protocol-Version` (toutes réponses, y compris `403`) | oui |
+| Header `X-DevEye-Protocol-Version: 1.0` (toutes réponses, y compris `403` et `413`) | oui |
+| Masquage des secrets par clés (§2.4) | oui |
+| Limite de corps 1 Mio, `413` (§2.5) | oui |
 | `expose_route` (enregistrement de commandes) | oui |
 | `504` sur dépassement de l'évaluation, traduit en `PortError::Timeout` côté `adapter-dioxus-signals` | oui |
 
@@ -422,8 +495,9 @@ Un runtime tokio dédié (`std::sync::LazyLock`) et des locks `tokio::sync` isol
 | POST | `/devtools/eval` | non | `{ "expression": "..." }` | `{ "value": ... }` ou `{ "error": "..." }` | 15 s (connexion 3 s) |
 | POST | `/devtools/command` | selon commande | `{ "route": "...", "payload": ... }` | JSON libre | 15 s (connexion 3 s) |
 | GET | `/devtools/commands` | non | aucun | `[{ "name": "...", "description": "..." }]` | 15 s (connexion 3 s) |
+| GET | `/devtools/info` | non | aucun | `{ "sdk_version", "protocol_version", "capabilities" }` | 15 s (connexion 3 s) |
 
-Les cinq endpoints partagent le **même** `reqwest::Client`, construit une fois par `deveye_sdk_client::client()` (`CONNECT_TIMEOUT = 3 s`, `REQUEST_TIMEOUT = 15 s`, ref. `deveye-sdk-client/src/lib.rs`) — aucun timeout n'est configuré par endpoint ni par adapter. Il n'existe pas de constante `SDK_HTTP_TIMEOUT`.
+Les six endpoints partagent le **même** `reqwest::Client`, construit une fois par `deveye_sdk_client::client()` (`CONNECT_TIMEOUT = 3 s`, `REQUEST_TIMEOUT = 15 s`, ref. `deveye-sdk-client/src/lib.rs`) — aucun timeout n'est configuré par endpoint ni par adapter. Il n'existe pas de constante `SDK_HTTP_TIMEOUT`.
 
 Note sur le timeout de `/devtools/eval` : le SDK impose en plus un timeout **interne** de 10 s (ref. `deveye-sdk/src/lib.rs`, `tokio::time::timeout(Duration::from_secs(10), ...)`) avant de répondre `504`. Le `REQUEST_TIMEOUT` de 15 s côté client laisse une marge suffisante (5 s) pour le réseau loopback et la sérialisation sans déclencher de double-timeout. Côté client Rust, un `504` est distingué par `PortError::Timeout` (cf. `adapter-dioxus-signals/src/bridge.rs`).
 
@@ -449,7 +523,9 @@ Cette liste est le guide opérationnel pour tout SDK dans un langage tiers (par 
 - [ ] Implémenter un middleware (ou filtre de requête) qui vérifie le header `Host` avant toute route.
 - [ ] Accepter : `localhost` (insensible à la casse), `localhost:<port>`, `127.0.0.1`, `127.0.0.1:<port>`, `[::1]`, `[::1]:<port>`.
 - [ ] Rejeter tout autre `Host` avec `403 Forbidden` sans traiter la route.
-- [ ] Inclure `X-DevEye-Protocol-Version: 1` dans toutes les réponses.
+- [ ] Inclure `X-DevEye-Protocol-Version: 1.0` (forme `MAJEURE.MINEURE`) dans toutes les réponses.
+- [ ] Limiter le corps des requêtes (1 Mio recommandé) et répondre `413` au-delà.
+- [ ] Masquer les valeurs des clés sensibles (§2.4) dans l'état et les champs de logs, ou documenter l'absence de masquage.
 
 ### `GET /devtools/state`
 
@@ -485,6 +561,10 @@ Cette liste est le guide opérationnel pour tout SDK dans un langage tiers (par 
 - [ ] Exécuter le handler correspondant, retourner son résultat JSON avec 200.
 - [ ] Retourner `{ "error": "inconnue" }` avec 404 si la route est inconnue.
 
+### `GET /devtools/info`
+
+- [ ] Retourner `{ "sdk_version", "protocol_version": "1.0", "capabilities": [...] }` avec 200.
+
 ### `GET /devtools/commands`
 
 - [ ] Retourner la liste triée alphabétiquement des commandes enregistrées.
@@ -499,4 +579,5 @@ Cette liste est le guide opérationnel pour tout SDK dans un langage tiers (par 
 - [ ] Vérifier que `POST /devtools/eval` sans pompe retourne 503.
 - [ ] Vérifier que `POST /devtools/command` avec une route inexistante retourne 404.
 - [ ] Vérifier que le serveur ne démarre pas si `debug_assertions` est false (ou `#if DEBUG` est désactivé).
-- [ ] Vérifier que le header `X-DevEye-Protocol-Version: 1` est présent dans chaque réponse.
+- [ ] Vérifier que le header `X-DevEye-Protocol-Version: 1.0` est présent dans chaque réponse.
+- [ ] Vérifier que `GET /devtools/info` annonce `protocol_version` `1.0`.
