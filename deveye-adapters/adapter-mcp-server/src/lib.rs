@@ -2,7 +2,7 @@
 //! `InteractionSink` et `LogSource` au format Model Context Protocol via
 //! `rmcp` (transport stdio).
 //!
-//! Quarante-deux outils sont publiés à Claude (ou à n'importe quel client MCP) :
+//! Quarante-trois outils sont publiés à Claude (ou à n'importe quel client MCP) :
 //! - `screenshot` : capture le viewport en PNG, renvoie le base64
 //! - `screenshot_region` : capture puis recadre sur (x, y, width, height)
 //! - `screenshot_element` : capture recadrée sur le rect d'un sélecteur CSS
@@ -41,6 +41,8 @@
 //! - `logs_tail` : draine et renvoie le buffer de logs accumulé, sous la
 //!   forme `{ events, truncated, total }` ; `limit` (défaut 200, B4) borne
 //!   `events` aux plus récents sans perdre le principe de drain
+//! - `logs_wait` : long-poll des logs — attend un log (de niveau >= `level_min`)
+//!   jusqu'à un timeout, renvoie `{ events, timed_out, truncated, total }`
 //! - `invoke_command` : invoque une commande logique exposée par l'app
 //!   (route déclarée via `deveye_sdk::expose_route`)
 //! - `list_commands` : liste les commandes logiques exposées par l'app
@@ -609,6 +611,28 @@ struct LogsTailParams {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct LogsWaitParams {
+    /// Niveau minimal qui met fin à l'attente (`trace`/`debug`/`info`/`warn`/
+    /// `error`, insensible à la casse). Absent : le premier log, quel que soit
+    /// son niveau, met fin à l'attente.
+    #[serde(default)]
+    level_min: Option<String>,
+    /// Délai maximal en millisecondes (défaut 5000, plafond 30000).
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    /// Nombre maximal d'événements les plus RÉCENTS renvoyés (défaut 200), comme
+    /// `logs_tail` ; `total` et `truncated` signalent ce qui a été omis.
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// Plafond de `logs_wait` : au-delà, le client MCP abandonne souvent l'appel.
+const LOGS_WAIT_MAX_MS: u64 = 30_000;
+
+/// Intervalle de sondage du buffer de logs par `logs_wait`.
+const LOGS_WAIT_POLL_MS: u64 = 250;
+
 /// B4 : défaut de `LogsTailParams::limit` — plafonne le coût token d'un
 /// `logs_tail` sans paramètre explicite, tout en restant assez large pour
 /// couvrir la plupart des sessions de debug.
@@ -718,7 +742,7 @@ impl ServerHandler for DeveyeMcpServer {
              click_selector, click_text, eval_js, type_text, press_key, \
              key_combo, navigate, scroll, resize, handle_dialog, upload_file, \
              focus_window, window_geometry, clipboard_get, clipboard_set, dom, \
-             state, assert_state, logs_tail, invoke_command, list_commands, \
+             state, assert_state, logs_tail, logs_wait, invoke_command, list_commands, \
              wait_for_selector, wait_for_text, find_element, assert_selector, \
              drag_drop, collect_console_errors, list_windows, wait_condition, \
              wait_for_log, wait_screenshot_region, wait_target_alive, \
@@ -817,6 +841,21 @@ fn parse_mouse_button(button: Option<&str>) -> Result<MouseButton, McpError> {
             None,
         )),
     }
+}
+
+/// Interprète un niveau de log textuel (`trace`, `debug`, `info`, `warn`,
+/// `error`, insensible à la casse) en réutilisant la désérialisation serde de
+/// [`LogLevel`], donc sans table de correspondance à tenir à jour. Un niveau
+/// inconnu est une faute d'appel (`invalid_params`), pas une panne interne.
+fn parse_log_level(s: &str) -> Result<LogLevel, McpError> {
+    serde_json::from_value::<LogLevel>(serde_json::Value::String(s.to_ascii_lowercase())).map_err(
+        |_| {
+            McpError::invalid_params(
+                format!("niveau de log inconnu : {s:?} (attendu trace/debug/info/warn/error)"),
+                None,
+            )
+        },
+    )
 }
 
 /// Valide les dimensions de `resize` avant tout dispatch : une dimension
@@ -1773,6 +1812,130 @@ mod dispatch_tests {
             .expect("E1 : pas d'erreur protocolaire");
         assert_eq!(result.is_error, Some(true));
         assert_eq!(body_json(&result)["reason"], "unsupported");
+    }
+
+    // ------------------------------------------------------------------
+    // logs_wait / parse_log_level.
+    // ------------------------------------------------------------------
+
+    /// Source de logs scriptée : chaque `poll` rend le lot suivant (vide une
+    /// fois le script épuisé).
+    struct ScriptedLogs(Mutex<std::collections::VecDeque<Vec<LogEvent>>>);
+    impl ScriptedLogs {
+        fn new(batches: Vec<Vec<LogEvent>>) -> Self {
+            Self(Mutex::new(batches.into()))
+        }
+    }
+    #[async_trait]
+    impl LogSource for ScriptedLogs {
+        async fn poll(&self) -> PortResult<Vec<LogEvent>> {
+            Ok(self.0.lock().unwrap().pop_front().unwrap_or_default())
+        }
+    }
+
+    fn log(level: LogLevel, message: &str) -> LogEvent {
+        LogEvent::new(level, "test", message)
+    }
+
+    fn logs_wait_params(level_min: Option<&str>, timeout_ms: u64) -> LogsWaitParams {
+        LogsWaitParams {
+            level_min: level_min.map(str::to_string),
+            timeout_ms: Some(timeout_ms),
+            limit: None,
+        }
+    }
+
+    #[test]
+    fn parse_log_level_is_case_insensitive_and_rejects_unknown_levels() {
+        assert_eq!(parse_log_level("warn").unwrap(), LogLevel::Warn);
+        assert_eq!(parse_log_level("ERROR").unwrap(), LogLevel::Error);
+        assert_eq!(parse_log_level("Info").unwrap(), LogLevel::Info);
+        let err = parse_log_level("verbose").unwrap_err();
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn logs_wait_returns_as_soon_as_a_log_arrives() {
+        let server = server_with(|ports| {
+            ports.log_source = Arc::new(ScriptedLogs::new(vec![vec![log(
+                LogLevel::Info,
+                "demarre",
+            )]]));
+        });
+        let result = server
+            .logs_wait(Parameters(logs_wait_params(None, 2_000)))
+            .await
+            .expect("pas d'erreur protocolaire");
+        assert_eq!(result.is_error, Some(false));
+        let body = body_json(&result);
+        assert_eq!(body["timed_out"], false);
+        assert_eq!(body["events"].as_array().unwrap().len(), 1);
+        assert_eq!(body["events"][0]["message"], "demarre");
+    }
+
+    #[tokio::test]
+    async fn logs_wait_filters_by_level_but_keeps_the_events_below() {
+        let server = server_with(|ports| {
+            ports.log_source = Arc::new(ScriptedLogs::new(vec![
+                vec![log(LogLevel::Info, "bruit")],
+                vec![log(LogLevel::Error, "boom")],
+            ]));
+        });
+        let result = server
+            .logs_wait(Parameters(logs_wait_params(Some("warn"), 5_000)))
+            .await
+            .expect("pas d'erreur protocolaire");
+        let body = body_json(&result);
+        assert_eq!(body["timed_out"], false);
+        let messages: Vec<&str> = body["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["message"].as_str().unwrap())
+            .collect();
+        // Le log « info » drainé en chemin n'est pas perdu.
+        assert_eq!(messages, ["bruit", "boom"]);
+    }
+
+    #[tokio::test]
+    async fn logs_wait_times_out_when_nothing_matches() {
+        let server = server_with(|ports| {
+            ports.log_source = Arc::new(ScriptedLogs::new(vec![vec![log(
+                LogLevel::Debug,
+                "trop bas",
+            )]]));
+        });
+        let result = server
+            .logs_wait(Parameters(logs_wait_params(Some("error"), 100)))
+            .await
+            .expect("pas d'erreur protocolaire");
+        let body = body_json(&result);
+        assert_eq!(body["timed_out"], true);
+        assert_eq!(body["events"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn logs_wait_with_invalid_level_is_invalid_params() {
+        let server = server_with(|_| {});
+        let err = server
+            .logs_wait(Parameters(logs_wait_params(Some("verbose"), 100)))
+            .await
+            .expect_err("level_min invalide");
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn wait_for_log_with_invalid_level_is_invalid_params() {
+        let server = server_with(|_| {});
+        let err = server
+            .wait_for_log(Parameters(WaitForLogParams {
+                contains: "x".to_string(),
+                level_min: Some("verbose".to_string()),
+                timeout_ms: Some(100),
+            }))
+            .await
+            .expect_err("level_min invalide");
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
     }
 
     // ------------------------------------------------------------------

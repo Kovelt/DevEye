@@ -85,7 +85,7 @@ dx serve --platform desktop --features deveye
 claude
 ```
 
-Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **42 outils sont disponibles** :
+Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. **43 outils sont disponibles** :
 
 | Outil | Paramètres | Retour | Usage typique |
 |-------|------------|--------|---------------|
@@ -115,6 +115,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 | `assert_state` | `{expected}` | JSON `{ok, mismatches}` | « vérifie `{count: 3, page: "Agenda"}` dans le state » (`isError` si divergence) |
 | `target_info` | aucun | JSON `{target, eyes, hands, eval_js, dom, state, console_errors, list_windows, notes}` | « quelles capacités a la cible ? » (à appeler en premier ; dit si `eval_js`/`dom` répondront) |
 | `logs_tail` | `{limit?}` | JSON `{events: [{level, target, message, ...}], truncated, total}` (défaut 200 events les plus récents ; `total` = nombre réellement drainé) | « affiche les derniers logs » |
+| `logs_wait` | `{level_min?, timeout_ms?, limit?}` | JSON `{events, timed_out, truncated, total}` | « clique Valider puis attends une erreur (max 10 s) » (long-poll : rend tous les logs drainés ; `level_min` invalide = `invalid_params` ; défaut 5000 ms, plafond 30000) |
 | `find_element` | `{selector}` | JSON `{found, tag, text, value, rect, visible, disabled, attributes}` | « inspecte le premier `#save-btn` » (alternatif léger à `dom` ; `value` = valeur des inputs) |
 | `assert_selector` | `{selector, expected_text?, expected_count?}` | JSON `{ok, selector, actual_count, actual_text?}` | « vérifie qu'il y a exactement 3 `.card` » (`isError` si l'assertion échoue) |
 | `wait_for_selector` | `{selector, timeout_ms?, visible?, negate?}` | JSON `{found, elapsed_ms}` | « attends que `#result` soit présent » ; avec `negate=true` : « attends que `.spinner` disparaisse » (wait_for_gone) |
@@ -138,7 +139,7 @@ Une fois dans le client, les outils MCP sont sous le préfixe `mcp__deveye__`. *
 - **Navigation** : `navigate({ route })` (routeur du SDK opt-in, interface découvrable) ; ou `invoke_command` si l'app expose une route logique métier (ex. `set-page`). Indisponible en kwin-eis (pas de routeur applicatif OS-level).
 - **Découverte de cible** : appeler `target_info` en début de session dit quelles capacités répondront (ex. `eval_js`/`dom` = false en kwin-eis) — évite de tester un outil pour découvrir qu'il renvoie `Unsupported`.
 - **Disparition d'un élément** : `wait_for_selector({ selector, negate: true })` attend qu'un spinner/toast/modale disparaisse (pas de sleep arbitraire).
-- Le buffer logs est **drainé** à chaque appel `logs_tail` : un second appel ne renverra que les events arrivés entre-temps. Pour attendre de nouveaux logs après une action, utiliser une boucle `logs_tail` ou `wait_condition` avec un prédicat `state-key`.
+- Le buffer logs est **drainé** à chaque appel `logs_tail` : un second appel ne renverra que les events arrivés entre-temps. Pour attendre de nouveaux logs après une action sans boucler côté agent, utiliser `logs_wait` (long-poll, filtre `level_min`, rend les logs drainés) ; `wait_for_log` attend un message précis mais consomme les logs qu'il ignore.
 - Pour éviter tout sleep arbitraire après une action asynchrone, préférer `wait_for_selector` (attend un sélecteur CSS) ou `wait_condition` (prédicats : `dom-selector`, `state-key`, `screenshot-stable`).
 - Pour piloter l'app par sa **logique métier** plutôt que par l'UI : l'app expose des routes via `deveye_sdk::expose_route("set-page", "Change la page", |payload| { ... })` (en `cfg(debug_assertions)`) ; l'agent les découvre avec `list_commands` puis les déclenche avec `invoke_command`. Plus robuste qu'une cascade de clics pour mettre l'app dans un état donné.
 - Plus besoin de `/mcp reconnect` après un hot-reload Dioxus (auto-reattach browser-level — cf. [`architecture.md`](./architecture.md)).

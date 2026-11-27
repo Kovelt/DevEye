@@ -117,20 +117,14 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Attend qu'un log applicatif (tracing du SDK) dont le message contient `contains` (et de niveau >= `level_min`) soit émis. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Observe les logs Rust bufferisés, hors de portée d'eval_js. NB : pendant l'attente le buffer de logs est drainé (les logs non concernés sont consommés). Défaut 5000 ms, plafond 60000."
+        description = "Attend qu'un log applicatif (tracing du SDK) dont le message contient `contains` (et de niveau >= `level_min`) soit émis. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Observe les logs Rust bufferisés, hors de portée d'eval_js. NB : pendant l'attente le buffer de logs est drainé (les logs non concernés sont consommés, non renvoyés : utiliser `logs_wait` pour les récupérer). `level_min` invalide : erreur `invalid_params`. Défaut 5000 ms, plafond 60000."
     )]
     pub(crate) async fn wait_for_log(
         &self,
         Parameters(p): Parameters<WaitForLogParams>,
     ) -> Result<CallToolResult, McpError> {
-        let level_min = match p.level_min {
-            Some(s) => Some(
-                serde_json::from_value::<LogLevel>(serde_json::Value::String(s)).map_err(|_| {
-                    internal("level_min invalide (trace/debug/info/warn/error attendu)")
-                })?,
-            ),
-            None => None,
-        };
+        // Niveau inconnu : faute d'appel (invalid_params), pas panne interne.
+        let level_min = p.level_min.as_deref().map(parse_log_level).transpose()?;
         let predicate = WaitPredicate::LogMessage {
             contains: p.contains,
             level_min,

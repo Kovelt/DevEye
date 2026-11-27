@@ -10,14 +10,14 @@ Conçu pour les apps Dioxus desktop, il se branche aussi sur n'importe quelle ci
 
 ## Caractéristiques clés
 
-### 42 outils MCP, en six familles
+### 43 outils MCP, en six familles
 
 | Famille | Outils |
 |---|---|
 | **Capture** | `screenshot`, `screenshot_region`, `screenshot_element`, `assert_visual` |
 | **Interaction** | `click`, `double_click`, `right_click`, `hover`, `drag_drop`, `click_selector`, `click_text`, `type_text`, `press_key`, `key_combo`, `scroll`, `resize`, `navigate`, `handle_dialog`, `upload_file`, `focus_window`, `clipboard_get`, `clipboard_set` |
 | **Inspection DOM / state** | `dom`, `find_element`, `assert_selector`, `assert_state`, `eval_js`, `state`, `collect_console_errors`, `list_windows`, `target_info` |
-| **Logs** | `logs_tail` |
+| **Logs** | `logs_tail`, `logs_wait` |
 | **Attente / conditions** | `wait_for_selector` (+ `negate` = wait_for_gone), `wait_condition`, `wait_for_log`, `wait_screenshot_region`, `wait_ready` |
 | **Commandes logiques** | `list_commands`, `invoke_command` |
 
@@ -162,7 +162,7 @@ Client MCP (Claude Code)
 └────────────┬────────────────────┘
              │
      ┌───────┴────────┐
-     │  adapter-mcp-  │  expose les 42 outils MCP
+     │  adapter-mcp-  │  expose les 43 outils MCP
      │  server        │  (sérialise les appels — 1 à la fois)
      └───────┬────────┘
              │ implémente les 12 ports (traits deveye-ports)
@@ -208,7 +208,7 @@ DevEye/
 │   ├── adapter-interaction-kwin-eis/ # InteractionSink OS-level Wayland natif (KWin EIS)
 │   ├── adapter-clipboard-wayland/ # Clipboard OS-level via wl-copy / wl-paste (Wayland)
 │   ├── adapter-x11/              # Renderer + InteractionSink + WindowLister + WindowGeometry + WindowManager sur un serveur X privé (x11rb, XTEST)
-│   ├── adapter-mcp-server/       # Consomme les 12 ports, expose les 42 outils MCP via rmcp/stdio
+│   ├── adapter-mcp-server/       # Consomme les 12 ports, expose les 43 outils MCP via rmcp/stdio
 │   └── adapter-composite/        # Adapters composites génériques (ConsoleErrorSource JS, WaitCondition, Inspector, DOM par route)
 └── docs/
     ├── architecture.md           # Ports, adapters, robustesse CDP, sécurité
@@ -242,7 +242,7 @@ cargo test -p adapter-x11 -- --ignored --test-threads=1
 
 ## Statut / contexte
 
-Infrastructure hexagonale (12 ports, 42 outils MCP), adapter CDP avec reconnexion paresseuse, pont natif SDK Linux, capture KWin Wayland, injection KWin EIS, pilotage X11 isolé. La politique de stabilité de la 1.0 est décrite dans [docs/stability.md](docs/stability.md).
+Infrastructure hexagonale (12 ports, 43 outils MCP), adapter CDP avec reconnexion paresseuse, pont natif SDK Linux, capture KWin Wayland, injection KWin EIS, pilotage X11 isolé. La politique de stabilité de la 1.0 est décrite dans [docs/stability.md](docs/stability.md).
 
 Les audits, la feuille de route et les notes de conception des premiers jalons sont conservés comme archives datées, non normatives, dans [docs/historique/](docs/historique/README.md).
 

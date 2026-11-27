@@ -1,5 +1,5 @@
 //! Outils de la famille **inspect** : `eval_js`, `dom`, `state`,
-//! `assert_state`, `find_element`, `assert_selector`, `logs_tail`,
+//! `assert_state`, `find_element`, `assert_selector`, `logs_tail`, `logs_wait`,
 //! `collect_console_errors`, `invoke_command`, `list_commands`,
 //! `target_info`, `list_windows`, `window_geometry`, `focus_window`,
 //! `clipboard_get`, `clipboard_set` — inspection de la cible (DOM, state,
@@ -188,6 +188,54 @@ impl DeveyeMcpServer {
         let (events, truncated, total) = truncate_recent(events, limit);
         Ok(json_success(&serde_json::json!({
             "events": events,
+            "truncated": truncated,
+            "total": total,
+        })))
+    }
+
+    #[tool(
+        description = "Long-poll des logs `tracing` : attend qu'un log arrive (ou, avec `level_min`, qu'un log de niveau >= `level_min` arrive), jusqu'à `timeout_ms` (défaut 5000, plafond 30000). Renvoie `{ events, timed_out, truncated, total }` : `events` contient TOUS les logs drainés pendant l'attente (aucun n'est perdu, y compris ceux sous `level_min`), `timed_out` vaut true si rien n'a satisfait le filtre. Contrairement à `wait_for_log` (qui consomme les logs qu'il ignore et ne les renvoie pas), `logs_wait` les rend à l'agent. `level_min` invalide : erreur `invalid_params`. Idéal juste après une action : « clique X, puis attends une erreur »."
+    )]
+    pub(crate) async fn logs_wait(
+        &self,
+        Parameters(p): Parameters<LogsWaitParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let level_min = p.level_min.as_deref().map(parse_log_level).transpose()?;
+        let budget = Duration::from_millis(
+            p.timeout_ms
+                .unwrap_or(WAIT_DEFAULT_MS)
+                .min(LOGS_WAIT_MAX_MS),
+        );
+        let deadline = Instant::now() + budget;
+
+        let mut collected = Vec::new();
+        let timed_out = loop {
+            // Gate tenu le temps d'un seul sondage, relâché pendant la pause :
+            // un long-poll ne doit pas bloquer les autres outils (cf. M1).
+            let batch = {
+                let _serial = self.gate.lock().await;
+                self.log_source.poll().await.map_err(port_to_mcp)?
+            };
+            let matched = match level_min {
+                Some(level) => batch.iter().any(|e| e.level >= level),
+                None => !batch.is_empty(),
+            };
+            collected.extend(batch);
+            if matched {
+                break false;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break true;
+            }
+            tokio::time::sleep(remaining.min(Duration::from_millis(LOGS_WAIT_POLL_MS))).await;
+        };
+
+        let limit = p.limit.unwrap_or(LOGS_TAIL_DEFAULT_LIMIT);
+        let (events, truncated, total) = truncate_recent(collected, limit);
+        Ok(json_success(&serde_json::json!({
+            "events": events,
+            "timed_out": timed_out,
             "truncated": truncated,
             "total": total,
         })))

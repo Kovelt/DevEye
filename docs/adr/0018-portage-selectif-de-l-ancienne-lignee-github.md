@@ -40,8 +40,8 @@ Option 3. Les refs `origin/main` et `origin/claude/sleepy-pascal-e6hzxr` sont lu
 | 0357978 | outils `press_key` et `navigate` | déjà présents |
 | 12080cd, 1eed28b | retrait des `expect` de sérialisation (MCP, CDP) | partiellement présent ; le reste est porté par ADR-0024 |
 | f2f2f3d | `click_selector` et `click_text` par vrai clic CDP | déjà présents |
-| 0b90dd8 | validation des coordonnées `click`/`hover` contre le viewport | **porté** (ADR-0022) |
-| b7d5475 | outil `logs_wait` (long-poll des logs, filtre de niveau) | **porté** (ADR-0021) |
+| 0b90dd8 | validation des coordonnées `click`/`hover` contre le viewport | **porté** (ADR-0021) |
+| b7d5475 | outil `logs_wait` (long-poll des logs, filtre de niveau) | **porté** (ADR-0020) |
 | 267c19f | outil `scroll` | déjà présent |
 | ef47967 | outil `resize` (core, CDP, MCP) | **porté** (ADR-0019, décision D05) |
 | 53d7fb9 | port `CommandRouter` (`invoke_command`, `list_commands`) | déjà présent |
@@ -52,7 +52,7 @@ Option 3. Les refs `origin/main` et `origin/claude/sleepy-pascal-e6hzxr` sont lu
 | 7d608e2 | ordre des `set_state` garanti par écriture synchrone | déjà présent (`RwLock` synchrone) |
 | c54fcb0 | balayage cosmétique (`doc_markdown`, `LazyLock`) | déjà présent (`LazyLock`, lints de workspace, ADR-0009) |
 | b14e5f5 | timeouts sur les appels HTTP du SDK et le bootstrap CDP | déjà présent (`deveye-sdk-client::client()`, délais de réponse CDP) |
-| d89d46c | capture CDP à l'échelle CSS (corrige le décalage HiDPI) | **porté** (ADR-0020) |
+| d89d46c | capture CDP à l'échelle CSS (corrige le décalage HiDPI) | **porté** (ADR-0022) |
 | 18bbd04 | `attach_to` sans panic ; tests de reconnexion et de mapping `CdpError` | **porté** : `expect` retiré (ADR-0024) ; tests de mapping portés ; les tests de reconnexion existent déjà (`client.rs`) |
 | ac1ea6a | tests du mapping `ScreencapError` vers `PortError` | **porté** (commit de tests) |
 | 87b1e00 | catégorisation des erreurs MCP ; exceptions JS renvoyées en résultat d'outil | **porté** : catégorisation déjà présente (`port_to_mcp`, E1) ; exceptions JS en `isError` portées (ADR-0023) |
