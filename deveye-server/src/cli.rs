@@ -21,7 +21,8 @@ pub(crate) struct Args {
 
     /// Titre (sous-chaine, insensible a la casse) de la fenetre native a
     /// capturer via xcap quand les yeux ne passent pas par CDP (cible `sdk`,
-    /// ou repli du mode `auto`). En cible `x11`, c'est la fenetre pilotee
+    /// ou repli du mode `auto`). Absent dans ces modes : repli plein ecran
+    /// (MonitorRenderer). En cible `x11`, c'est la fenetre pilotee
     /// (alias `--window`) ; sans elle, tout l'ecran du serveur X.
     #[arg(long, visible_alias = "window")]
     pub(crate) screencap_window: Option<String>,
