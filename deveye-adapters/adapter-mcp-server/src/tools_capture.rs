@@ -158,7 +158,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Assertion visuelle (golden) : capture le viewport (ou la région x/y/width/height) et le compare au PNG `baseline_path`. Si le fichier n'existe pas, il est créé (`{ created: true }`). Sinon renvoie `{ ok, diff_ratio, threshold, same_dims, diff_pixels, compared_pixels, diff_bbox, ... }` ; `isError` si le ratio de pixels différents dépasse `threshold` (défaut 0.01) ou si les dimensions diffèrent. En cas d'échec à dimensions égales, une IMAGE DE DIFFÉRENCE suit le JSON (fond éclairci, pixels différents en rouge, zones ignorées teintées de bleu ; largeur bornée à 1280 px, `diff_image.scale` donne l'échelle) et `diff_bbox` {x, y, width, height} délimite précisément la zone qui diverge. `ignore_regions` [{x, y, width, height}] exclut des zones mouvantes (horloge, curseur) de la comparaison et du dénominateur de `diff_ratio` ; leurs coordonnées sont celles de l'image comparée (relatives à la région si elle est fournie). `update_baseline: true` remplace la baseline par la capture courante sans comparer (`{ updated: true }`) : à n'utiliser qu'après validation du changement. Premier outil d'assertion déterministe disponible en kwin-eis (sans DOM/JS).",
+        description = "Assertion visuelle (golden) : capture le viewport (ou la région x/y/width/height) et le compare au PNG `baseline_path`. `baseline_path` est confiné : relatif à `DEVEYE_BASELINE_DIR` (défaut : répertoire courant du serveur), extension `.png`, sans `..` ni lien symbolique sortant ; un chemin hors de cette racine est refusé (`invalid_params`). Si le fichier n'existe pas, il est créé (`{ created: true }`). Sinon renvoie `{ ok, diff_ratio, threshold, same_dims, diff_pixels, compared_pixels, diff_bbox, ... }` ; `isError` si le ratio de pixels différents dépasse `threshold` (défaut 0.01) ou si les dimensions diffèrent. En cas d'échec à dimensions égales, une IMAGE DE DIFFÉRENCE suit le JSON (fond éclairci, pixels différents en rouge, zones ignorées teintées de bleu ; largeur bornée à 1280 px, `diff_image.scale` donne l'échelle) et `diff_bbox` {x, y, width, height} délimite précisément la zone qui diverge. `ignore_regions` [{x, y, width, height}] exclut des zones mouvantes (horloge, curseur) de la comparaison et du dénominateur de `diff_ratio` ; leurs coordonnées sont celles de l'image comparée (relatives à la région si elle est fournie). `update_baseline: true` remplace la baseline par la capture courante sans comparer (`{ updated: true }`) : à n'utiliser qu'après validation du changement (refusé si le fichier existant n'est pas un PNG lisible). Premier outil d'assertion déterministe disponible en kwin-eis (sans DOM/JS).",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -172,6 +172,8 @@ impl DeveyeMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let masks = p.ignore_regions.clone().unwrap_or_default();
         validate_masks(&masks)?;
+        let path = confine_baseline(&self.baseline_root, &p.baseline_path)
+            .map_err(|reason| McpError::invalid_params(reason, None))?;
         let _serial = self.gate.lock().await;
         let shot = match unsupported_aware(self.renderer.screenshot().await) {
             Ok(v) => v,
@@ -189,9 +191,20 @@ impl DeveyeMcpServer {
             }
             _ => std::borrow::Cow::Borrowed(&shot.bytes),
         };
-        let path = std::path::Path::new(&p.baseline_path);
+        let path = path.as_path();
         let exists = tokio::fs::try_exists(path).await.map_err(internal)?;
         let update = p.update_baseline.unwrap_or(false);
+        if exists && update {
+            // Remplacer n'est permis que sur une vraie baseline : un fichier
+            // qui n'est pas un PNG lisible n'est pas à nous.
+            let old = tokio::fs::read(path).await.map_err(internal)?;
+            if image::load_from_memory_with_format(&old, image::ImageFormat::Png).is_err() {
+                return Err(McpError::invalid_params(
+                    "update_baseline refusé : le fichier existant n'est pas un PNG lisible",
+                    None,
+                ));
+            }
+        }
         if !exists || update {
             // Baseline absente, ou remplacement explicite : on l'ecrit a
             // partir de la capture courante.
@@ -257,5 +270,128 @@ impl DeveyeMcpServer {
             blocks.push(enc.content());
         }
         Ok(CallToolResult::error(blocks))
+    }
+}
+
+/// Racine de confinement des baselines, ce qui borne `assert_visual` (ADR-0049) :
+/// sans elle, un client MCP (ou un agent victime d'une injection de prompt)
+/// écraserait ou lirait n'importe quel fichier du compte.
+pub(crate) fn default_baseline_root() -> std::path::PathBuf {
+    std::env::var_os("DEVEYE_BASELINE_DIR")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// Résout `requested` dans `root` ou refuse : extension `.png`, aucun `..`,
+/// chemin final (symlinks résolus sur la partie existante) sous la racine, et
+/// pas de lien symbolique ni de dossier à l'emplacement de la baseline.
+pub(crate) fn confine_baseline(
+    root: &std::path::Path,
+    requested: &str,
+) -> Result<std::path::PathBuf, String> {
+    use std::path::{Component, Path, PathBuf};
+    if requested.is_empty() {
+        return Err("baseline_path vide".to_string());
+    }
+    let requested_path = Path::new(requested);
+    let is_png = requested_path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("png"));
+    if !is_png {
+        return Err("baseline_path doit avoir l'extension .png".to_string());
+    }
+    if requested_path
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        return Err("baseline_path ne peut pas contenir `..`".to_string());
+    }
+    let root_c = std::fs::canonicalize(root).map_err(|e| {
+        format!(
+            "racine des baselines {} inutilisable ({e}) ; la fixer par DEVEYE_BASELINE_DIR",
+            root.display()
+        )
+    })?;
+    let joined = if requested_path.is_absolute() {
+        requested_path.to_path_buf()
+    } else {
+        root_c.join(requested_path)
+    };
+    // Partie existante canonicalisée (suit les symlinks), reste ajouté tel quel.
+    let mut existing = joined.as_path();
+    let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
+    while std::fs::symlink_metadata(existing).is_err() {
+        match (existing.file_name(), existing.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                existing = parent;
+            }
+            _ => return Err("baseline_path invalide".to_string()),
+        }
+    }
+    let mut resolved: PathBuf =
+        std::fs::canonicalize(existing).map_err(|e| format!("baseline_path illisible ({e})"))?;
+    for name in rest.iter().rev() {
+        resolved.push(name);
+    }
+    if !resolved.starts_with(&root_c) {
+        return Err(format!(
+            "baseline_path hors de la racine des baselines ({}) ; la fixer par DEVEYE_BASELINE_DIR",
+            root_c.display()
+        ));
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(&joined) {
+        if !meta.is_file() {
+            return Err(
+                "baseline_path doit désigner un fichier ordinaire (ni lien ni dossier)".to_string(),
+            );
+        }
+    }
+    Ok(resolved)
+}
+
+#[cfg(test)]
+mod confine_tests {
+    use super::confine_baseline;
+
+    fn root() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("deveye-confine-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn relative_png_inside_root_is_accepted_even_in_new_subdirs() {
+        let root = root();
+        let path = confine_baseline(&root, "golden/home.png").unwrap();
+        assert!(path.starts_with(std::fs::canonicalize(&root).unwrap()));
+        assert!(path.ends_with("golden/home.png"));
+    }
+
+    #[test]
+    fn dotdot_absolute_outside_and_non_png_are_refused() {
+        let root = root();
+        assert!(confine_baseline(&root, "../evil.png").is_err());
+        assert!(confine_baseline(&root, "a/../../evil.png").is_err());
+        assert!(confine_baseline(&root, "/etc/passwd.png").is_err());
+        assert!(confine_baseline(&root, "/home/user/.bashrc").is_err());
+        assert!(confine_baseline(&root, "notes.txt").is_err());
+        assert!(confine_baseline(&root, "").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_escaping_the_root_are_refused() {
+        let root = root();
+        let outside = std::env::temp_dir().join(format!("deveye-outside-{}", std::process::id()));
+        std::fs::create_dir_all(&outside).unwrap();
+        let _ = std::fs::remove_file(root.join("link.png"));
+        let _ = std::fs::remove_file(root.join("dirlink"));
+        std::os::unix::fs::symlink(outside.join("target.png"), root.join("link.png")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("dirlink")).unwrap();
+        assert!(confine_baseline(&root, "link.png").is_err());
+        assert!(confine_baseline(&root, "dirlink/x.png").is_err());
     }
 }

@@ -304,6 +304,8 @@ pub struct DeveyeMcpServer {
     clipboard: Arc<dyn Clipboard>,
     target_info: TargetInfo,
     effective_backend: Option<EffectiveBackendProbe>,
+    /// Racine hors de laquelle `assert_visual` ne lit ni n'écrit (ADR-0049).
+    baseline_root: std::path::PathBuf,
     /// Sérialise les appels d'outils : rmcp les traite en concurrence, mais
     /// deux interactions entrelacées pendant un re-render visent le mauvais
     /// nœud. Un seul outil à la fois, dans l'ordre d'arrivée.
@@ -606,9 +608,12 @@ struct ScreenshotRegionParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct AssertVisualParams {
-    /// Chemin du PNG de référence (baseline). S'il n'existe pas, il est créé à
-    /// partir de la capture courante (`{ created: true }`) ; sinon la capture
-    /// est comparée pixel à pixel à ce fichier.
+    /// Chemin du PNG de référence (baseline), relatif à la racine des baselines
+    /// (`DEVEYE_BASELINE_DIR`, sinon le répertoire courant du serveur) ; un
+    /// chemin absolu n'est accepté que dans cette racine, sans `..`, avec
+    /// l'extension `.png`. S'il n'existe pas, il est créé à partir de la
+    /// capture courante (`{ created: true }`) ; sinon la capture est comparée
+    /// pixel à pixel à ce fichier.
     baseline_path: String,
     /// Ratio maximal de pixels différents toléré (0.0–1.0). Défaut 0.01 (1 %).
     #[serde(default)]
@@ -780,9 +785,18 @@ impl DeveyeMcpServer {
             clipboard: ports.clipboard,
             target_info: ports.target_info,
             effective_backend: ports.effective_backend,
+            baseline_root: tools_capture::default_baseline_root(),
             gate: Arc::new(tokio::sync::Mutex::new(())),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Remplace la racine de confinement des baselines d'`assert_visual`
+    /// (par défaut `DEVEYE_BASELINE_DIR`, sinon le répertoire courant).
+    #[must_use]
+    pub fn with_baseline_root(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.baseline_root = root.into();
+        self
     }
 
     /// Assemble les quatre routeurs de famille en un seul (`ToolRouter<S>`
@@ -1709,7 +1723,8 @@ mod dispatch_tests {
     fn server_with(customize: impl FnOnce(&mut DeveyePorts)) -> DeveyeMcpServer {
         let mut ports = base_ports();
         customize(&mut ports);
-        DeveyeMcpServer::new(ports)
+        // Les baselines de test vivent dans le répertoire temporaire.
+        DeveyeMcpServer::new(ports).with_baseline_root(std::env::temp_dir())
     }
 
     /// Extrait et parse en JSON le premier bloc `ContentBlock::text` d'un
@@ -2828,7 +2843,8 @@ mod dispatch_tests {
         ("target_info", true, false, true, false),
         ("list_windows", true, false, true, false),
         ("window_geometry", true, false, true, false),
-        ("clipboard_get", true, false, true, false),
+        // Lit les données de l'hôte (presse-papiers réel) : monde ouvert (ADR-0050).
+        ("clipboard_get", true, false, true, true),
         ("wait_for_selector", true, false, true, false),
         ("wait_for_text", true, false, true, false),
         ("wait_screenshot_region", true, false, true, false),
@@ -3253,6 +3269,46 @@ mod dispatch_tests {
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["compared_pixels"], 185);
         assert_eq!(payload["ignored_regions"], 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn assert_visual_refuses_paths_outside_the_baseline_root() {
+        let server = server_with(|_| {});
+        let outside = std::env::current_dir()
+            .unwrap()
+            .join("deveye-outside-root.png");
+        for bad in [
+            outside.to_str().unwrap(),
+            "../x.png",
+            "/etc/hosts",
+            "notes.txt",
+        ] {
+            let params: AssertVisualParams =
+                serde_json::from_value(json!({ "baseline_path": bad, "update_baseline": true }))
+                    .expect("params");
+            let err = server
+                .assert_visual(Parameters(params))
+                .await
+                .expect_err("chemin refusé");
+            assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{bad}");
+        }
+        assert!(!outside.exists(), "rien ne doit être écrit hors racine");
+    }
+
+    #[tokio::test]
+    async fn assert_visual_update_refuses_to_overwrite_a_non_png_file() {
+        let path = scratch_path("not-a-png.png");
+        std::fs::write(&path, b"mot de passe").expect("fichier de test");
+        let server = server_with(|_| {});
+        let mut params = visual_params(&path);
+        params.update_baseline = Some(true);
+        let err = server
+            .assert_visual(Parameters(params))
+            .await
+            .expect_err("écrasement refusé");
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(std::fs::read(&path).unwrap(), b"mot de passe");
         let _ = std::fs::remove_file(&path);
     }
 

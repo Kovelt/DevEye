@@ -104,7 +104,7 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Presse une touche unique (keydown + keyup) au focus courant : Enter, Tab, Escape, ArrowDown, F5… Marche sur toutes les cibles, y compris kwin-eis (où eval_js est indisponible). Noms W3C en CDP et sdk (Enter, ArrowDown) ; noms XKB en kwin-eis (Return, Down) ; les noms communs (Tab, Escape, F5) passent partout (E7).",
+        description = "Presse une touche unique (keydown + keyup) au focus courant : Enter, Tab, Escape, ArrowDown, F5… Marche sur toutes les cibles, y compris kwin-eis (où eval_js est indisponible). Noms W3C en CDP et sdk (Enter, ArrowDown) ; noms XKB en kwin-eis (Return, Down) ; les noms communs (Tab, Escape, F5) passent partout (E7). En kwin-eis, la touche part vers la fenêtre ACTIVE sans garde de focus : appeler `focus_window` avant (ADR-0045).",
         annotations(
             read_only_hint = false,
             destructive_hint = false,

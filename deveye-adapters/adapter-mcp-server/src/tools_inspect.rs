@@ -470,12 +470,12 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Lit le texte du presse-papiers de la session (OS-level via wl-paste sous Wayland). Renvoie `{ text }`. Fiable là où `navigator.clipboard.readText()` lève NotAllowedError (contexte automatisé) et en kwin-eis (pas de WebView). Hors Wayland, résultat isError structuré `{ reason: \"unsupported\" }` (E1).",
+        description = "Lit le texte du presse-papiers de la session (OS-level via wl-paste sous Wayland). Renvoie `{ text }`. Lit le VRAI presse-papiers de l'utilisateur (mots de passe copiés, données d'autres applications), hors du masquage du SDK : annoté monde ouvert pour que le client demande confirmation. Fiable là où `navigator.clipboard.readText()` lève NotAllowedError (contexte automatisé) et en kwin-eis (pas de WebView). Hors Wayland, résultat isError structuré `{ reason: \"unsupported\" }` (E1).",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = true,
-            open_world_hint = false
+            open_world_hint = true
         )
     )]
     pub(crate) async fn clipboard_get(&self) -> Result<CallToolResult, McpError> {

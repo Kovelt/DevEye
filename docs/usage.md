@@ -197,7 +197,7 @@ Codes de sortie : 0 conforme, 1 écarts, 2 la suite n'a pas pu s'exécuter. Le b
 - **Erreur de protocole JSON-RPC** : `-32602` (`invalid_params`) pour un appel mal formé (coordonnées invalides, `level_min` inconnu, commande logique inconnue), `-32603` pour une panne d'infrastructure.
 - **Captures** : un bloc image, puis un bloc texte JSON de métadonnées.
 - **Un seul outil à la fois** : les appels sont sérialisés dans l'ordre d'arrivée ; les attentes (`wait_*`) ne tiennent pas ce verrou pendant qu'elles patientent.
-- **Annotations** : chaque outil déclare ses quatre indices MCP (lecture seule, destructif, idempotent, monde ouvert) pour que le client puisse classer le risque ([ADR-0027](adr/0027-annotations-des-outils-mcp-et-classification-des-risques.md)). Lecture seule : captures (sauf `screenshot_element` qui défile la page), `dom`, `state`, `find_element`, `assert_selector`, `assert_state`, `logs_*` (qui drainent un tampon), `wait_*`, `target_info`, `list_*`, `window_geometry`, `clipboard_get`, `observe`. Destructifs : `eval_js`, `invoke_command`, `key_combo`, `navigate`, `upload_file`, `clipboard_set`, `assert_visual` (peut écrire la baseline).
+- **Annotations** : chaque outil déclare ses quatre indices MCP (lecture seule, destructif, idempotent, monde ouvert) pour que le client puisse classer le risque ([ADR-0027](adr/0027-annotations-des-outils-mcp-et-classification-des-risques.md)). Lecture seule : captures (sauf `screenshot_element` qui défile la page), `dom`, `state`, `find_element`, `assert_selector`, `assert_state`, `logs_*` (qui drainent un tampon), `wait_*`, `target_info`, `list_*`, `window_geometry`, `observe` ; `clipboard_get` est lecture seule **et monde ouvert** (il lit le vrai presse-papiers de l'utilisateur : le client doit demander confirmation, [ADR-0050](adr/0050-clipboard-get-monde-ouvert-et-limites-de-la-classification.md)). Destructifs : `eval_js`, `invoke_command`, `key_combo`, `navigate`, `upload_file`, `clipboard_set`, `assert_visual` (peut écrire la baseline).
 - **Coordonnées** : pixels de la capture (en CDP, pixels CSS ; voir `screenshot`). Elles sont validées avant l'envoi : négatives, ou hors du viewport quand sa taille est connue, elles donnent `invalid_params`.
 - **Options de coût** des captures (`screenshot`, `screenshot_region`, `screenshot_element`, `observe`) : `max_width` (entier ≥ 1, réduction proportionnelle, jamais d'agrandissement), `format` (`png` par défaut, ou `jpeg`), `quality` (JPEG, 1 à 100, défaut 80). Une valeur invalide est `invalid_params`, détectée avant la capture.
 
@@ -237,7 +237,7 @@ Capture un élément par sélecteur : le défile au centre (le défilement de la
 
 #### `assert_visual`
 
-Assertion visuelle (golden). Paramètres : `baseline_path` (obligatoire) ; `threshold` (ratio de pixels différents toléré, défaut `0.01`) ; `x`, `y`, `width`, `height` (région comparée, **les quatre ensemble**, sinon ignorés) ; `ignore_regions` (liste de `{ x, y, width, height }` exclus de la comparaison et du dénominateur) ; `update_baseline` (`true` : remplace la baseline sans comparer).
+Assertion visuelle (golden). Paramètres : `baseline_path` (obligatoire, **confiné** : relatif à `DEVEYE_BASELINE_DIR`, sinon au répertoire courant du serveur ; extension `.png`, sans `..` ni lien symbolique sortant ; un chemin absolu n'est accepté que dans cette racine, sinon `invalid_params` ; [ADR-0049](adr/0049-confinement-des-baselines-d-assert-visual.md)) ; `threshold` (ratio de pixels différents toléré, défaut `0.01`) ; `x`, `y`, `width`, `height` (région comparée, **les quatre ensemble**, sinon ignorés) ; `ignore_regions` (liste de `{ x, y, width, height }` exclus de la comparaison et du dénominateur) ; `update_baseline` (`true` : remplace la baseline sans comparer ; refusé si le fichier existant n'est pas un PNG lisible).
 
 - baseline absente : elle est créée, `{ ok: true, created: true, baseline_path }` ;
 - `update_baseline: true` : `{ ok: true, created, updated: true, baseline_path }` ;
@@ -313,7 +313,7 @@ Donne le focus OS à une fenêtre : `title_pattern` (sous-chaîne du titre, inse
 
 #### `clipboard_get`
 
-Lit le texte du presse-papiers de la session (`wl-paste`). Retour `{ text }`. Wayland seulement.
+Lit le texte du presse-papiers de la session (`wl-paste`). Retour `{ text }`. Wayland seulement. Il s'agit du **vrai** presse-papiers de l'utilisateur (mots de passe copiés, données d'autres applications), non masqué par le SDK : l'outil est annoté monde ouvert.
 
 #### `clipboard_set`
 
