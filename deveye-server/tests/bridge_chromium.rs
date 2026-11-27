@@ -368,7 +368,120 @@ async fn the_bridge_script_behaves_like_the_native_contract_in_chromium() {
         .expect("scope sélecteur");
     assert!(scoped.count() >= 1 && scoped.count() < snap.count());
 
-    // 8. Taille consignée : texte compact (une ligne par élément) contre le DOM brut.
+    // 7 bis. Bornes et noms (couverture de la revue) : scope par référence (et ses
+    // refus), max_depth, viewport_only, interactive_only=false, <details> fermé,
+    // <slot>, aria-labelledby, nom de <fieldset>, double-clic et survol en profondeur.
+    client
+        .evaluate(
+            "(() => { document.body.insertAdjacentHTML('beforeend', \
+             '<div id=\"extras\"><details><summary>Plus</summary><button>Dans details</button></details>\
+             <fieldset><legend>Identite</legend><input type=\"text\" aria-label=\"Prenom\"></fieldset>\
+             <span id=\"lbl\">Libelle externe</span><button aria-labelledby=\"lbl\">court</button>\
+             <div id=\"slothost\"><button>Dans slot</button></div></div>'); \
+             document.getElementById('slothost').attachShadow({mode: 'open'}).innerHTML = '<slot></slot>'; \
+             const b = document.getElementById('host').shadowRoot.getElementById('shadowbtn'); \
+             b.addEventListener('dblclick', () => { window.sdbl = 1; }); \
+             b.addEventListener('mouseover', () => { window.shover = 1; }); \
+             return true; })()",
+        )
+        .await
+        .expect("fixture supplémentaire");
+    let wide = inspector
+        .snapshot(&SnapshotQuery::new().with_max_nodes(2000))
+        .await
+        .expect("snapshot étendu");
+    let mut wflat = Vec::new();
+    flatten(&wide.nodes, &mut wflat);
+    find(&wflat, "group", "Identite");
+    find(&wflat, "button", "Libelle externe");
+    find(&wflat, "button", "Dans slot");
+    assert!(
+        !wflat
+            .iter()
+            .any(|n| n.name.as_deref() == Some("Dans details")),
+        "le contenu d'un <details> fermé ne doit pas être listé"
+    );
+    // Scope par référence : seul le sous-arbre de la navigation.
+    let nav = find(&wflat, "navigation", "Principal").reference.clone();
+    let in_nav = inspector
+        .snapshot(&SnapshotQuery::new().with_scope(nav.clone()))
+        .await
+        .expect("scope par référence");
+    let mut nflat = Vec::new();
+    flatten(&in_nav.nodes, &mut nflat);
+    find(&nflat, "link", "Accueil");
+    assert!(!nflat
+        .iter()
+        .any(|n| n.name.as_deref() == Some("Enregistrer")));
+    // Scope sur une référence jamais émise : refus, jamais l'arbre entier.
+    assert!(inspector
+        .snapshot(&SnapshotQuery::new().with_scope("e999999"))
+        .await
+        .is_err());
+    // max_depth : un niveau ne garde pas les petits-enfants.
+    let shallow = inspector
+        .snapshot(&SnapshotQuery::new().with_max_depth(1).with_max_nodes(2000))
+        .await
+        .expect("max_depth");
+    assert!(shallow.count() < wide.count());
+    client
+        .evaluate("window.scrollTo(0, 0)")
+        .await
+        .expect("retour en haut");
+    // viewport_only : le pied de page, hors vue, disparaît ; un bouton visible reste.
+    let visible = inspector
+        .snapshot(
+            &SnapshotQuery::new()
+                .with_viewport_only(true)
+                .with_max_nodes(2000),
+        )
+        .await
+        .expect("viewport_only");
+    let mut vflat = Vec::new();
+    flatten(&visible.nodes, &mut vflat);
+    assert!(!vflat
+        .iter()
+        .any(|n| n.name.as_deref() == Some("Pied de page")));
+    find(&vflat, "button", "Enregistrer");
+    // interactive_only=false : au moins autant d'éléments que le mode interactif.
+    let all_nodes = inspector
+        .snapshot(
+            &SnapshotQuery::new()
+                .with_interactive_only(false)
+                .with_max_nodes(2000),
+        )
+        .await
+        .expect("interactive_only=false");
+    assert!(all_nodes.count() >= wide.count());
+    // Double-clic et survol traversent le shadow DOM (deepAt).
+    let sbtn = inspector
+        .locate(&find(&wflat, "button", "Ombre").reference)
+        .await
+        .expect("locate ombre");
+    let (sx, sy) = sbtn.center();
+    click
+        .dispatch(InteractionCommand::double_click(Position::new(sx, sy)))
+        .await
+        .expect("double-clic");
+    click
+        .dispatch(InteractionCommand::hover(Position::new(sx, sy)))
+        .await
+        .expect("survol");
+    assert!(eval_bool(&client, "window.sdbl === 1").await);
+    assert!(eval_bool(&client, "window.shover === 1").await);
+    // Un scope dont l'élément a été retiré : refus, jamais le document entier.
+    client
+        .evaluate("document.querySelector('nav').remove()")
+        .await
+        .expect("retrait de la navigation");
+    assert!(inspector
+        .snapshot(&SnapshotQuery::new().with_scope(nav))
+        .await
+        .is_err());
+
+    // 8. Taille consignée, à titre indicatif : approximation du texte (une ligne par
+    // élément, sans indentation ni marqueurs d'état, donc inférieure au rendu réel
+    // de l'outil) et JSON (borne haute), contre `outerHTML` (pas la sortie de `dom`).
     let compact: usize = flat
         .iter()
         .map(|n| {

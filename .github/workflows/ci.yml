@@ -85,6 +85,11 @@ jobs:
         run: cargo test -p adapter-x11 --locked -- --ignored --test-threads=1
       - name: Session MCP de bout en bout (binaire, stdio, Xvfb)
         run: cargo test -p deveye-server --test e2e_mcp --locked -- --ignored --test-threads=1
+      # Chrome est préinstallé sur les runners ubuntu-24.04 ; headless, sans X.
+      - name: Pont d'éléments et modificateurs dans Chromium headless
+        run: |
+          export DEVEYE_TEST_CHROMIUM="$(command -v google-chrome || command -v chromium-browser || command -v chromium)"
+          cargo test -p deveye-server --test bridge_chromium --test modifiers_chromium --locked -- --ignored --test-threads=1
 
   msrv:
     name: MSRV 1.88

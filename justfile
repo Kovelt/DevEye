@@ -40,6 +40,11 @@ x11:
 e2e:
     cargo test -p deveye-server --test e2e_mcp --locked -- --ignored --test-threads=1
 
+# Pont d'éléments (snapshot/act) et modificateurs dans Chromium headless
+# (`DEVEYE_TEST_CHROMIUM` pour choisir le navigateur ; Brave convient)
+chromium:
+    cargo test -p deveye-server --test bridge_chromium --test modifiers_chromium --locked -- --ignored --test-threads=1
+
 # MSRV : vérifie le plancher annonce par rust-version (requiert `rustup toolchain install 1.88`)
 msrv:
     cargo +1.88 check --workspace --all-targets --locked

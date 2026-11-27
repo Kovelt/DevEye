@@ -22,6 +22,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 just x11      # cible x11 contre un Xvfb privé (tests #[ignore], bloquants en CI)
 just e2e      # session MCP de bout en bout
+just chromium # pont d'éléments et modificateurs dans un Chromium headless (bloquant en CI)
 just deny     # licences, avis RustSec, sources
 just ci       # la CI en local, sauf msrv, semver et sbom (outils à part : `just msrv`, `just sbom`)
 ```

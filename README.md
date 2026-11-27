@@ -128,7 +128,7 @@ Client MCP (Claude Code)
         ▼
   deveye-server  ── compose les adapters selon --target
         │
-  adapter-mcp-server ── expose les 45 outils, consomme les 12 ports (deveye-ports)
+  adapter-mcp-server ── expose les 45 outils, consomme les 12 ports stables (deveye-ports) et le port expérimental `ElementInspector`
         │
   ┌─────┴───────────────┬───────────────────┬──────────────────┐
   adapter-cdp-webview   adapter-screencap-*  adapter-interaction-kwin-eis   adapter-x11
@@ -137,7 +137,7 @@ Client MCP (Claude Code)
   deveye-sdk (HTTP 127.0.0.1:31337, embarqué dans l'app, debug seulement)
 ```
 
-Architecture hexagonale : un domaine pur, 12 ports (traits Rust), un adapter par technologie, un binaire qui compose le tout ([ADR-0041](docs/adr/0041-architecture-hexagonale-ports-et-adapters.md)). Détail : [docs/architecture.md](docs/architecture.md).
+Architecture hexagonale : un domaine pur, 12 ports stables (traits Rust, plus un port expérimental pour `snapshot` et `act`), un adapter par technologie, un binaire qui compose le tout ([ADR-0041](docs/adr/0041-architecture-hexagonale-ports-et-adapters.md)). Détail : [docs/architecture.md](docs/architecture.md).
 
 ## Structure du dépôt
 
@@ -175,7 +175,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Les tests de la cible x11 et de la session MCP de bout en bout démarrent **leur propre `Xvfb` privé** ; ils sont `#[ignore]` mais bloquants en CI (`just x11`, `just e2e`). Les tests `live_*` des adapters KWin exigent une session KDE réelle et se lancent à la main. La CI est dans `.github/workflows/ci.yml`.
+Les tests de la cible x11 et de la session MCP de bout en bout démarrent **leur propre `Xvfb` privé** ; ils sont `#[ignore]` mais bloquants en CI (`just x11`, `just e2e`) ; le pont d'éléments et les modificateurs sont aussi exercés dans un Chromium headless (`just chromium`, Chrome ou Brave installé, `DEVEYE_TEST_CHROMIUM` pour choisir). Les tests `live_*` des adapters KWin exigent une session KDE réelle et se lancent à la main. La CI est dans `.github/workflows/ci.yml`.
 
 ## Contribuer, sécurité, conduite
 

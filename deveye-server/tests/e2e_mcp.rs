@@ -826,10 +826,8 @@ fn modifiers_and_key_hold_through_mcp_on_private_xvfb() {
         "key_hold",
         json!({ "key": "touche_inconnue", "duration_ms": 10 }),
     );
-    assert!(
-        unknown.get("error").is_some() || unknown["result"]["isError"] == json!(true),
-        "{unknown}"
-    );
+    // L'adapter refuse le nom de touche, traduit en invalid_params, sans rien émettre.
+    assert_eq!(unknown["error"]["code"], json!(-32602), "{unknown}");
     let (_, presses, releases) = fixture.input_events();
     assert!(presses.is_empty() && releases.is_empty());
 }
