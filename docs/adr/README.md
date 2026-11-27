@@ -111,3 +111,4 @@ Option retenue, en une phrase.
 | [0045](0045-yeux-et-mains-wayland-via-kwin.md) | Yeux et mains Wayland via KWin : ScreenShot2 et EIS | Accepté |
 | [0046](0046-repli-appel-par-appel-du-mode-auto.md) | Repli appel par appel du mode auto | Accepté |
 | [0047](0047-adopter-le-contributor-covenant-2-1-comme-code-de-conduite.md) | Adopter le Contributor Covenant 2.1 comme code de conduite | Accepté |
+| [0048](0048-documentation-verifiee-par-des-tests.md) | Documentation vérifiée par des tests | Proposé |

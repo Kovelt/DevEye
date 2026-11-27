@@ -136,6 +136,9 @@ mod tools_interaction;
 mod tools_observe;
 mod tools_wait;
 
+#[cfg(test)]
+mod docs_tests;
+
 /// Version du protocole MCP annoncée à l'`initialize` et plafond de la
 /// négociation (ADR-0028). Transport : stdio uniquement. Les clients plus
 /// anciens (>= 2024-11-05) négocient à la baisse ; les annotations d'outils

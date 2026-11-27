@@ -81,12 +81,19 @@ DevEye/
   deveye-server/                binaire orchestrateur (CLI, composition selon --target)
   deveye-conformance/           suite de conformité boîte noire du wire protocol (lib + binaire
                                 `--url`) ; AGPL-3.0-or-later, `publish = false` (ADR-0035)
-  docs/                         architecture, usage, wire protocol (+ schemas/), stabilité, plateformes
+  scripts/                      preuve SDK no-op en release ; script de synchronisation de transition
+                                (déprécié, ADR-0040)
+  docs/                         architecture, usage (référence des outils), intégration du SDK,
+                                guides par type d'app (guides/), wire protocol (+ schemas/),
+                                stabilité, plateformes, migration 0.2 vers 1.0
   docs/adr/                     décisions d'architecture (ADR) et leur index
   docs/historique/              archives de conception datées (non normatives)
+  README.md, CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md   vitrine, contribution, sécurité, conduite
 ```
 
-**Sources de vérité** : `docs/architecture.md` (conception), `docs/usage.md` (utilisation), `docs/wire-protocol.md` (contrat HTTP du SDK).
+**Sources de vérité** : `docs/architecture.md` (conception), `docs/usage.md` (utilisation et référence des 44 outils), `docs/wire-protocol.md` (contrat HTTP du SDK), `docs/platforms.md` (plateformes supportées), `SECURITY.md` (modèle de menace).
+
+**Documentation vérifiée par des tests** (`adapter-mcp-server`, module `docs_tests`, ADR-0048) : la liste des outils du README (entre `<!-- outils:debut -->` et `<!-- outils:fin -->`) et les titres d'outils de `docs/usage.md` doivent égaler les outils enregistrés ; les nombres d'outils annoncés égalent `EXPECTED_TOOL_COUNT` ; les liens relatifs et les ancres des fichiers Markdown (hors `docs/historique/`) doivent exister ; chaque ADR figure à l'index avec son titre et son statut. Ajouter ou retirer un outil impose donc de mettre à jour `EXPECTED_TOOL_COUNT`, la classification des annotations, le README et `docs/usage.md`.
 
 ---
 
@@ -115,7 +122,7 @@ DevEye/
 
 - **Sujet** en français, impératif, minuscule, sans point final, **en ASCII sans accents** (les accents restent la règle partout ailleurs). Aucun emoji.
 - **Types** : `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`, `build`, `ci`.
-- **Scope = crate concerné** (omis si transverse) : `core`, `ports`, `sdk`, `sdk-client`, `server`, `adapter-cdp`, `adapter-xcap`, `adapter-kwin`, `adapter-eis`, `adapter-x11`, `adapter-clipboard`, `adapter-dioxus`, `adapter-logs`, `adapter-commands`, `adapter-composite`, `adapter-mcp`, `conformance` ; transverse : `workspace`, `docs`, `ci`, `release`.
+- **Scope = crate concerné** (omis si transverse) : `core`, `ports`, `sdk`, `sdk-client`, `server`, `adapter-cdp`, `adapter-xcap`, `adapter-kwin`, `adapter-eis`, `adapter-x11`, `adapter-clipboard`, `adapter-dioxus`, `adapter-logs`, `adapter-commands`, `adapter-composite`, `adapter-mcp`, `conformance` ; transverse : `workspace`, `docs`, `ci`, `release`, `adr` (un ADR seul : `docs(adr): ...`).
 - **Aucun trailer** dans les messages de commit (pas de `Co-Authored-By`, pas de signature d'outil).
 - Adresse d'auteur : l'adresse noreply GitHub du mainteneur (la protection de confidentialité de GitHub refuse les pushs exposant une adresse privée).
 
