@@ -26,8 +26,3 @@ fmt-check:
 
 # Pipeline CI complet en local
 ci: fmt-check lint test
-
-# Synchronise les copies vendored (Atelier, Chronos) depuis le canonique.
-# Exemples : `just sync-deveye` ou `just sync-deveye --dry-run`.
-sync-deveye *args:
-    ./scripts/sync-deveye.sh {{args}}
