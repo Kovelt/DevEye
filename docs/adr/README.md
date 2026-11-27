@@ -94,3 +94,7 @@ Option retenue, en une phrase.
 | [0028](0028-version-du-protocole-mcp-epinglee-stdio.md) | Version du protocole MCP épinglée à 2025-11-25, transport stdio seul | Proposé |
 | [0029](0029-outil-observe-et-maitrise-du-cout-des-captures.md) | Outil `observe` et maîtrise du coût des captures | Proposé |
 | [0030](0030-assert-visual-masques-image-de-difference-et-mise-a-jour.md) | `assert_visual` : masques, image de différence et mise à jour de la référence | Proposé |
+| [0031](0031-validation-des-flags-selon-la-cible.md) | Validation des flags selon la cible | Proposé |
+| [0032](0032-sous-commande-doctor-en-lecture-seule.md) | Sous-commande `doctor` en lecture seule | Proposé |
+| [0033](0033-version-affichee-et-provenance-du-commit-sans-dependance.md) | Version affichée et provenance du commit (sans dépendance) | Proposé |
+| [0034](0034-capacites-completes-de-target-info-et-repli-observable.md) | Capacités complètes de `target_info`, repli observable et choix unique du backend OS | Proposé |
