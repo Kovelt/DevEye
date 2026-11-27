@@ -114,14 +114,14 @@ Chaque réponse du SDK DOIT inclure le header :
 X-DevEye-Protocol-Version: 1.0
 ```
 
-La valeur est `MAJEURE.MINEURE`. **Ce document décrit le protocole `1.0`, figé.**
+La valeur est `MAJEURE.MINEURE`. **Ce document décrit le protocole `1.0`.** Le numéro ne change que pour une rupture ; les ajouts additifs (route de commande, capacité, champ) sont annoncés par `capabilities` ([ADR-0068](adr/0068-capacites-additives-et-version-du-protocole.md)).
 
 **Règle d'incrément**
 
 | Changement | Incrément |
 |---|---|
 | Retirer ou renommer une route, un champ, un code de statut ; changer le type ou la sémantique d'un champ ; rendre un champ de requête optionnel obligatoire | **majeure** (`2.0`) |
-| Ajouter une route, un champ de réponse, un champ **optionnel** de requête, une capacité | **mineure** (`1.1`) |
+| Ajouter une route, un champ de réponse, un champ **optionnel** de requête, une capacité | aucun : la version reste `1.0`, la capacité se découvre par `capabilities` (§3.6) |
 | Corriger un comportement sans changer le contrat écrit | aucun |
 
 Les clients ignorent les champs de réponse inconnus ; un SDK `1.x` reste donc utilisable par un client `1.y`.
@@ -150,7 +150,7 @@ Clés masquées par défaut, comparées sans casse ni séparateurs (`api_key` = 
 **Ce qui n'est PAS filtré** :
 
 - le résultat de `POST /devtools/eval` ;
-- les valeurs de retour de `POST /devtools/command` (la route `ui.widgets` fait exception : la valeur d'un widget secret n'y est jamais publiée, §3.7) ;
+- les valeurs de retour de `POST /devtools/command` (la route `ui.widgets` fait exception **pour le SDK Rust** : la valeur d'un widget secret n'y est jamais publiée, §3.7 ; une implémentation tierce doit en faire autant, le serveur masque seulement en seconde ligne, dans `dom` et `invoke_command`) ;
 - le texte libre des messages de log (`message`) ;
 - les champs de log formatés par `Debug` (`info!(user = ?user)`) : la valeur arrive en chaîne et seul le **nom** du champ est examiné, pas le contenu (`"User { password: … }"` passe tel quel) ; préférer des champs structurés scalaires ;
 - tout secret stocké sous un nom de clé neutre non déclaré.
@@ -536,7 +536,7 @@ Ref. code : `deveye-sdk/src/lib.rs` (`info_handler`). Côté client : `deveye_sd
 
 **Objectif** : servir l'arbre de widgets d'une app sans DOM (egui, imgui, Skia, Godot, Uno…). C'est une **route de commande** (§3.4), pas un endpoint : `POST /devtools/command { "route": "ui.widgets", "payload": {} }`. Ajoutée en `1.1`, additive ; une implémentation qui ne la sert pas n'annonce pas la capacité.
 
-**Capacité** : `ui.widgets/1`, annoncée par `GET /devtools/info` (§3.6) dès que l'app a recours au helper. Une capacité nouvelle est un ajout additif : `protocol_version` reste `1.0`.
+**Capacité** : `ui.widgets/1`, annoncée par `GET /devtools/info` (§3.6) dès que l'app a recours au helper. Une capacité nouvelle est un ajout additif : `protocol_version` reste `1.0` ([ADR-0068](adr/0068-capacites-additives-et-version-du-protocole.md)). « Ajoutée en 1.1 » désigne la version du SDK, pas celle du protocole.
 
 **Requête** : `payload` vaut `{}`. Un handler ignore son payload ; la négociation (`accept_schema`, `max_nodes`) n'est pas engagée tant que `/devtools/info` n'en annonce pas la prise en charge ([ADR-0065](adr/0065-helper-sdk-ui-lecture-serveur-et-controles.md)).
 

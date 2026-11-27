@@ -3,7 +3,7 @@
 - **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
-- **ADR liés** : ADR-0011 (le wire protocol fait partie de la surface stable), ADR-0016 (masquage des secrets)
+- **ADR liés** : ADR-0068 (amendement : un ajout additif ne change pas le numéro), ADR-0011 (le wire protocol fait partie de la surface stable), ADR-0016 (masquage des secrets)
 
 ## Contexte et problème
 

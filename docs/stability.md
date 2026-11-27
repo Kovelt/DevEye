@@ -15,7 +15,7 @@ Tant que la version majeure ne change pas, ces éléments ne cassent pas.
 | `deveye-sdk` | API publique embarquée dans l'app cible (`init`, `Config`, `set_state`, `expose_route`, `take_eval_requests`, constantes publiques) ; push de logs depuis 1.1 (`log`, `log_with`, `LogLevel`, `try_install_tracing_layer`, `TracingInstallError`, `layer`, `DeveyeLayer`, feature `tracing-layer` par défaut ; `DeveyeLayer` expose `tracing_subscriber::Layer` 0.3 : candidat à la 2.0, ADR-0066) ; module `ui` depuis 1.1 (`publish`, `is_observed`, `builder`, constantes `ROUTE` et `CAPABILITY`, réexport des types `deveye.ui/1`) |
 | `deveye-sdk-client` | client HTTP et constantes partagés avec les adapters |
 | **Schéma `deveye.ui/1`** (depuis 1.1) | forme de la réponse de la route `ui.widgets` ([usage.md](usage.md), `docs/schemas/ui-widgets-1.json`, [ADR-0062](adr/0062-schema-deveye-ui-1-de-la-route-ui-widgets.md)) : champs et sémantique actuels figés ; une évolution mineure n'ajoute que des champs optionnels, une rupture publie `deveye.ui/2` lu en plus de `/1` ; le rôle d'un widget est une chaîne ouverte, son vocabulaire recommandé n'est pas une énumération fermée |
-| **Wire protocol v1** | endpoints, formes JSON et en-têtes décrits dans [wire-protocol.md](wire-protocol.md), dont `X-DevEye-Protocol-Version: 1.0` (la mineure augmente à chaque ajout, la majeure à chaque rupture) |
+| **Wire protocol v1** | endpoints, formes JSON et en-têtes décrits dans [wire-protocol.md](wire-protocol.md), dont `X-DevEye-Protocol-Version: 1.0` (une rupture change le numéro ; un ajout additif ne le change pas et se découvre par `capabilities`, [ADR-0068](adr/0068-capacites-additives-et-version-du-protocole.md)) |
 | **Outils MCP** | le nom de chaque outil, le nom et le type de chaque paramètre, la forme de chaque réponse ; depuis 1.1, le **texte** des réponses reste celui de la 1.0 et les champs `structuredContent`, `outputSchema` et `_meta` s'y ajoutent (28 outils à petite sortie déclarent un `outputSchema`, la liste exacte est dans l'ADR-0067) ; le champ `reason` d'une erreur est une liste ouverte ([ADR-0067](adr/0067-sorties-structurees-mcp-palier-a.md)) |
 | **`deveye-server`** | les options (`--target`, `--display`, `--cdp-url`, `--sdk-url`, `--screencap-window`, etc.), leurs valeurs possibles, leurs valeurs par défaut et les combinaisons refusées ([ADR-0031](adr/0031-validation-des-flags-selon-la-cible.md)) ; `--version` ; la sous-commande `doctor` et ses codes de sortie (0 : prêt ou avertissements, 1 : prérequis bloquant manquant, 2 : erreur d'usage) — le texte du diagnostic n'est pas couvert |
 
@@ -51,7 +51,8 @@ Aucune promesse de compatibilité sur :
 | Rendre un paramètre optionnel obligatoire, changer son type ou la sémantique d'une valeur | majeure |
 | Ajouter un champ à une variante existante d'un enum (les variantes restent constructibles par littéral) | majeure |
 | Ajouter un champ à un struct **non** `#[non_exhaustive]` (`Size`, `Position`, `WindowRect`) | majeure |
-| Ajouter une route, un champ de réponse ou un paramètre optionnel au wire protocol (mineure du protocole, `1.0` vers `1.1`) | mineure |
+| Ajouter une route, un champ de réponse, un paramètre optionnel ou une capacité au wire protocol (le numéro `1.0` ne change pas, [ADR-0068](adr/0068-capacites-additives-et-version-du-protocole.md)) | mineure |
+| Masquer davantage une sortie existante (durcissement de sécurité : la valeur d'un secret est remplacée par `<secret>`, par exemple dans `dom`, [ADR-0064](adr/0064-masquage-des-secrets-transversal-et-vecteurs-partages.md)) | mineure, consignée au CHANGELOG sous `Security` ; n'est jamais utilisée pour changer la forme d'une réponse |
 | Changer la version **majeure** du wire protocol (rupture) | majeure |
 
 Un consommateur Rust doit donc écrire un bras `_` dans tout `match` sur un enum `#[non_exhaustive]` et construire les structs `#[non_exhaustive]` par leurs constructeurs, pas par littéral.
@@ -69,7 +70,7 @@ La MSRV est déclarée dans `[workspace.package]` (`rust-version`), vérifiée e
 
 ## Versionnage du protocole
 
-Le wire protocol HTTP du SDK porte sa propre version, émise dans l'en-tête `X-DevEye-Protocol-Version` de chaque réponse. La 1.0 fige la **version 1**. Une évolution compatible (champ ou endpoint ajouté) ne change pas ce numéro ; une évolution cassante le fait passer à 2 et exige une version majeure des crates concernés. Le contrat détaillé est dans [wire-protocol.md](wire-protocol.md).
+Le wire protocol HTTP du SDK porte sa propre version, émise dans l'en-tête `X-DevEye-Protocol-Version` de chaque réponse. La 1.0 fige la **version 1**. Une évolution compatible (champ, endpoint ou capacité ajouté) ne change pas ce numéro et se découvre par `capabilities` de `GET /devtools/info` ; une évolution cassante le fait passer à 2 et exige une version majeure des crates concernés. Le contrat détaillé est dans [wire-protocol.md](wire-protocol.md).
 
 ## Dépendances exposées
 
@@ -85,6 +86,16 @@ Certains types de dépendances apparaissent dans l'API stable. Un changement de 
 | `thiserror` | implémentation de `std::error::Error` sur `PortError` (le trait seul est exposé, pas la macro) |
 
 `EvalRequest` (`deveye-sdk`) est un message produit par le SDK et lu par la pompe de l'app : ses champs publics se lisent et se déstructurent avec `..`, mais il n'a volontairement pas de constructeur, un consommateur n'ayant jamais à en fabriquer. `SdkInfo` (`deveye-sdk-client`) se construit par `SdkInfo::new`.
+
+## Surface expérimentale
+
+Une capacité qui n'est pas prête pour la promesse semver est livrée **hors promesse**, et jamais par accident :
+
+- côté bibliothèques, derrière une feature Cargo nommée `unstable-*`, désactivée par défaut ; une feature `unstable-*` peut changer ou disparaître dans toute version mineure, et ne figure pas dans le tableau ci-dessus ;
+- côté outils MCP, un outil expérimental est annoncé comme tel dans sa description (préfixe « [expérimental] »), signalé au CHANGELOG et exclu de la promesse sur les noms, paramètres et formes de réponse ;
+- toute surface expérimentale est signalée au CHANGELOG ; sa graduation vers la surface stable est une décision écrite (ADR) qui l'ajoute au tableau.
+
+Aucune surface expérimentale n'existe en 1.1. Décision : [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md).
 
 ## Ce que la 1.0 ne promet pas
 

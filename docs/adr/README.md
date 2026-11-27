@@ -135,3 +135,5 @@ Les ADR rédigés pendant la préparation de la 1.0 avec le statut « Proposé �
 | [0065](0065-helper-sdk-ui-lecture-serveur-et-controles.md) | Helper SDK `ui`, lecture serveur de `ui.widgets` et contrôles | Accepté |
 | [0066](0066-push-de-logs-et-layer-du-sdk.md) | Push de logs et `layer()` du SDK | Accepté |
 | [0067](0067-sorties-structurees-mcp-palier-a.md) | Sorties structurées MCP : texte inchangé, `structuredContent` restreint, `ToolError` | Accepté |
+| [0068](0068-capacites-additives-et-version-du-protocole.md) | Capacités additives et version du protocole | Proposé |
+| [0069](0069-surface-experimentale-par-features-unstable.md) | Surface expérimentale par features `unstable-*` | Accepté |
