@@ -134,7 +134,12 @@ impl Fixture {
             0,
             &CreateWindowAux::new()
                 .background_pixel(0x00ff_0000)
-                .event_mask(EventMask::BUTTON_PRESS | EventMask::EXPOSURE),
+                .event_mask(
+                    EventMask::BUTTON_PRESS
+                        | EventMask::KEY_PRESS
+                        | EventMask::KEY_RELEASE
+                        | EventMask::EXPOSURE,
+                ),
         )
         .expect("création de la fenêtre");
         let utf8 = conn
@@ -172,6 +177,22 @@ impl Fixture {
             .expect("sync")
             .reply()
             .expect("réponse sync");
+    }
+
+    /// Événements d'entrée reçus depuis le dernier appel : `(masques `state` des
+    /// appuis de bouton, horodatages des KeyPress, horodatages des KeyRelease)`.
+    fn input_events(&self) -> (Vec<u16>, Vec<u32>, Vec<u32>) {
+        self.sync();
+        let (mut buttons, mut presses, mut releases) = (vec![], vec![], vec![]);
+        while let Some(e) = self.conn.poll_for_event().expect("événement") {
+            match e {
+                Event::ButtonPress(b) => buttons.push(u16::from(b.state)),
+                Event::KeyPress(k) => presses.push(k.time),
+                Event::KeyRelease(k) => releases.push(k.time),
+                _ => {}
+            }
+        }
+        (buttons, presses, releases)
     }
 
     /// Appuis de bouton `(bouton, x, y)` reçus depuis le dernier appel.
@@ -310,6 +331,13 @@ impl McpSession {
     /// Requête JSON-RPC : renvoie le champ `result` de la réponse de même id
     /// (les notifications intercalées sont ignorées) ; échoue sur `error`.
     fn request(&mut self, method: &str, params: Value) -> Value {
+        let msg = self.request_raw(method, params);
+        assert!(msg.get("error").is_none(), "`{method}` en erreur : {msg}");
+        msg["result"].clone()
+    }
+
+    /// Comme `request`, mais renvoie le message complet (`result` ou `error`).
+    fn request_raw(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
@@ -324,10 +352,17 @@ impl McpSession {
                 panic!("stdout MCP pollué par une ligne non JSON : {line}");
             };
             if msg.get("id") == Some(&json!(id)) {
-                assert!(msg.get("error").is_none(), "`{method}` en erreur : {msg}");
-                return msg["result"].clone();
+                return msg;
             }
         }
+    }
+
+    /// Appel d'outil dont l'erreur JSON-RPC éventuelle est rendue au test.
+    fn call_tool_raw(&mut self, name: &str, arguments: Value) -> Value {
+        self.request_raw(
+            "tools/call",
+            json!({ "name": name, "arguments": arguments }),
+        )
     }
 
     fn call_tool(&mut self, name: &str, arguments: Value) -> Value {
@@ -518,7 +553,7 @@ fn snapshot_and_act_by_reference_on_private_xvfb() {
     );
     mcp.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
 
-    // Annoncé comme expérimental, hors des 44 outils stables.
+    // Annoncé comme expérimental, hors des 45 outils stables.
     let listed = mcp.request("tools/list", json!({}));
     let tools = listed["tools"].as_array().expect("tools");
     for name in ["snapshot", "act"] {
@@ -678,4 +713,123 @@ fn snapshot_without_a_widget_route_is_unsupported_with_a_hint() {
         hint.contains("ui.widgets") && hint.contains("screenshot"),
         "{hint}"
     );
+}
+
+/// Modificateurs d'entrée par MCP (ADR-0075) : Shift+clic produit `ShiftMask` côté
+/// X, `key_hold` espace appui et relâchement de la durée demandée, un nom de
+/// modificateur inconnu et une durée au-delà du plafond sont refusés sans rien
+/// émettre.
+#[test]
+#[ignore = "démarre un Xvfb privé et le binaire deveye-server"]
+fn modifiers_and_key_hold_through_mcp_on_private_xvfb() {
+    let xvfb = Xvfb::start();
+    let fixture = Fixture::new(&xvfb.display());
+    let mut mcp = McpSession::start(&xvfb.display());
+    mcp.request(
+        "initialize",
+        json!({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": { "name": "deveye-e2e-modifiers", "version": "0" }
+        }),
+    );
+    mcp.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+
+    // Annotation de key_hold : destructif, non idempotent.
+    let listed = mcp.request("tools/list", json!({}));
+    let tools = listed["tools"].as_array().expect("tools");
+    let hold = tools
+        .iter()
+        .find(|t| t["name"] == "key_hold")
+        .expect("key_hold absent");
+    assert_eq!(
+        hold["annotations"]["destructiveHint"],
+        json!(true),
+        "{hold}"
+    );
+    assert_eq!(
+        hold["annotations"]["idempotentHint"],
+        json!(false),
+        "{hold}"
+    );
+
+    // Clic nu : pas de ShiftMask ; Shift+clic : ShiftMask (1).
+    let _ = fixture.input_events();
+    let result = mcp.call_tool("click", json!({ "x": 100, "y": 80 }));
+    assert_ne!(result["isError"], json!(true), "{result}");
+    let (plain, ..) = fixture.input_events();
+    assert_eq!(plain.len(), 1);
+    assert_eq!(plain[0] & 1, 0, "clic nu avec ShiftMask : {plain:?}");
+
+    let result = mcp.call_tool(
+        "click",
+        json!({ "x": 100, "y": 80, "modifiers": ["Shift"] }),
+    );
+    assert_ne!(result["isError"], json!(true), "{result}");
+    assert_eq!(
+        result["structuredContent"],
+        json!({ "ok": true }),
+        "{result}"
+    );
+    let (shifted, ..) = fixture.input_events();
+    assert_eq!(shifted.len(), 1);
+    assert_eq!(shifted[0] & 1, 1, "ShiftMask attendu : {shifted:?}");
+
+    // Ctrl+glisser et Alt+molette passent aussi, sans erreur.
+    for (tool, args) in [
+        (
+            "drag_drop",
+            json!({ "from_x": 20, "from_y": 20, "to_x": 120, "to_y": 90, "modifiers": ["ctrl"] }),
+        ),
+        (
+            "scroll",
+            json!({ "x": 50, "y": 50, "dy": 120, "modifiers": ["alt"] }),
+        ),
+    ] {
+        let r = mcp.call_tool(tool, args);
+        assert_ne!(r["isError"], json!(true), "{tool} : {r}");
+    }
+    let _ = fixture.input_events();
+
+    // Nom inconnu : erreur de protocole invalid_params, rien n'est émis.
+    let refused = mcp.call_tool_raw(
+        "click",
+        json!({ "x": 100, "y": 80, "modifiers": ["ctrl", "hyper"] }),
+    );
+    assert_eq!(refused["error"]["code"], json!(-32602), "{refused}");
+    let (buttons, presses, _) = fixture.input_events();
+    assert!(
+        buttons.is_empty() && presses.is_empty(),
+        "rien ne devait partir"
+    );
+
+    // key_hold : appui puis relâchement espacés d'au moins 300 ms.
+    let held = mcp.call_tool("key_hold", json!({ "key": "Shift_L", "duration_ms": 300 }));
+    assert_ne!(held["isError"], json!(true), "{held}");
+    assert_eq!(held["structuredContent"], json!({ "ok": true }), "{held}");
+    let (_, presses, releases) = fixture.input_events();
+    assert_eq!(presses.len(), 1, "{presses:?}");
+    assert_eq!(releases.len(), 1, "{releases:?}");
+    assert!(
+        releases[0].wrapping_sub(presses[0]) >= 300,
+        "écart de {} ms",
+        releases[0].wrapping_sub(presses[0])
+    );
+
+    // Plafond dépassé et touche inconnue : refus avant toute émission.
+    let too_long = mcp.call_tool_raw(
+        "key_hold",
+        json!({ "key": "Shift_L", "duration_ms": 20000 }),
+    );
+    assert_eq!(too_long["error"]["code"], json!(-32602), "{too_long}");
+    let unknown = mcp.call_tool_raw(
+        "key_hold",
+        json!({ "key": "touche_inconnue", "duration_ms": 10 }),
+    );
+    assert!(
+        unknown.get("error").is_some() || unknown["result"]["isError"] == json!(true),
+        "{unknown}"
+    );
+    let (_, presses, releases) = fixture.input_events();
+    assert!(presses.is_empty() && releases.is_empty());
 }
