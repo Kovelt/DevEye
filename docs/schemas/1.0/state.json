@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/1.0/state.json",
+  "title": "DevEye 1.0 : réponse de GET /devtools/state",
+  "description": "Snapshot du state applicatif. Les valeurs sont du JSON quelconque ; les clés sensibles sont masquées par la chaîne <secret> (wire-protocol.md §2.4).",
+  "type": "object",
+  "required": ["entries"],
+  "properties": {
+    "entries": {
+      "type": "object",
+      "description": "Entrées nommées publiées par l'app (set_state). Clés triées par octets UTF-8 : recommandé, non exigé.",
+      "additionalProperties": true
+    }
+  }
+}

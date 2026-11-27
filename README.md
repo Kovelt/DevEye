@@ -206,6 +206,7 @@ DevEye/
 ├── deveye-sdk/                   # Micro-lib opt-in à embarquer dans l'app cible (cfg debug_assertions)
 ├── deveye-sdk-client/            # Client HTTP du SDK (partagé entre les adapters)
 ├── deveye-server/                # Binaire orchestrateur — compose les adapters selon la CLI
+├── deveye-conformance/           # Suite de conformité boîte noire du wire protocol (`--url`)
 ├── deveye-adapters/
 │   ├── adapter-cdp-webview/      # Renderer + Interaction + Inspector + JsEval via CDP (Chromium/WebView2)
 │   ├── adapter-screencap-xcap/   # Renderer OS-level (X11 / XWayland / Wayland non-KDE)
@@ -221,7 +222,8 @@ DevEye/
 └── docs/
     ├── architecture.md           # Ports, adapters, robustesse CDP, sécurité
     ├── usage.md                  # Guide d'usage pratique, tous les outils MCP, troubleshooting
-    └── wire-protocol.md          # Spécification du contrat HTTP SDK (5 endpoints, garde Host, schémas)
+    ├── wire-protocol.md          # Spécification du contrat HTTP SDK (6 endpoints, garde Host, CORS, suite de conformité)
+    └── schemas/1.0/              # JSON Schema des corps du protocole
 ```
 
 ---
@@ -260,7 +262,7 @@ Les audits, la feuille de route et les notes de conception des premiers jalons s
 
 - [docs/usage.md](docs/usage.md) — outils MCP détaillés, configuration client MCP, modes Linux/kwin-eis/x11/WASM, troubleshooting
 - [docs/architecture.md](docs/architecture.md) — architecture hexagonale, 12 ports, robustesse CDP, sécurité
-- [docs/wire-protocol.md](docs/wire-protocol.md) — contrat HTTP du SDK (5 endpoints, formes JSON, garde Host, checklist implémentation tierce)
+- [docs/wire-protocol.md](docs/wire-protocol.md) — contrat HTTP du SDK (6 endpoints, formes JSON, garde Host, CORS, schémas, suite de conformité pour implémentation tierce)
 - [docs/historique/README.md](docs/historique/README.md) — archives de conception datées (audits, feuille de route, spike), non normatives
 - [docs/stability.md](docs/stability.md) — politique semver de la 1.0 : surface stable, dépréciation, MSRV, versionnage du protocole
 

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/1.0/commands.json",
+  "title": "DevEye 1.0 : réponse de GET /devtools/commands",
+  "description": "Commandes logiques enregistrées, triées par name (octets UTF-8, ordre normatif).",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["name", "description"],
+    "properties": {
+      "name": { "type": "string" },
+      "description": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/1.0/info.json",
+  "title": "DevEye 1.0 : réponse de GET /devtools/info",
+  "description": "Identité du SDK et capacités actives (wire-protocol.md §3.6).",
+  "type": "object",
+  "required": ["sdk_version", "protocol_version", "capabilities"],
+  "properties": {
+    "sdk_version": { "type": "string", "minLength": 1 },
+    "protocol_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "MAJEURE.MINEURE, identique à l'en-tête X-DevEye-Protocol-Version."
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "allOf": [
+        { "contains": { "const": "state" } },
+        { "contains": { "const": "commands" } },
+        { "contains": { "const": "info" } }
+      ],
+      "description": "state, commands et info toujours ; redaction, logs et eval selon l'état. Les valeurs inconnues sont ignorées par les clients."
+    }
+  }
+}

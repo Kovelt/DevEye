@@ -2,13 +2,15 @@
 
 Version du document : 2026-11-27  
 **Version du protocole : 1.0 (figée pour la série 1.x de DevEye)**  
-Source de vérité canonique : ce fichier (`docs/wire-protocol.md`). Décision : [ADR-0017](adr/0017-protocole-1-0-version-info-et-limites.md).
+Source de vérité canonique : ce fichier (`docs/wire-protocol.md`), complété par les [schémas JSON](#8-schémas-json) de `docs/schemas/1.0/`. Décisions : [ADR-0017](adr/0017-protocole-1-0-version-info-et-limites.md) (version, limites), [ADR-0035](adr/0035-suite-de-conformite-boite-noire-du-protocole.md) (suite de conformité).
 
 ---
 
 ## Périmètre et objectif
 
-Ce document spécife le contrat HTTP que tout **SDK DevEye** doit implémenter pour être piloté par `deveye-server`. L'implémentation de référence est `deveye-sdk` (Rust/axum, workspace DevEye). Toute implémentation dans un autre langage (par exemple un shim .NET) doit satisfaire ce même contrat ; la checklist de la section 6 sert de guide.
+Ce document spécifie le contrat HTTP que tout **SDK DevEye** implémente pour être piloté par `deveye-server`. L'implémentation de référence est `deveye-sdk` (Rust/axum, workspace DevEye). Toute implémentation dans un autre langage (par exemple un shim .NET, maintenu hors de ce dépôt) satisfait ce même contrat : la checklist de la section 6 sert de guide d'écriture, et la **suite de conformité** `deveye-conformance` (section 7) la valide à partir de sa seule URL, sans accès à son code.
+
+Les mots **DOIT**, **NE DOIT PAS** et **DEVRAIT** ont le sens de la RFC 2119. Une exigence « DOIT » est vérifiée par la suite de conformité ; une exigence « DEVRAIT » ne l'est pas.
 
 La spec est **agnostique du langage** : n'importe quelle techno capable de servir du HTTP/1.1 sur localhost peut implémenter un SDK conforme. Elle est volontairement minimale : aucun WebSocket, aucun streaming, aucune authentification — la sécurité repose sur le bind loopback et la garde `Host`.
 
@@ -21,10 +23,14 @@ La spec est **agnostique du langage** : n'importe quelle techno capable de servi
 | Protocole | HTTP/1.1 (pas de TLS, pas de HTTP/2 requis) |
 | Adresse de bind | `127.0.0.1` exclusivement — jamais `0.0.0.0` ni `::` |
 | Port par défaut | `31337` |
-| Variable de surcharge | `DEVEYE_PORT` (entier, 1024-65535) |
+| Variable de surcharge | `DEVEYE_PORT` : entier décimal de 1 à 65535, sans espace ni signe |
 | Base URL côté client | `http://127.0.0.1:<port>` |
 
-Le choix du port `31337` est arbitraire et mnémonique. Il doit être surchargeable sans recompilation via `DEVEYE_PORT`, ce qui est indispensable quand plusieurs apps tournent simultanément en dev.
+Le choix du port `31337` est arbitraire et mnémonique. Il est surchargeable sans recompilation via `DEVEYE_PORT`, ce qui est indispensable quand plusieurs apps tournent simultanément en dev.
+
+**Lecture de `DEVEYE_PORT`** : toute valeur qui n'est pas un entier décimal de 1 à 65535 (variable absente ou vide, texte, `0`, valeur négative ou supérieure à 65535, espaces autour) est ignorée et le port par défaut `31337` s'applique, sans erreur. `0` est exclu : il demanderait un port éphémère que personne ne pourrait deviner. Les ports inférieurs à 1024 sont acceptés par la règle mais exigent des privilèges sur la plupart des systèmes ; l'échec du bind est alors traité comme un port déjà pris. Un SDK DOIT, en cas d'échec du bind, signaler l'incident (log) et laisser l'app hôte tourner.
+
+**Connexions** : HTTP/1.1, requêtes indépendantes ; aucune session, aucun cookie. Le serveur DEVRAIT accepter la réutilisation de connexion (`keep-alive`) mais un client ne peut pas la présumer.
 
 Ref. code : `deveye-sdk/src/lib.rs` — constante `DEFAULT_PORT` (`pub const DEFAULT_PORT: u16 = 31337`) et `impl Default for Config` (lit `DEVEYE_PORT`).
 
@@ -63,14 +69,40 @@ LocalHost:31337      (insensible a la casse)
 [::1]:31337
 ```
 
-Valeurs rejetées :
+Valeurs rejetées (13 cas, tous couverts par la suite de conformité) :
 
 ```
 evil.com
 evil.com:31337
 127.0.0.1.evil.com
+localhost.evil.com
+sub.localhost
+0.0.0.0
+::1                  (IPv6 sans crochets : non reconnu)
+[::1]toto            (suffixe arbitraire après le crochet)
+[::1]evil.com
+[::1]:abc            (port non numérique)
+[::1]:               (port vide)
+127.0.0.1:abc
 (chaine vide)
 ```
+
+Règles précises :
+
+- le `Host` est un nom d'hôte, éventuellement suivi de `:` et d'un port **purement numérique** (au moins un chiffre) ; un `Host` sans port est valide (`localhost`, `127.0.0.1`, `[::1]`) ;
+- l'IPv6 loopback n'est reconnu que **entre crochets** (`[::1]`) ; le suffixe après `]` est vide ou `:<chiffres>` ;
+- `localhost` est insensible à la casse ; `127.0.0.1` est comparé tel quel ; aucune autre adresse, aucun sous-domaine, aucun `0.0.0.0` ;
+- le port annoncé dans `Host` n'a pas à être celui du serveur (seule sa forme numérique compte) ;
+- un `Host` **absent** (requête HTTP/1.0 ou HTTP/1.1 sans l'en-tête) est rejeté comme un `Host` étranger ;
+- la garde s'applique à **toutes** les requêtes, toutes méthodes et tous chemins confondus (y compris un chemin inconnu et `OPTIONS`), et **avant** le routage et le décodage du corps : un corps invalide avec un `Host` étranger donne `403`, jamais `400`.
+
+**Réponse de rejet** : `403 Forbidden`, `Content-Type: application/json`, header de version, corps :
+
+```json
+{ "error": "Host non local" }
+```
+
+Le texte du message est libre ; le champ `error` (chaîne) DOIT être présent.
 
 Rationale : le bind sur `127.0.0.1` empêche les connexions extérieures, mais ne suffit pas contre le DNS-rebinding — une page web malveillante peut résoudre un domaine sous son contrôle vers `127.0.0.1` et envoyer des requêtes avec un `Host` étranger. La garde coupe ce vecteur.
 
@@ -122,17 +154,48 @@ Clés masquées par défaut, comparées sans casse ni séparateurs (`api_key` = 
 - le texte libre des messages de log (`message`) ;
 - tout secret stocké sous un nom de clé neutre non déclaré.
 
-Le masquage est un filet par noms de clés, pas une garantie : une app qui manipule des secrets ne doit pas les passer à `set_state` ni les journaliser. Décision : [ADR-0016](adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md). Un SDK tiers n'est pas tenu d'implémenter le masquage, mais doit alors documenter la limite.
+Le masquage est un filet par noms de clés, pas une garantie : une app qui manipule des secrets ne doit pas les passer à `set_state` ni les journaliser. Décision : [ADR-0016](adr/0016-masquage-des-secrets-par-cles-dans-le-sdk.md). Un SDK tiers n'est pas tenu d'implémenter le masquage, mais doit alors documenter la limite. Il n'annonce la capacité `redaction` (§3.6) **que** s'il masque réellement selon les règles ci-dessus : la suite de conformité contrôle alors l'état et les logs servis (une clé sensible dont la valeur n'est pas `"<secret>"` est un écart).
 
 ### 2.5 Limite de taille des requêtes
 
-Le corps d'une requête est limité à **1 Mio** (`MAX_REQUEST_BODY_BYTES`). Au-delà, le SDK répond `413 Payload Too Large` sans traiter la route (header de version présent). Le `413` n'a pas de corps JSON normalisé : un client ne doit pas le décoder.
+Le corps d'une requête est limité à **1 Mio** (1 048 576 octets, `MAX_REQUEST_BODY_BYTES`). Au-delà, le SDK DOIT répondre `413 Payload Too Large` sans traiter la route (header de version présent). Le `413` n'a pas de corps JSON normalisé (un client ne doit pas le décoder) et le serveur peut fermer la connexion avant d'avoir lu tout le corps : un client doit tolérer une connexion coupée pendant l'envoi.
+
+### 2.6 CORS : refus de toute origine
+
+Le SDK n'autorise **aucune** origine cross-origin. Il NE DOIT PAS émettre `Access-Control-Allow-Origin` ni `Access-Control-Allow-Credentials`, que la requête soit une requête simple portant un `Origin` ou un préflight `OPTIONS` (`Access-Control-Request-Method`). Cela interdit à une page web tierce de lire les réponses ou d'émettre des requêtes « non simples » (`Content-Type: application/json`) vers le port local via le navigateur de l'utilisateur. Le serveur répond au préflight sans traiter la route (l'implémentation de référence renvoie `200` sans en-tête d'autorisation) ; le header de version est présent sur cette réponse comme sur toutes les autres. Les clients des adapters ne passent pas par un navigateur : CORS ne les concerne pas.
+
+La garde Host (§2.2) reste la protection principale contre le DNS-rebinding ; CORS en est la seconde barrière.
 
 ---
 
 ## 3. Endpoints
 
-Le SDK expose six routes. Toutes retournent `Content-Type: application/json`.
+Le SDK expose six routes. Toutes les réponses `200` retournent `Content-Type: application/json`.
+
+### 3.0 Conventions communes
+
+**Codes d'erreur transverses.** Hors des cas propres à chaque route :
+
+| Situation | Statut | Corps |
+|---|---|---|
+| `Host` absent, étranger ou mal formé (§2.2) | `403` | `{ "error": "<message>" }` |
+| Chemin inconnu (`/`, `/devtools/inconnue`, `/devtools/state/extra`) | `404` | libre (ne pas le décoder) |
+| Chemin connu, méthode non prévue (`POST /devtools/state`, `GET /devtools/eval`) | `405` | libre ; un header `Allow` est recommandé |
+| Corps `POST` qui n'est pas du JSON valide, `Content-Type` incorrect, champ obligatoire absent ou de mauvais type | `4xx` autre que `403`, `404`, `405` | libre |
+| Corps au-delà de 1 Mio (§2.5) | `413` | libre |
+| Défaillance interne du SDK | `5xx` | libre, `{ "error": "<message>" }` recommandé |
+
+Pour les erreurs de décodage, l'implémentation de référence répond `400` (JSON syntaxiquement invalide), `415` (`Content-Type` absent ou autre que `application/json`) ou `422` (JSON valide mais champ obligatoire absent ou mal typé). Une implémentation tierce peut choisir un autre `4xx` ; la suite n'exige que « client en erreur, ni garde, ni route, ni méthode ». **Chaque** réponse, erreurs et préflight compris, porte `X-DevEye-Protocol-Version`.
+
+**Corps de requête JSON.** Encodés en UTF-8, `Content-Type: application/json`. Les champs inconnus sont ignorés (ils pourront être ajoutés en `1.x`). Un champ optionnel **absent** et un champ à `null` sont équivalents.
+
+**Horodatages.** Toute date est une chaîne RFC 3339 en **UTC**, suffixée `Z` (jamais `+00:00` ni un autre décalage), avec une fraction de seconde de 0 à 9 chiffres : `2026-06-24T14:32:01.123456789Z`, `2026-06-24T14:32:01Z`. Un client lit ces valeurs avec un analyseur RFC 3339 standard.
+
+**Ordres de tri.** `GET /devtools/commands` est trié par `name`, ordre croissant des octets UTF-8 (`ping` avant `set-page`, `Z` avant `a`) : l'ordre est normatif. Les clés de `entries` (`GET /devtools/state`) sont triées de la même façon dans l'implémentation de référence ; c'est recommandé, pas exigé (un objet JSON n'est pas ordonné). Les événements de `GET /devtools/logs/poll` sont rendus dans leur **ordre d'émission**, donc à horodatage croissant.
+
+**Valeurs absentes.** Un champ marqué « absent si… » n'est pas émis (pas de `null` de remplacement) ; les lecteurs tolèrent néanmoins `null`. Un tableau ou un objet vide est une valeur valide, jamais une erreur.
+
+**Cohérence des identifiants.** Les noms de capacités, de routes de commande et de champs sont sensibles à la casse.
 
 ### 3.1 `GET /devtools/state`
 
@@ -213,8 +276,8 @@ Exemple :
 | `level` | string | oui | `"trace"`, `"debug"`, `"info"`, `"warn"` ou `"error"` (minuscules, ref. attribut `#[serde(rename_all = "lowercase")]` sur l'enum `LogLevel`) |
 | `target` | string | oui | Module émetteur (ex. `my_app::ui::dashboard`) |
 | `message` | string | oui | Texte du message |
-| `timestamp` | string | oui | ISO 8601 / RFC 3339 avec offset UTC (`Z`) |
-| `fields` | objet JSON | non | Absent ou null si aucune paire `key=value` tracing. Ref. attribut `#[serde(default, skip_serializing_if = "serde_json::Value::is_null")]` sur le champ `fields` de `LogEvent` |
+| `timestamp` | string | oui | RFC 3339 en UTC, suffixé `Z` (§3.0) |
+| `fields` | objet JSON | non | Absent si aucune paire `key=value` (les lecteurs tolèrent `null`). Ref. attribut `#[serde(default, skip_serializing_if = "serde_json::Value::is_null")]` sur le champ `fields` de `LogEvent` |
 
 **Codes HTTP** :
 
@@ -222,7 +285,7 @@ Exemple :
 |---|---|
 | 200 | Succès (même si `events` est vide) |
 | 403 | Header `Host` invalide |
-| 4xx/5xx | Erreur interne du SDK |
+| 5xx | Défaillance interne du SDK |
 
 **Sémantique de drain** (critique) :
 
@@ -287,7 +350,9 @@ Ref. code : `deveye-sdk/src/lib.rs` (struct `EvalRequest` et champ `respond: tok
 }
 ```
 
-Note : le code HTTP est `200` dans les deux cas quand l'expression a été transmise et exécutée. C'est l'absence de `value` (ou la présence de `error`) qui signale l'échec applicatif.
+Note : le code HTTP est `200` dans les deux cas quand l'expression a été transmise et exécutée. C'est la présence de `error` qui signale l'échec applicatif. Une réponse `200` porte **exactement un** des deux champs ; une expression qui vaut `null` donne `{ "value": null }` (`value` est présent même nul).
+
+Les réponses `503`, `504` et `500` portent un corps `{ "error": "<message>" }`.
 
 Ref. code : `deveye-sdk/src/lib.rs` (struct `EvalResponse` avec `skip_serializing_if` sur les deux champs optionnels) :
 
@@ -374,7 +439,7 @@ Ref. code : `deveye-sdk/src/lib.rs` — struct `CommandRequest` (avec `#[serde(d
 
 Le corps est la valeur JSON retournée par le handler de la commande. Il n'y a pas d'enveloppe : si le handler retourne `{ "ok": true }`, la réponse HTTP est directement `{ "ok": true }`. Si le handler retourne une chaîne, la réponse est une chaîne JSON.
 
-**Réponse 404** (corps minimal : la route n'est pas répétée, elle est déjà portée par `PortError::Route` côté client — audit C2-b) :
+**Réponse 404** (corps minimal : la route n'est pas répétée, elle est déjà portée par `PortError::Route` côté client). Un `payload` absent ou `null` est valide : une route inconnue répond `404` dans les deux cas, jamais `400` ni `422` :
 
 ```json
 {
@@ -390,6 +455,7 @@ Ref. code : `deveye-sdk/src/lib.rs` — handler `command_handler`.
 |---|---|
 | 200 | Commande trouvée et exécutée |
 | 404 | Route inconnue |
+| 4xx | Corps invalide ou champ `route` absent (§3.0) |
 | 403 | Header `Host` invalide |
 
 **Sémantique** : dans `command_handler`, le verrou de lecture sur les routes n'est tenu que pour cloner le handler (`Arc`) ; il est **relâché avant l'exécution**, qui a lieu dans `tokio::task::spawn_blocking` (le handler peut être bloquant sans figer le runtime SDK, et un panic y est capturé plutôt que de faire tomber le serveur). Le handler reçoit `payload` et retourne un `serde_json::Value`. Il est responsable de sa propre gestion d'erreur ; aucune convention de retour d'erreur n'est imposée à ce niveau (c'est l'app qui décide du schéma de sa réponse).
@@ -451,7 +517,7 @@ Ref. code : `deveye-sdk/src/lib.rs` — handler `commands_handler` (tri par `a.n
 {
   "sdk_version": "1.0.0",
   "protocol_version": "1.0",
-  "capabilities": ["state", "commands", "info", "logs", "eval"]
+  "capabilities": ["state", "commands", "info", "redaction", "logs", "eval"]
 }
 ```
 
@@ -459,7 +525,7 @@ Ref. code : `deveye-sdk/src/lib.rs` — handler `commands_handler` (tri par `a.n
 |---|---|---|
 | `sdk_version` | string | Version du SDK (crate `deveye-sdk` ou implémentation tierce) |
 | `protocol_version` | string | Version du protocole, `MAJEURE.MINEURE`, identique au header |
-| `capabilities` | tableau de string | Capacités **actives** : `state`, `commands` et `info` toujours ; `logs` quand la collecte des logs est installée ; `eval` quand une pompe d'évaluation est enregistrée. De nouvelles valeurs peuvent apparaître en `1.x` : les ignorer si inconnues |
+| `capabilities` | tableau de string | Capacités **actives** : `state`, `commands` et `info` toujours ; `redaction` quand le masquage des secrets (§2.4) est actif ; `logs` quand la collecte des logs est installée ; `eval` quand une pompe d'évaluation est enregistrée. `eval` est cohérente avec `POST /devtools/eval` : annoncée, la route répond `200` ; non annoncée, `503`. De nouvelles valeurs peuvent apparaître en `1.x` : les ignorer si inconnues |
 
 **Codes HTTP** : 200 ; 403 (Host invalide).
 
@@ -482,7 +548,9 @@ Ref. code : `deveye-sdk/src/lib.rs` (`info_handler`). Côté client : `deveye_sd
 | `expose_route` (enregistrement de commandes) | oui |
 | `504` sur dépassement de l'évaluation, traduit en `PortError::Timeout` côté `adapter-dioxus-signals` | oui |
 
-Un runtime tokio dédié (`std::sync::LazyLock`) et des locks `tokio::sync` isolent le SDK du runtime de l'app hôte. `deveye-sdk` est l'**implémentation de référence** : en cas de divergence entre ce document et une autre implémentation, c'est le code de `deveye-sdk` qui fait foi.
+Un runtime tokio dédié (`std::sync::LazyLock`, un thread) isole le SDK du runtime de l'app hôte. Les verrous sont **mixtes** : `state` et `routes` sont des `std::sync::RwLock`, afin que `set_state` et `expose_route` écrivent immédiatement, sans runtime, depuis n'importe quel thread ; le buffer de logs (`logs`, `tokio::sync::Mutex`) et l'émetteur de la pompe d'évaluation (`eval_tx`, `tokio::sync::RwLock`) sont des verrous `tokio::sync`, car les handlers les attendent. Une implémentation tierce n'a pas à reproduire ce choix : seul le comportement observable est normatif.
+
+`deveye-sdk` est l'**implémentation de référence** : en cas de divergence entre ce document et le code de `deveye-sdk`, c'est un défaut à corriger d'un côté ou de l'autre, et la suite de conformité (section 7) départage en exécutant le SDK Rust à chaque modification.
 
 ---
 
@@ -515,14 +583,17 @@ Cette liste est le guide opérationnel pour tout SDK dans un langage tiers (par 
 ### Bind et port
 
 - [ ] Binder exclusivement sur `127.0.0.1:<port>` — jamais `0.0.0.0`.
-- [ ] Lire `DEVEYE_PORT` en variable d'environnement au démarrage ; utiliser `31337` si absente ou invalide.
+- [ ] Lire `DEVEYE_PORT` en variable d'environnement au démarrage ; utiliser `31337` si absente ou invalide (entier décimal de 1 à 65535 exigé, §1).
 - [ ] En cas d'échec de bind (port déjà pris), loguer en debug et continuer sans paniquer l'app hôte.
 
 ### Garde Host (obligatoire)
 
 - [ ] Implémenter un middleware (ou filtre de requête) qui vérifie le header `Host` avant toute route.
 - [ ] Accepter : `localhost` (insensible à la casse), `localhost:<port>`, `127.0.0.1`, `127.0.0.1:<port>`, `[::1]`, `[::1]:<port>`.
-- [ ] Rejeter tout autre `Host` avec `403 Forbidden` sans traiter la route.
+- [ ] Rejeter tout autre `Host` (y compris absent, `::1` sans crochets, `[::1]toto`, port non numérique) avec `403 Forbidden` et un corps `{ "error": "..." }`, sans traiter la route ni décoder le corps.
+- [ ] Ne jamais émettre `Access-Control-Allow-Origin` ni `Access-Control-Allow-Credentials` (§2.6).
+- [ ] Répondre `404` aux chemins inconnus, `405` aux méthodes non prévues, un `4xx` aux corps JSON invalides ou incomplets (§3.0), chaque fois avec le header de version.
+- [ ] Émettre les horodatages en RFC 3339 UTC suffixé `Z` (§3.0).
 - [ ] Inclure `X-DevEye-Protocol-Version: 1.0` (forme `MAJEURE.MINEURE`) dans toutes les réponses.
 - [ ] Limiter le corps des requêtes (1 Mio recommandé) et répondre `413` au-delà.
 - [ ] Masquer les valeurs des clés sensibles (§2.4) dans l'état et les champs de logs, ou documenter l'absence de masquage.
@@ -581,3 +652,77 @@ Cette liste est le guide opérationnel pour tout SDK dans un langage tiers (par 
 - [ ] Vérifier que le serveur ne démarre pas si `debug_assertions` est false (ou `#if DEBUG` est désactivé).
 - [ ] Vérifier que le header `X-DevEye-Protocol-Version: 1.0` est présent dans chaque réponse.
 - [ ] Vérifier que `GET /devtools/info` annonce `protocol_version` `1.0`.
+- [ ] **Lancer la suite de conformité** (section 7) : `deveye-conformance --url http://127.0.0.1:<port>` doit conclure « CONFORME » sans échec. Les `curl` ci-dessus restent utiles pour diagnostiquer un écart, la suite les remplace comme preuve.
+
+---
+
+## 7. Valider une implémentation : la suite de conformité
+
+`deveye-conformance` (crate du dépôt, binaire du même nom) est une suite **boîte noire** : elle ne connaît de l'implémentation que son URL et compare ses réponses à ce document. Elle valide indifféremment le SDK Rust, un shim dans un autre langage ou toute implémentation tierce ; le SDK Rust la passe à 100 % à chaque `cargo test --workspace` (test `deveye-conformance/tests/sdk_conformance.rs`, qui démarre le SDK en processus sur un port éphémère).
+
+### Mode d'emploi
+
+1. Lancer l'app (ou le shim) en mode debug, avec son serveur DevEye sur un port connu, par exemple `DEVEYE_PORT=31337`.
+2. Lancer la suite contre cette URL, depuis le dépôt DevEye :
+
+```bash
+cargo run -p deveye-conformance -- --url http://127.0.0.1:31337
+# ou, via la recette du dépôt :
+just conformance http://127.0.0.1:31337
+```
+
+Exemple pour un shim .NET (processus indépendant, démarré avant) : la suite ne touche à aucun fichier du shim, elle lui parle en HTTP.
+
+3. Lire le rapport : une ligne par vérification (`OK`, `FAIL`, `SKIP`), l'écart expliqué sous chaque `FAIL`, puis le bilan. **Code de sortie** : `0` conforme (aucun `FAIL`), `1` au moins un écart, `2` suite inexécutable (URL invalide, implémentation injoignable).
+
+### Options
+
+| Option | Effet |
+|---|---|
+| `--url <URL>` | Base de l'implémentation (défaut `http://127.0.0.1:31337`) ; `http://` uniquement |
+| `--invoke-route <nom>` | Invoque cette commande (sans effet de bord) et exige `200` + JSON |
+| `--slow-expression <js>` | Expression que la pompe d'évaluation laisse sans réponse : exige `504` (dure 10 s) |
+| `--abandon-expression <js>` | Expression que la pompe abandonne : exige `500` |
+| `--strict` | Un `SKIP` fait aussi échouer (toute la spec a dû être observée) |
+
+### Ce que la suite vérifie
+
+Une vérification est `SKIP`, jamais `OK` par défaut, quand l'état de l'implémentation ne permet pas de l'observer (aucun log émis, moins de deux commandes, pas de clé sensible, option absente). Pour tout observer : poser `set_state("password", ...)`, enregistrer au moins deux commandes, émettre au moins deux logs avant de lancer la suite, et fournir les options ci-dessus.
+
+| Identifiant | Section | Exigence |
+|---|---|---|
+| `ROUTE-01` à `ROUTE-04` | §3.1, §3.6, §3.5, §3.2 | formes de `state`, `info`, `commands`, `logs/poll`, Content-Type JSON |
+| `VERS-01` | §2.3 | header de version `MAJEURE.MINEURE` (majeure `1`) sur chaque route |
+| `HOST-01` à `HOST-04` | §2.2 | 7 hôtes acceptés, 13 rejetés, `Host` absent, garde avant routage, corps `{error}` |
+| `ERR-01` à `ERR-04` | §3.0 | `404`, `405`, JSON invalide, champ obligatoire absent, avec header de version |
+| `SIZE-01` | §2.5 | `413` au-delà de 1 Mio |
+| `CORS-01`, `CORS-02` | §2.6 | aucune autorisation cross-origin (préflight et requête simple) |
+| `CMD-01` à `CMD-03` | §3.4, §3.5 | commande inconnue `404 {error}`, payload absent ou `null`, tri, invocation `200` |
+| `LOGS-01` à `LOGS-03` | §3.0, §3.2 | horodatages RFC 3339 UTC, ordre d'émission, poll destructif |
+| `EVAL-01` à `EVAL-03` | §3.3 | `503`/`200` selon la capacité `eval`, `504`, `500` |
+| `SEC-01` | §2.4 | masquage des clés sensibles, si la capacité `redaction` est annoncée |
+
+Les en-têtes de version sur `200`, `403`, `404`, `405`, `413`, `500` et les erreurs de décodage sont contrôlés dans chacune de ces vérifications. Ce qui n'est **pas** vérifié : le comportement interne des handlers de commande, le contenu des résultats d'évaluation, la sécurité compile-time du §2.1 (`#if DEBUG`), le comportement en cas de bind raté et le masquage par clés ajoutées par l'app (`Config::secret_keys`).
+
+### Intégration continue
+
+Le dépôt exécute la suite contre le SDK Rust via `cargo test --workspace` (job de tests de la CI). Pour une implémentation tierce, la suite est lancée par le dépôt de cette implémentation : cloner DevEye à une version étiquetée, `cargo run -p deveye-conformance -- --url ... --strict`, et échouer sur un code de sortie non nul. Le dépôt de l'implémentation tierce n'est jamais modifié par DevEye.
+
+---
+
+## 8. Schémas JSON
+
+Les corps normatifs sont décrits par des JSON Schema (brouillon 2020-12), versionnés avec le protocole dans `docs/schemas/1.0/`. Un `1.x` additif ajoute des champs optionnels à ces schémas sans en retirer ; une `2.0` crée `docs/schemas/2.0/`. Les schémas autorisent les propriétés inconnues (`additionalProperties` non fermé) : la règle du §2.3 veut que les clients les ignorent.
+
+| Schéma | Corps décrit |
+|---|---|
+| [`state.json`](schemas/1.0/state.json) | réponse `GET /devtools/state` |
+| [`info.json`](schemas/1.0/info.json) | réponse `GET /devtools/info` |
+| [`commands.json`](schemas/1.0/commands.json) | réponse `GET /devtools/commands` |
+| [`logs-poll.json`](schemas/1.0/logs-poll.json) | réponse `GET /devtools/logs/poll` (événements de log) |
+| [`eval-request.json`](schemas/1.0/eval-request.json) | requête `POST /devtools/eval` |
+| [`eval-response.json`](schemas/1.0/eval-response.json) | réponse `POST /devtools/eval` (`200`, `500`, `503`, `504`) |
+| [`command-request.json`](schemas/1.0/command-request.json) | requête `POST /devtools/command` |
+| [`error.json`](schemas/1.0/error.json) | corps d'erreur `{ "error": "..." }` (`403`, `404` de commande) |
+
+Les schémas décrivent la **forme** ; les règles de comportement (codes, tri, drain, garde Host) restent dans le texte et dans la suite de conformité. La réponse `200` de `POST /devtools/command` n'a pas de schéma : c'est la valeur libre du handler de l'app.

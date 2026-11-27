@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/1.0/logs-poll.json",
+  "title": "DevEye 1.0 : réponse de GET /devtools/logs/poll",
+  "description": "Événements de log accumulés depuis le dernier poll (le poll est destructif), dans l'ordre d'émission.",
+  "type": "object",
+  "required": ["events"],
+  "properties": {
+    "events": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/logEvent" }
+    }
+  },
+  "$defs": {
+    "logEvent": {
+      "type": "object",
+      "required": ["level", "target", "message", "timestamp"],
+      "properties": {
+        "level": { "enum": ["trace", "debug", "info", "warn", "error"] },
+        "target": { "type": "string" },
+        "message": { "type": "string" },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$",
+          "description": "RFC 3339 en UTC, suffixé Z, fraction de seconde de 0 à 9 chiffres."
+        },
+        "fields": {
+          "type": ["object", "null"],
+          "description": "Paires clé/valeur structurées ; absent quand il n'y en a pas (null toléré à la lecture). Clés sensibles masquées."
+        }
+      }
+    }
+  }
+}

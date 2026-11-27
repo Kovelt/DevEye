@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Morgan-Voltz/DevEye/docs/schemas/1.0/eval-request.json",
+  "title": "DevEye 1.0 : requête de POST /devtools/eval",
+  "description": "Expression JS à évaluer dans le webview de l'app (typiquement une IIFE).",
+  "type": "object",
+  "required": ["expression"],
+  "properties": {
+    "expression": { "type": "string" }
+  }
+}
