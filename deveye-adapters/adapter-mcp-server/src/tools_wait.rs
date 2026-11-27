@@ -9,7 +9,13 @@ use super::*;
 #[tool_router(router = wait_router, vis = "pub(crate)")]
 impl DeveyeMcpServer {
     #[tool(
-        description = "Attend qu'un sélecteur CSS soit présent (et optionnellement visible) dans le DOM. Renvoie `{ found, elapsed_ms }` (`isError` si non satisfait). Avec `negate=true`, attend au contraire que l'élément DISPARAISSE (wait_for_gone : spinner/toast/modale) — `found=true` signifie alors « disparu ». Évite tout sleep arbitraire. Défaut 5000 ms, plafond 30000."
+        description = "Attend qu'un sélecteur CSS soit présent (et optionnellement visible) dans le DOM. Renvoie `{ found, elapsed_ms }` (`isError` si non satisfait). Avec `negate=true`, attend au contraire que l'élément DISPARAISSE (wait_for_gone : spinner/toast/modale) — `found=true` signifie alors « disparu ». Évite tout sleep arbitraire. Défaut 5000 ms, plafond 30000.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     pub(crate) async fn wait_for_selector(
         &self,
@@ -51,7 +57,13 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Attend qu'un texte apparaisse dans l'innerText/textContent d'un élément (`selector`, ou le document entier si absent). Renvoie `{ found, elapsed_ms }` (`isError` si non satisfait). Avec `visible=true`, l'élément doit en plus avoir un rect non vide. Indisponible en kwin-eis (pas de DOM) — le prédicat `text-content` sous-jacent ne s'y satisfait jamais. Défaut 5000 ms, plafond 30000."
+        description = "Attend qu'un texte apparaisse dans l'innerText/textContent d'un élément (`selector`, ou le document entier si absent). Renvoie `{ found, elapsed_ms }` (`isError` si non satisfait). Avec `visible=true`, l'élément doit en plus avoir un rect non vide. Indisponible en kwin-eis (pas de DOM) — le prédicat `text-content` sous-jacent ne s'y satisfait jamais. Défaut 5000 ms, plafond 30000.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     pub(crate) async fn wait_for_text(
         &self,
@@ -86,7 +98,13 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Attend qu'un prédicat soit satisfait, ou que le timeout expire. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si non satisfait. Prédicats : dom-selector (présence CSS), state-key (valeur dans le state SDK), screenshot-stable (stabilité visuelle pendant threshold_ms), target-alive (attend qu'une cible crashée redevienne joignable, cf. wait_target_alive), text-content (attend un texte dans le DOM, cf. wait_for_text). Évite tout sleep arbitraire."
+        description = "Attend qu'un prédicat soit satisfait, ou que le timeout expire. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si non satisfait. Prédicats : dom-selector (présence CSS), state-key (valeur dans le state SDK), screenshot-stable (stabilité visuelle pendant threshold_ms), target-alive (attend qu'une cible crashée redevienne joignable, cf. wait_target_alive), text-content (attend un texte dans le DOM, cf. wait_for_text). Évite tout sleep arbitraire.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     pub(crate) async fn wait_condition(
         &self,
@@ -117,7 +135,13 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Attend qu'un log applicatif (tracing du SDK) dont le message contient `contains` (et de niveau >= `level_min`) soit émis. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Observe les logs Rust bufferisés, hors de portée d'eval_js. NB : pendant l'attente le buffer de logs est drainé (les logs non concernés sont consommés, non renvoyés : utiliser `logs_wait` pour les récupérer). `level_min` invalide : erreur `invalid_params`. Défaut 5000 ms, plafond 60000."
+        description = "Attend qu'un log applicatif (tracing du SDK) dont le message contient `contains` (et de niveau >= `level_min`) soit émis. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Observe les logs Rust bufferisés, hors de portée d'eval_js. NB : pendant l'attente le buffer de logs est drainé (les logs non concernés sont consommés, non renvoyés : utiliser `logs_wait` pour les récupérer). `level_min` invalide : erreur `invalid_params`. Défaut 5000 ms, plafond 60000.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
     )]
     pub(crate) async fn wait_for_log(
         &self,
@@ -147,7 +171,13 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Comme la stabilité visuelle, mais sur une RÉGION (x, y, width, height) seulement : attend que cette zone se stabilise (deux captures identiques à `threshold_ms` d'intervalle). Ignore un curseur clignotant / une horloge ailleurs. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Défaut threshold 300 (plafond 2000), timeout 5000 (plafond 60000)."
+        description = "Comme la stabilité visuelle, mais sur une RÉGION (x, y, width, height) seulement : attend que cette zone se stabilise (deux captures identiques à `threshold_ms` d'intervalle). Ignore un curseur clignotant / une horloge ailleurs. Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Défaut threshold 300 (plafond 2000), timeout 5000 (plafond 60000).",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     pub(crate) async fn wait_screenshot_region(
         &self,
@@ -178,7 +208,13 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Attend que le CANAL D'INTERACTION de la cible redevienne joignable après un crash/redémarrage (sonde eval_js ; sur kwin-eis, sans JS, retombe sur la capture d'écran). Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Raccourci du prédicat target-alive (wait_condition) — seul paramètre : le timeout. Défaut 5000 ms, plafond 60000."
+        description = "Attend que le CANAL D'INTERACTION de la cible redevienne joignable après un crash/redémarrage (sonde eval_js ; sur kwin-eis, sans JS, retombe sur la capture d'écran). Renvoie `{ satisfied, elapsed_ms, detail }` ; `isError` si timeout. Raccourci du prédicat target-alive (wait_condition) — seul paramètre : le timeout. Défaut 5000 ms, plafond 60000.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     pub(crate) async fn wait_target_alive(
         &self,
@@ -202,7 +238,13 @@ impl DeveyeMcpServer {
     }
 
     #[tool(
-        description = "Attend que l'app cible publie un state non vide (signe qu'elle est prête), au plus `timeout_ms` ms (poll toutes les 200 ms, plafond 60000). Évite les captures/clics prématurés juste après le lancement. `isError` si le délai expire."
+        description = "Attend que l'app cible publie un state non vide (signe qu'elle est prête), au plus `timeout_ms` ms (poll toutes les 200 ms, plafond 60000). Évite les captures/clics prématurés juste après le lancement. `isError` si le délai expire.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     pub(crate) async fn wait_ready(
         &self,
