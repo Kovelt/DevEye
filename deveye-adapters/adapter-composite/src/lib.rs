@@ -243,6 +243,22 @@ fn absorb_transient<T>(result: PortResult<T>, predicate: &'static str) -> PortRe
     }
 }
 
+/// Variante de [`absorb_transient`] pour les predicats adosses au SDK de l'app
+/// (`state_snapshot`, `poll` des logs). Une `PortError::Protocol` y vient d'une
+/// incompatibilite de majeure du wire protocol, d'une route absente ou d'une
+/// reponse illisible : rien qui s'arrange en reessayant. La propager donne a
+/// l'appelant le message actionnable au lieu d'un `wait_for` qui expire sans
+/// explication.
+fn absorb_transient_sdk<T>(
+    result: PortResult<T>,
+    predicate: &'static str,
+) -> PortResult<Option<T>> {
+    match result {
+        Err(e @ PortError::Protocol(_)) => Err(e),
+        other => absorb_transient(other, predicate),
+    }
+}
+
 impl CompositeWaitCondition {
     /// Coeur partage de `ScreenshotStable` / `ScreenshotRegionStable` (perf
     /// B3) : ne capture qu'UNE nouvelle image, comparee au hash memorise dans
@@ -348,7 +364,8 @@ impl CompositeWaitCondition {
             }
             WaitPredicate::StateKey { key, expected } => {
                 let dump =
-                    match absorb_transient(self.inspector.state_snapshot().await, "state-key")? {
+                    match absorb_transient_sdk(self.inspector.state_snapshot().await, "state-key")?
+                    {
                         Some(d) => d,
                         None => return Ok(false),
                     };
@@ -379,10 +396,11 @@ impl CompositeWaitCondition {
                 // Draine le buffer de logs et teste chaque evenement. Le drain
                 // consomme les logs (cf. doc du predicat) : un match dans cette
                 // iteration suffit a satisfaire l'attente.
-                let events = match absorb_transient(self.log_source.poll().await, "log-message")? {
-                    Some(e) => e,
-                    None => return Ok(false),
-                };
+                let events =
+                    match absorb_transient_sdk(self.log_source.poll().await, "log-message")? {
+                        Some(e) => e,
+                        None => return Ok(false),
+                    };
                 let min = level_min.unwrap_or(LogLevel::Trace);
                 Ok(events
                     .iter()
@@ -1347,6 +1365,47 @@ mod tests {
                 entries.insert("phase".to_string(), serde_json::json!("ready"));
                 Ok(StateDump::new(entries))
             }
+        }
+    }
+
+    /// Une incompatibilite de majeure du wire protocol (`PortError::Protocol`
+    /// cote SDK) ne doit pas etre avalee en « pas encore vrai » : `wait_until`
+    /// la propage avec son message au lieu d'expirer sans explication.
+    #[tokio::test]
+    async fn composite_state_key_propagates_incompatible_protocol() {
+        struct IncompatibleInspector;
+        #[async_trait]
+        impl AppInspector for IncompatibleInspector {
+            async fn dom_snapshot(&self) -> PortResult<DomTree> {
+                Err(PortError::Unsupported("stub".to_string()))
+            }
+            async fn state_snapshot(&self) -> PortResult<StateDump> {
+                Err(PortError::Protocol(
+                    "majeure du SDK incompatible (2, attendue 1)".to_string(),
+                ))
+            }
+        }
+        let cond = CompositeWaitCondition {
+            evaluator: Arc::new(UnusedEval),
+            inspector: Arc::new(IncompatibleInspector),
+            renderer: Arc::new(ConstRenderer {
+                png: solid_png(2, 2),
+                size: Size::new(2, 2),
+            }),
+            log_source: Arc::new(EmptyLog),
+        };
+        let result = cond
+            .wait_until(
+                WaitPredicate::StateKey {
+                    key: "phase".to_string(),
+                    expected: serde_json::json!("ready"),
+                },
+                Duration::from_millis(500),
+            )
+            .await;
+        match result {
+            Err(PortError::Protocol(message)) => assert!(message.contains("incompatible")),
+            other => panic!("Protocol doit se propager, recu: {other:?}"),
         }
     }
 
