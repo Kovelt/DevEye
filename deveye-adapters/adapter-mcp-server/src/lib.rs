@@ -96,7 +96,7 @@ use std::time::{Duration, Instant};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, ContentBlock, ServerCapabilities, ServerConfig},
     service::ServiceExt,
     tool, tool_handler, tool_router,
     transport::stdio,
@@ -694,10 +694,10 @@ impl DeveyeMcpServer {
 
 #[tool_handler]
 impl ServerHandler for DeveyeMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        // `ServerInfo` est `#[non_exhaustive]` : on part du default et on
+    fn get_info(&self) -> ServerConfig {
+        // `ServerConfig` est `#[non_exhaustive]` : on part du default et on
         // mute les champs qui nous intéressent.
-        let mut info = ServerInfo::default();
+        let mut info = ServerConfig::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
             "DevEye MCP — observe et pilote une app vivante en dev. \
@@ -723,7 +723,7 @@ impl ServerHandler for DeveyeMcpServer {
 /// La serialisation ne peut echouer sur les types utilises ici (tous implementent
 /// `Serialize` correctement) ; le fallback `"null"` est purement defensif. N14.
 fn json_success<T: Serialize>(value: &T) -> CallToolResult {
-    CallToolResult::success(vec![Content::text(
+    CallToolResult::success(vec![ContentBlock::text(
         serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
     )])
 }
@@ -732,7 +732,7 @@ fn json_success<T: Serialize>(value: &T) -> CallToolResult {
 /// Utilise pour les echecs semantiques (element absent H1, timeout L13) qui ne
 /// doivent pas etre confondus avec un succes par le client MCP.
 fn json_error<T: Serialize>(value: &T) -> CallToolResult {
-    CallToolResult::error(vec![Content::text(
+    CallToolResult::error(vec![ContentBlock::text(
         serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
     )])
 }
@@ -1431,7 +1431,7 @@ mod dispatch_tests {
         DeveyeMcpServer::new(ports)
     }
 
-    /// Extrait et parse en JSON le premier bloc `Content::text` d'un
+    /// Extrait et parse en JSON le premier bloc `ContentBlock::text` d'un
     /// `CallToolResult` — tous les outils testes ici renvoient du JSON (E3).
     fn body_json(result: &CallToolResult) -> serde_json::Value {
         let text = result.content[0]

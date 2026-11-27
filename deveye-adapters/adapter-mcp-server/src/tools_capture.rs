@@ -20,7 +20,7 @@ impl DeveyeMcpServer {
         let b64 = B64.encode(&shot.bytes);
         // Contenu `image` (et non `text`) : le client MCP affiche le PNG —
         // c'est ce qui rend l'outil utilisable comme « yeux ».
-        Ok(CallToolResult::success(vec![Content::image(
+        Ok(CallToolResult::success(vec![ContentBlock::image(
             b64,
             "image/png",
         )]))
@@ -42,7 +42,7 @@ impl DeveyeMcpServer {
         };
         let cropped = crop_png(&shot.bytes, p.x, p.y, p.width, p.height).map_err(internal)?;
         let b64 = B64.encode(&cropped);
-        Ok(CallToolResult::success(vec![Content::image(
+        Ok(CallToolResult::success(vec![ContentBlock::image(
             b64,
             "image/png",
         )]))
@@ -100,7 +100,7 @@ impl DeveyeMcpServer {
         let h = (get("height") * scale_y).round().max(1.0) as u32;
         let cropped = crop_png(&shot.bytes, x, y, w, h).map_err(internal)?;
         let b64 = B64.encode(&cropped);
-        Ok(CallToolResult::success(vec![Content::image(
+        Ok(CallToolResult::success(vec![ContentBlock::image(
             b64,
             "image/png",
         )]))

@@ -42,7 +42,9 @@ impl DeveyeMcpServer {
         // Le JSON est deja serialise ci-dessus (pour mesurer sa taille) : on
         // le reutilise tel quel plutot que de rappeler json_success (qui
         // resserialiserait tree.tree en double).
-        Ok(CallToolResult::success(vec![Content::text(serialized)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            serialized,
+        )]))
     }
 
     #[tool(
