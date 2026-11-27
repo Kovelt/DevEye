@@ -3,7 +3,7 @@
 - **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
-- **ADR liés** : ADR-0072 (modèle de références, amendé ici), ADR-0069 (surface expérimentale), ADR-0062 et ADR-0065 (route `ui.widgets`, payload `{}`), ADR-0064 (masquage des secrets), ADR-0067 (sorties structurées), ADR-0068 (capacités additives), ADR-0011 (stabilité)
+- **ADR liés** : ADR-0072 (modèle de références, amendé ici), ADR-0069 (surface expérimentale), ADR-0062 et ADR-0065 (route `ui.widgets`, payload `{}`), ADR-0064 (masquage des secrets), ADR-0067 (sorties structurées), ADR-0068 (capacités additives), ADR-0011 (stabilité) ; amendé par ADR-0074 (le pont JS est câblé sur `sdk` et `auto`, qui ne reçoivent plus un inspecteur `unsupported`) et ADR-0075 (la liste des outils stables passe de 44 à 45 avec `key_hold`)
 
 ## Contexte et problème
 

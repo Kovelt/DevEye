@@ -86,6 +86,7 @@ DevEye/
 │       │                       # Navigate, DragDrop, Scroll, DoubleClick, HandleDialog, UploadFile,
 │       │                       # Resize, WithModifiers, KeyHold), MouseButton, CommandDescriptor
 │       ├── modifier.rs         # Modifier (Ctrl, Shift, Alt, Meta), MAX_KEY_HOLD_MS
+│       ├── elements.rs         # (unstable-elements) ElementSnapshot, ElementNode, RefTable, parse_ref
 │       ├── wait_condition.rs   # WaitPredicate, WaitOutcome
 │       ├── console_error.rs    # ConsoleError, ConsoleLevel
 │       ├── window_info.rs      # WindowInfo
@@ -105,20 +106,21 @@ DevEye/
 │       ├── window_lister.rs         # trait WindowLister
 │       ├── window_manager.rs        # trait WindowManager
 │       ├── clipboard.rs             # trait Clipboard
-│       └── window_geometry.rs       # trait WindowGeometry
+│       ├── window_geometry.rs       # trait WindowGeometry
+│       └── element_inspector.rs     # (unstable-elements) trait ElementInspector, ElementError
 │
 ├── deveye-adapters/                       ← IMPLÉMENTATIONS (un crate par adapter)
 │   ├── adapter-cdp-webview/               # Renderer + InteractionSink + AppInspector + JsEvaluator + WindowLister via CDP
 │   ├── adapter-screencap-xcap/            # Renderer OS-level (xcap — X11 / XWayland / Wayland non-KDE)
 │   ├── adapter-screencap-kwin/            # Renderer + WindowManager + WindowGeometry + WindowLister KDE Wayland (KWin D-Bus)
-│   ├── adapter-dioxus-signals/            # AppInspector + pont natif (JsEvaluator/InteractionSink) via SDK
+│   ├── adapter-dioxus-signals/            # AppInspector + pont natif (JsEvaluator/InteractionSink) via SDK ; BridgeElementInspector (elements_bridge.js, ElementInspector par script JS)
 │   ├── adapter-logs-tracing/              # LogSource via le buffer tracing du SDK opt-in
 │   ├── adapter-commands-http/             # CommandRouter via POST /devtools/command + GET /devtools/commands
 │   ├── adapter-interaction-kwin-eis/      # InteractionSink OS-level Wayland natif (KWin EIS)
 │   ├── adapter-clipboard-wayland/         # Clipboard OS-level via wl-copy / wl-paste (Wayland)
 │   ├── adapter-x11/                       # Renderer + InteractionSink + WindowLister + WindowGeometry + WindowManager sur un serveur X privé (x11rb pur Rust, XTEST)
-│   ├── adapter-composite/                 # WaitCondition + ConsoleErrorSource + AppInspector composites (sans I/O propre) ; RouteDomInspector (DOM par route de commande)
-│   └── adapter-mcp-server/               # consomme les 12 ports, expose au Model Context Protocol
+│   ├── adapter-composite/                 # WaitCondition + ConsoleErrorSource + AppInspector composites (sans I/O propre) ; RouteDomInspector (DOM par route de commande) ; RouteWidgetsElements (ElementInspector sur la route `ui.widgets`)
+│   └── adapter-mcp-server/               # consomme les 12 ports stables (+ 1 expérimental), expose au Model Context Protocol
 │
 ├── deveye-sdk/                 ← micro-lib opt-in à intégrer dans l'app cible (cfg debug), MIT
 ├── deveye-sdk-client/          ← client HTTP partagé (timeouts, URL par défaut, version du protocole) des adapters qui parlent au SDK, MIT
@@ -138,19 +140,19 @@ Les quatre crates MIT sont ceux qu'une app embarque ou qu'un tiers réutilise ; 
 
 ## Port expérimental : `ElementInspector`
 
-Derrière la feature `unstable-elements` de `deveye-ports` et `deveye-core` (hors promesse semver, [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md)), un 13ᵉ port désigne les éléments d'une cible par une référence stable : `snapshot(&SnapshotQuery)` rend un arbre compact (`ElementSnapshot`), `locate(&str)` remesure un élément au moment de l'action. Les références sont `e<n>` (DOM, attribuées par la `RefTable` pure du domaine, jamais réutilisées) ou `w:<id>` (widgets natifs, identifiant fourni par l'app). Son erreur `ElementError` (référence périmée avec candidats, inconnue, couverte, non prise en charge) est distincte de `PortError`. Décision : [ADR-0072](adr/0072-references-d-elements-stables-et-outils-snapshot-act.md).
+Derrière la feature `unstable-elements` de `deveye-ports` et `deveye-core` (hors promesse semver, [ADR-0069](adr/0069-surface-experimentale-par-features-unstable.md)), un 13ᵉ port désigne les éléments d'une cible par une référence stable : `snapshot(&SnapshotQuery)` rend un arbre compact (`ElementSnapshot`), `locate(&str)` remesure un élément au moment de l'action. Les références sont `e<n>` (DOM, attribuées par la `RefTable` pure du domaine, jamais réutilisées) ou `w:<id>` (widgets natifs, identifiant fourni par l'app). Son erreur `ElementError` (référence périmée avec candidats, inconnue, ambiguë, couverte, arbre périmé, non prise en charge) est distincte de `PortError`. Décision : [ADR-0072](adr/0072-references-d-elements-stables-et-outils-snapshot-act.md).
 
 Les outils MCP expérimentaux `snapshot` et `act` (`adapter-mcp-server`, `tools_perception.rs`) le consomment ; ils ne font qu'enchaîner `locate` puis une `InteractionCommand` existante (aucune variante nouvelle, aucune obligation pour les adapters d'interaction). Implémentations, par famille de cible ([ADR-0073](adr/0073-widgets-natifs-snapshot-act-relocalisation-et-candidats.md)) :
 
 | Famille | Cibles | Inspecteur | Références | Fraîcheur |
 |---|---|---|---|---|
 | Widgets natifs | `x11`, `kwin-eis` | `RouteWidgetsElements` (`adapter-composite`) sur la route `ui.widgets` | `w:<id>` (id fourni par l'app) | sans cache : chaque `snapshot` et chaque `act` relisent la route ; mémoire des seuls identifiants déjà vus, pour distinguer périmé et inconnu et proposer des candidats |
-| Webview sans CDP (pont WebKitGTK) | `sdk`, `auto` | `BridgeElementInspector` (`adapter-dioxus-signals`) : script JS synchrone évalué par un `JsEvaluator` (pompe SDK ; en `auto`, l'évaluateur de repli, CDP puis pompe) | `e<n>` (`RefTable`, clé `<epoch>:<n>` du script ; [ADR-0074](adr/0074-pont-js-d-elements-pour-webkitgtk.md)) | `WeakMap` élément vers numéro et `Map` numéro vers `WeakRef` dans la page ; epoch nouvelle à chaque chargement, donc génération suivante côté serveur |
+| Webview sans CDP (pont WebKitGTK) | `sdk`, `auto` | `BridgeElementInspector` (`adapter-dioxus-signals`) : script JS synchrone évalué par un `JsEvaluator` (pompe SDK ; en `auto`, l'évaluateur de repli, CDP puis pompe) | `e<n>` (`RefTable`, clé `<epoch>:<n>` du script ; [ADR-0074](adr/0074-pont-js-d-elements-pour-webkitgtk.md)) | `WeakMap` élément vers numéro et `Map` numéro vers `WeakRef` dans la page ; epoch nouvelle à chaque chargement de page (un rechargement invalide les références, une bascule de backend sur la même page les conserve) |
 | Webview CDP | `cdp` | pas encore câblé : `unsupported` avec une marche à suivre | `e<n>` | arbre d'accessibilité CDP, après le pont |
 
-`FallbackElementInspector` (`deveye-server`) suit le patron des autres replis : il ne bascule que sur une panne de **liaison** (`PortError::Network`), jamais sur une référence périmée, inconnue ou ambiguë (ce serait un rebind silencieux) ; il est réservé à l'arbre d'accessibilité CDP, qui deviendra le primaire du pont. En attendant, `auto` compose le pont sur l'évaluateur de repli : un changement de backend change de page côté script, donc d'epoch, donc de génération.
+`FallbackElementInspector` (`deveye-server`) suit le patron des autres replis : il ne bascule que sur une panne de **liaison** (`PortError::Network`), jamais sur une référence périmée, inconnue ou ambiguë (ce serait un rebind silencieux) ; il est réservé à l'arbre d'accessibilité CDP, qui deviendra le primaire du pont. En attendant, `auto` compose le pont sur l'évaluateur de repli : un changement de backend sur la même page garde le même script, donc la même epoch et les mêmes références ; seul un rechargement de page change d'epoch, donc de génération.
 
-## Les 12 ports en détail
+## Les 12 ports stables en détail
 
 ### 1. `Renderer`
 

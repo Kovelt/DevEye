@@ -516,13 +516,13 @@ focus: w:name
 
 Marqueurs : `[disabled]`, `[checked]` ou `[unchecked]`, `[expanded]` ou `[collapsed]`, `[selected]`, `[focused]`, `[offscreen]`, `[scrollable]`, `[ephemeral]`, puis ` = "valeur"` (tronquée à 80 caractères). `focus:` désigne l'élément qui a le focus clavier. L'en-tête dit `TRONQUÉ` quand `max_nodes` ou `max_depth` a coupé l'arbre : cibler un `scope`. Avec `format: "json"`, la réponse porte le même contenu avec les rects et `generation` (texte et `structuredContent` égaux) ; les rects sont **indicatifs**. Sans arbre d'éléments sur la cible : `isError` `{ ok: false, reason: "unsupported", hint }` ; le `hint` dit quoi faire (exposer `ui.widgets` avec `deveye_sdk::ui::publish`, ou `screenshot` puis `click` aux coordonnées).
 
-**Taille mesurée** (test de bout en bout sous Xvfb, route `ui.widgets` factice) : 4 widgets, 200 octets de texte contre 416 de `dom` ; environ 55 widgets (liste de 50 lignes), 2 531 octets contre 6 377 pour `dom` (39 %). Mesure consignée, sans seuil : `format: "json"` coûte environ le double du texte. **Pont JS** (test dans Chromium headless, page de 56 éléments dont une liste de 40 lignes au balisage verbeux) : environ 1,6 Ko de texte compact, 5,3 Ko en JSON, contre 18,8 Ko de DOM brut (`outerHTML`), soit 9 % et 28 %.
+**Taille mesurée** (test de bout en bout sous Xvfb, route `ui.widgets` factice) : 4 widgets, 200 octets de texte contre 416 de `dom` ; environ 55 widgets (liste de 50 lignes), 2 531 octets contre 6 377 pour `dom` (39 %). Mesure consignée, sans seuil : `format: "json"` coûte environ le double du texte. **Pont JS** (test dans Chromium headless, page de 56 éléments dont une liste de 40 lignes au balisage verbeux) : environ 1,6 Ko pour une approximation du texte (une ligne `role "nom" [ref]` par élément, sans indentation ni marqueurs d'état : le rendu réel de l'outil est un peu plus gros), 5,3 Ko pour l'`ElementSnapshot` en JSON (borne haute du rendu réel), contre 18,8 Ko pour `document.documentElement.outerHTML` (et non la sortie de l'outil `dom`, à laquelle se comparent les mesures widgets ci-dessus) ; ordres de grandeur, non comparables chiffre à chiffre avec la mesure widgets.
 
 #### `act`
 
 Agit sur l'élément `ref`. `action` : `click` (`button` optionnel), `double_click`, `right_click`, `hover`, `type` (clique pour donner le focus puis saisit `text`), `scroll_into_view` (vérifie que l'élément est visible), `scroll` (molette `dx`/`dy` ancrée sur l'élément). Un paramètre sans sens pour l'action (`text` hors `type`, `dx` ou `dy` hors `scroll`, `button` hors `click`) est refusé en `invalid_params` avant tout accès à la cible. Succès : `{ ok: true, action, ref, x, y }` (centre remesuré cliqué, en pixels). Les gestes sont ceux de `click`, `double_click`, `hover`, `type_text` et `scroll`, avec les mêmes cibles et les mêmes limites (`{ ok: true }` signifie « événements envoyés »).
 
-Échecs sémantiques (`isError`, `{ ok: false, reason, ref, detail, hint?, candidates?, by? }`), tous **sans aucun événement émis** :
+Échecs sémantiques (`isError`, `{ ok: false, reason, ref, detail, hint?, candidates?, by? }`), **sans aucun événement émis** (seule exception : `interaction_failed`, voir sous le tableau) :
 
 | `reason` | Cas |
 |---|---|
@@ -534,6 +534,7 @@ Agit sur l'élément `ref`. `action` : `click` (`button` optionnel), `double_cli
 | `disabled` | élément désactivé (un `hover` ou un `scroll` reste permis) |
 | `obscured` | un autre élément recouvre le centre (`by` : sa référence). Produit sur les pages web (`elementFromPoint` au centre remesuré) ; pas pour les widgets natifs, dont l'arbre ne dit pas qui est dessiné au-dessus |
 | `unsupported` | la cible n'a pas d'arbre d'éléments (`hint`) |
+| `interaction_failed` | l'adapter d'interaction a refusé un geste. Pour `type`, qui enchaîne deux gestes (clic de mise au focus, puis saisie), le clic est **déjà parti** quand la saisie échoue : relancer `snapshot` avant de réessayer |
 
 ---
 

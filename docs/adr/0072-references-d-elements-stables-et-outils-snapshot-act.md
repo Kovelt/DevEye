@@ -3,7 +3,7 @@
 - **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
-- **ADR liés** : ADR-0069 (surface expérimentale), ADR-0062 (schéma `deveye.ui/1`), ADR-0067 (sorties structurées), ADR-0068 (capacités additives), ADR-0070 (compatibilité de `default-features = false`), ADR-0041 (architecture hexagonale) ; amendé par ADR-0073 (`ElementLocation::disabled`, `ElementError::Ambiguous`)
+- **ADR liés** : ADR-0069 (surface expérimentale), ADR-0062 (schéma `deveye.ui/1`), ADR-0067 (sorties structurées), ADR-0068 (capacités additives), ADR-0070 (compatibilité de `default-features = false`), ADR-0041 (architecture hexagonale), ADR-0064 (masquage des secrets : `ElementNode::value` n'est jamais celle d'un champ secret, garanti par chaque adapter et ses tests) ; amendé par ADR-0073 (`ElementLocation::disabled`, `ElementError::Ambiguous`)
 
 ## Contexte et problème
 
@@ -35,7 +35,7 @@ Cet ADR décide du **modèle** (types, table de références, port). Les adapter
 - `e<n>` pour les cibles à DOM : numéro monotone attribué par `RefTable`, stable tant que le nœud vit, **jamais réutilisé** dans une session (le compteur survit à l'invalidation) ;
 - `w:<id>` pour les widgets natifs : l'identifiant fourni par l'app. La stabilité d'une relance à l'autre n'est promise que si l'app fournit des identifiants déterministes ; un identifiant dupliqué ou synthétisé (`ephemeral`) ne l'est pas, et `doctor` le signalera (lot suivant).
 
-**`RefTable<K>`** (pure, sans E/S) associe la clé d'un nœud côté backend à `e<n>`. `retain` et `forget` périment les nœuds disparus ; `invalidate` ouvre une nouvelle génération (navigation principale, reconnexion, changement de backend) et périme tout. Une référence se résout en clé, ou en `RefError::Stale` (numéro déjà émis mais mort) ou `RefError::Unknown` (jamais émis ou forme invalide) : la distinction commande le hint de l'outil (« relancer snapshot » contre « référence inventée »).
+**`RefTable<K>`** (pure, sans E/S) associe la clé d'un nœud côté backend à `e<n>`. `retain` et `forget` périment les nœuds disparus ; `invalidate` ouvre une nouvelle génération (navigation principale, reconnexion ; un changement de backend sur la même page ne l'impose pas, cf. ADR-0074) et périme tout. Une référence se résout en clé, ou en `RefError::Stale` (numéro déjà émis mais mort) ou `RefError::Unknown` (jamais émis ou forme invalide) : la distinction commande le hint de l'outil (« relancer snapshot » contre « référence inventée »).
 
 **Port `ElementInspector`** (`deveye-ports`, même feature) : `snapshot(&SnapshotQuery)` et `locate(&str)`. Son erreur, `ElementError` (`Stale` avec candidats de même rôle et nom, `UnknownRef`, `Obscured`, `Unsupported` avec hint, `Port`), est **distincte de `PortError`** : `PortError` reste inchangé, donc aucun élément stable n'est touché. `locate` remesure à chaque appel ; l'action elle-même passe par `InteractionSink` avec une `InteractionCommand` existante, donc aucune obligation nouvelle pour les adapters d'interaction.
 

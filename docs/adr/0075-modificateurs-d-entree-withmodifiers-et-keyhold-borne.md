@@ -3,7 +3,7 @@
 - **Statut** : Accepté
 - **Date** : 2026-11-27
 - **Décideurs** : Morgan Voltz, mainteneur
-- **ADR liés** : ADR-0011 (stabilité), ADR-0012 (`InteractionCommand` non exhaustif), ADR-0021 (validation des gestes), ADR-0027 (annotations MCP), ADR-0045 (focus et kwin-eis), ADR-0067 (sorties structurées), ADR-0041 (architecture hexagonale)
+- **ADR liés** : ADR-0011 (stabilité), ADR-0012 (`InteractionCommand` non exhaustif), ADR-0021 (validation des gestes), ADR-0027 (annotations MCP), ADR-0045 (focus et kwin-eis), ADR-0067 (sorties structurées), ADR-0041 (architecture hexagonale), ADR-0073 (outils `snapshot` et `act`, amendé ici sur le compte des outils stables)
 
 ## Contexte et problème
 
@@ -55,6 +55,10 @@ Les gestes de pointeur (`Click`, `DoubleClick`, `Hover`, `DragDrop`, `Scroll`) n
 - sous Wayland, l'auto-répétition d'une touche maintenue dépend du compositeur ; le comportement de `KeyHold` sur une session KDE vivante reste à valider à la main (le dialogue d'autorisation EIS est interactif), de même que Shift+clic dans un gestionnaire de fichiers ;
 - une touche XTEST pressée reste enfoncée côté serveur X si le serveur DevEye est tué (`SIGKILL`) entre l'appui et le relâchement : le nettoyage de `execute` ne couvre que l'erreur, pas la mort du processus. La borne de 10 s limite la fenêtre d'exposition d'un `KeyHold`, pas celle d'un geste modifié ; un Xvfb privé jetable rend le risque négligeable ;
 - `key_hold` bloque le verrou des gestes jusqu'à 10 s : un client dont le délai d'appel est plus court verra l'appel expirer alors que la touche est bien relâchée côté serveur.
+
+**Forme figée** : `WithModifiers { modifiers, command }`, `KeyHold { key, duration_ms }` et `UnknownModifier(pub String)` entrent dans la surface stable avec des champs publics, comme les autres variantes struct de `InteractionCommand` ; ajouter un champ à l'une d'elles serait une rupture. Choix assumé (cohérence avec l'enum, constructeurs `with_modifiers` et `key_hold` à préférer), faute de pouvoir graduer ces variantes en `unstable-*` sans les retirer de la surface que les adapters stables consomment.
+
+**Validation manuelle sur session EIS vivante** (hors CI, le dialogue d'autorisation est interactif) : Shift+clic dans un gestionnaire de fichiers ; `key_hold` d'une touche de caractère ; **modificateur suivi d'un geste en erreur** (par exemple un `click` hors viewport sous `WithModifiers`) : le modificateur doit être relâché et aucune touche ne doit rester collée ; refus du clavier seul puis du pointeur seul. `EisSession::with_modifiers` (résolution avant le premier appui, séquence des deux périphériques) n'est pas exécuté par les tests automatiques, qui couvrent `run_with_held_keys` et `hold_key` par un faux sink.
 
 **Suites possibles** : `KeyHold` en cdp par `dispatchKeyEvent` si un besoin réel apparaît ; `#[non_exhaustive]` sur les variantes struct en 2.0, qui rendrait possible l'option 1.
 
