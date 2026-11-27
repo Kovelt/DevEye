@@ -1,0 +1,186 @@
+# Intégration continue DevEye (ADR-0003, ADR-0037, ADR-0038).
+# Les mêmes commandes existent en local dans le `justfile` (`just ci`).
+# Actions épinglées par SHA de commit (le tag d'origine est en commentaire).
+name: CI
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+  workflow_dispatch:
+
+# Un nouveau push sur une PR annule le run précédent devenu obsolète.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  # Dépendances système des adapters Linux :
+  #   xcap (capture)       -> libxcb, libxrandr, libgbm (backend Wayland)
+  #   zbus (KWin D-Bus)    -> libdbus
+  #   xkbcommon (EIS)      -> libxkbcommon ; reis est en Rust pur (pas de libei)
+  #   xvfb                 -> serveur X privé des tests x11 et e2e
+  APT_DEPS: >-
+    pkg-config libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev
+    libgbm-dev xvfb
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+      - run: cargo fmt --all --check
+
+  check:
+    name: Clippy, tests et documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Dépendances système
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $APT_DEPS
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests du workspace
+        run: cargo test --workspace --locked
+      - name: Documentation (avertissements = erreurs)
+        run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # Tests contre un vrai serveur X (Xvfb privé, display >= 100) : adapter x11
+  # et session MCP complète du binaire. BLOQUANTS : un échec casse la CI.
+  xvfb:
+    name: Tests Xvfb (x11 et e2e MCP)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Dépendances système
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $APT_DEPS
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Adapter x11 contre Xvfb
+        run: cargo test -p adapter-x11 --locked -- --ignored --test-threads=1
+      - name: Session MCP de bout en bout (binaire, stdio, Xvfb)
+        run: cargo test -p deveye-server --test e2e_mcp --locked -- --ignored --test-threads=1
+
+  msrv:
+    name: MSRV 1.88
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Dépendances système
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends $APT_DEPS
+      - name: Toolchain 1.88
+        run: rustup toolchain install 1.88 --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          key: msrv
+      - run: cargo +1.88 check --workspace --all-targets --locked
+
+  deny:
+    name: Dépendances (cargo deny)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: taiki-e/install-action@09dc018eee06ae1c9e0409786563f534210ceb83 # v2.49.50
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
+
+  conformance:
+    name: Conformité du wire protocol
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Suite de conformité contre le SDK Rust
+        run: cargo test -p deveye-conformance --locked
+
+  # Le SDK ne doit rien faire en release : filet de test, puis preuve sur
+  # binaire réel (aucune trace du serveur HTTP dans l'exemple compilé).
+  sdk-release:
+    name: SDK no-op en release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Test release du SDK
+        run: cargo test --release --locked -p deveye-sdk --test release_noop
+      - name: Preuve sur binaire (aucun symbole du serveur HTTP)
+        run: scripts/verify-sdk-release-noop.sh
+
+  # Compatibilité d'API des bibliothèques MIT, SEULEMENT une fois une version
+  # 1.x publiée (le tag v1.* sert de référence). Avant, l'étape est sautée.
+  semver:
+    name: Compatibilité semver
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Dernier tag v1.*
+        id: baseline
+        run: |
+          tag="$(git tag --list 'v1.*' --sort=-v:refname | head -n 1)"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if [ -z "${tag}" ]; then
+            echo "Aucun tag v1.* : cargo-semver-checks sauté (rien à comparer)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Toolchain
+        if: steps.baseline.outputs.tag != ''
+        run: rustup toolchain install stable --profile minimal
+      - uses: taiki-e/install-action@09dc018eee06ae1c9e0409786563f534210ceb83 # v2.49.50
+        if: steps.baseline.outputs.tag != ''
+        with:
+          tool: cargo-semver-checks
+      - name: cargo semver-checks
+        if: steps.baseline.outputs.tag != ''
+        run: >-
+          cargo semver-checks check-release
+          -p deveye-core -p deveye-ports -p deveye-sdk -p deveye-sdk-client
+          --baseline-rev "${{ steps.baseline.outputs.tag }}"
+
+  # Inventaire de la chaîne d'approvisionnement (CycloneDX), en artefact.
+  sbom:
+    name: SBOM CycloneDX
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal
+      - uses: taiki-e/install-action@09dc018eee06ae1c9e0409786563f534210ceb83 # v2.49.50
+        with:
+          tool: cargo-cyclonedx
+      - name: Génération (un fichier .cdx.json par crate)
+        run: cargo cyclonedx --format json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-cyclonedx
+          path: "**/*.cdx.json"
+          if-no-files-found: error
