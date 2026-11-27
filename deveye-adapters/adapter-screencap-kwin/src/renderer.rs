@@ -283,7 +283,9 @@ fn bgra_to_rgba(
     for y in 0..height as usize {
         let src = &raw[y * stride..y * stride + row_bytes];
         let dst = &mut rgba[y * row_bytes..(y + 1) * row_bytes];
-        for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+        let (src_px, _) = src.as_chunks::<4>();
+        let (dst_px, _) = dst.as_chunks_mut::<4>();
+        for (s, d) in src_px.iter().zip(dst_px.iter_mut()) {
             d[0] = s[2]; // R <- B
             d[1] = s[1]; // G
             d[2] = s[0]; // B <- R
