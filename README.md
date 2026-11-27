@@ -17,8 +17,8 @@ DevEye est un serveur [MCP](https://modelcontextprotocol.io) (Model Context Prot
 
 **Prérequis** : Linux ; un client MCP. Pour compiler : toolchain Rust **stable** (MSRV 1.88) et les bibliothèques de développement suivantes (les mêmes que la CI) :
 
-- Fedora : `sudo dnf install libxcb-devel libXrandr-devel dbus-devel libxkbcommon-devel mesa-libgbm-devel wayland-devel pipewire-devel clang-devel`
-- Debian et Ubuntu : `sudo apt install pkg-config libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev libgbm-dev libwayland-dev libpipewire-0.3-dev libspa-0.2-dev libclang-dev`
+- Fedora : `sudo dnf install libxcb-devel libXrandr-devel dbus-devel libxkbcommon-devel libxkbcommon-x11-devel mesa-libgbm-devel libdrm-devel wayland-devel libglvnd-devel pipewire-devel clang-devel`
+- Debian et Ubuntu : `sudo apt install pkg-config libxcb1-dev libxrandr-dev libdbus-1-dev libxkbcommon-dev libxkbcommon-x11-dev libgbm-dev libdrm-dev libwayland-dev libegl-dev libgles-dev libpipewire-0.3-dev libspa-0.2-dev libclang-dev`
 
 À l'exécution, le binaire a besoin de `libxcb`, `libxkbcommon`, `libgbm` et `libwayland-client`. Selon la cible : session KDE Plasma Wayland (`kwin-eis`), `Xvfb` (`x11`), navigateur ou webview Chromium (`cdp`).
 

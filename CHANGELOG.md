@@ -68,7 +68,7 @@ Première version publique et stable. Le dépôt s'ouvre sous **AGPL-3.0-or-late
 - `assert_visual` dont `ignore_regions` couvre toute l'image renvoie `ok: false` avec `reason: fully_masked` ; `logs_wait` renvoie les logs déjà drainés avec `poll_error` quand un sondage ultérieur échoue.
 - `deveye-server doctor` : un SDK de protocole majeur différent est signalé incompatible, `--target kwin-eis` donne un avertissement quand l'accès EIS n'est pas vérifiable, `--target x11` sans `--display` diagnostique l'absence de display, et les sondes réseau sont limitées à la cible et parallèles.
 - La provenance du commit affichée par `--version` est correcte dans un worktree git, avec des refs packées, et n'est pas empruntée au dépôt hôte d'un crate vendorisé.
-- Les workflows CI et release installent `libwayland-dev`, `libpipewire-0.3-dev`, `libspa-0.2-dev` et `libclang-dev`, requis par `xcap`.
+- Les workflows CI et release installent les bibliothèques de développement requises par `xcap` et `xkbcommon` (`libwayland-dev`, `libegl-dev`, `libgles-dev`, `libdrm-dev`, `libxkbcommon-x11-dev`, `libpipewire-0.3-dev`, `libspa-0.2-dev`, `libclang-dev`).
 - Documentation : attentes sans DOM (`wait_for_selector`, `wait_for_text` attendent le timeout puis `found: false` en kwin-eis et x11), port SDK du guide x11, description et liens rustdoc de `deveye-core` et `deveye-ports`.
 - `scripts/sync-deveye.sh` détecte la dérive de tous les fichiers des crates copiées (README et `LICENSE-MIT` inclus), vérifie la garde de toutes les cibles avant d'écrire et refuse `--check` combiné à `--dry-run`.
 
