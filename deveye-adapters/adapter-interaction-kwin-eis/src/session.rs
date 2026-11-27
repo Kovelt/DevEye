@@ -18,8 +18,9 @@ use reis::{
 };
 use xkbcommon::xkb;
 
-use deveye_core::MouseButton;
+use deveye_core::{Modifier, MouseButton};
 
+use crate::connection::EisAction;
 use crate::error::EisError;
 
 /// Codes boutons evdev (`linux/input-event-codes.h`).
@@ -35,6 +36,8 @@ const KEY_LEFTMETA: u32 = 125;
 /// Decalage de keycode entre la numerotation XKB (base 8) et evdev (base 0).
 /// Voir : https://xkbcommon.org/doc/current/group__keycodes.html
 const XKB_TO_EVDEV_OFFSET: u32 = 8;
+/// Tranche d'attente d'un appui maintenu entre deux pompages d'evenements.
+const HOLD_SLICE: Duration = Duration::from_millis(100);
 /// Délai d'attente d'un device pointeur resumed après le handshake.
 const RESUME_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -215,7 +218,7 @@ impl EisSession {
     }
 
     /// Déplace le pointeur (hover) en (x, y) absolu écran.
-    pub(crate) async fn hover(&mut self, abs: (f64, f64)) -> Result<(), EisError> {
+    pub(crate) fn hover(&mut self, abs: (f64, f64)) -> Result<(), EisError> {
         let (serial, seq) = self.begin_emit()?;
         let device = &self.devices[self.pointer_index()?];
         let pa = device
@@ -230,11 +233,7 @@ impl EisSession {
     }
 
     /// Clic complet : déplacement absolu, puis press/release du bouton.
-    pub(crate) async fn click(
-        &mut self,
-        abs: (f64, f64),
-        button: MouseButton,
-    ) -> Result<(), EisError> {
+    pub(crate) fn click(&mut self, abs: (f64, f64), button: MouseButton) -> Result<(), EisError> {
         let code = button_code(button)
             .ok_or_else(|| EisError::Eis(format!("bouton de souris {button:?} non géré")))?;
         let (serial, seq) = self.begin_emit()?;
@@ -260,7 +259,7 @@ impl EisSession {
     /// Double-clic gauche : déplacement absolu puis deux press/release du
     /// bouton gauche, dans une seule séquence (le compositeur les corrèle en
     /// double-clic via leur proximité temporelle).
-    pub(crate) async fn double_click(&mut self, abs: (f64, f64)) -> Result<(), EisError> {
+    pub(crate) fn double_click(&mut self, abs: (f64, f64)) -> Result<(), EisError> {
         let (serial, seq) = self.begin_emit()?;
         let device = &self.devices[self.pointer_index()?];
         let pa = device
@@ -285,7 +284,7 @@ impl EisSession {
 
     /// Glisser-déposer : press en `from`, déplacements intermédiaires, release
     /// en `to` (bouton gauche maintenu).
-    pub(crate) async fn drag(&mut self, from: (f64, f64), to: (f64, f64)) -> Result<(), EisError> {
+    pub(crate) fn drag(&mut self, from: (f64, f64), to: (f64, f64)) -> Result<(), EisError> {
         let (serial, seq) = self.begin_emit()?;
         let device = &self.devices[self.pointer_index()?];
         let pa = device
@@ -414,9 +413,104 @@ impl EisSession {
         self.flush()
     }
 
+    /// Emet un geste de pointeur deja resolu (jamais un decorateur ni un appui
+    /// maintenu : ils sont traites par l'appelant).
+    pub(crate) fn emit_gesture(&mut self, action: EisAction) -> Result<(), EisError> {
+        match action {
+            EisAction::Click { abs, button } => self.click(abs, button),
+            EisAction::Hover { abs } => self.hover(abs),
+            EisAction::Drag { from, to } => self.drag(from, to),
+            EisAction::Scroll { dx, dy } => self.scroll(dx, dy),
+            EisAction::DoubleClick { abs } => self.double_click(abs),
+            _ => Err(EisError::Eis(
+                "seuls click, double-click, hover, drag-drop et scroll acceptent des modificateurs"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Execute un geste de pointeur avec `modifiers` maintenus : appui sur le
+    /// device clavier (sa propre sequence `start_emulating`), geste, relachement
+    /// en ordre inverse. Tout ce qui peut echouer (modificateur, device) est
+    /// resolu AVANT le premier appui ; l'erreur du geste ne laisse aucune touche
+    /// enfoncee ([`run_with_held_keys`]).
+    pub(crate) fn with_modifiers(
+        &mut self,
+        modifiers: &[Modifier],
+        inner: EisAction,
+    ) -> Result<(), EisError> {
+        let codes = modifier_codes(modifiers);
+        if codes.is_empty() {
+            return self.emit_gesture(inner);
+        }
+        let kb_index = self.keyboard_index()?;
+        // Un device qui serait a la fois clavier et pointeur/scroll ouvrirait
+        // deux sequences d'emission imbriquees : refus explicite (KWin expose
+        // un device par capacite).
+        let shares_pointer = {
+            let d = &self.devices[kb_index];
+            d.interface::<ei::PointerAbsolute>().is_some() || d.interface::<ei::Scroll>().is_some()
+        };
+        if shares_pointer {
+            return Err(EisError::Eis(
+                "device EIS clavier et pointeur confondus : modificateurs non supportés".into(),
+            ));
+        }
+        let device = self.devices[kb_index].clone();
+        let kbd = device
+            .interface::<ei::Keyboard>()
+            .ok_or_else(|| EisError::Eis("pas d'interface clavier".into()))?;
+        let (serial, seq) = self.begin_emit()?;
+        let mut sink = EiKeys {
+            device,
+            kbd,
+            serial,
+            context: self.context.clone(),
+        };
+        sink.device.device().start_emulating(serial, seq);
+        let result = run_with_held_keys(&mut sink, &codes, || self.emit_gesture(inner));
+        sink.device.device().stop_emulating(serial);
+        let flushed = self.flush();
+        result.and(flushed)
+    }
+
+    /// Maintient une touche nommee XKB `duration`, puis la relache (jamais de
+    /// touche collante : le relachement est emis meme si l'attente echoue).
+    pub(crate) async fn key_hold(
+        &mut self,
+        name: &str,
+        duration: Duration,
+    ) -> Result<(), EisError> {
+        let kb_index = self.keyboard_index()?;
+        let code = {
+            let keymap = self
+                .keymap
+                .as_ref()
+                .ok_or_else(|| EisError::Eis("keymap EIS indisponible".into()))?;
+            xkb_name_to_evdev(keymap, name)
+                .ok_or_else(|| EisError::Eis(format!("touche XKB inconnue : {name}")))?
+        };
+        let device = self.devices[kb_index].clone();
+        let kbd = device
+            .interface::<ei::Keyboard>()
+            .ok_or_else(|| EisError::Eis("pas d'interface clavier".into()))?;
+        let (serial, seq) = self.begin_emit()?;
+        let mut sink = EiKeys {
+            device,
+            kbd,
+            serial,
+            context: self.context.clone(),
+        };
+        sink.device.device().start_emulating(serial, seq);
+        let result = hold_key(&mut sink, code, duration, || self.pump()).await;
+        sink.device.device().stop_emulating(serial);
+        let flushed = self.flush();
+        result.and(flushed)
+    }
+
     /// Defilement lisse de `(dx, dy)` pixels logiques sur le device scroll EIS,
     /// suivi d'un `scroll_stop` (fin du geste, pas d'inertie). `dy > 0` = bas.
-    pub(crate) async fn scroll(&mut self, dx: f64, dy: f64) -> Result<(), EisError> {
+    pub(crate) fn scroll(&mut self, dx: f64, dy: f64) -> Result<(), EisError> {
         let (serial, seq) = self.begin_emit()?;
         let device = &self.devices[self.scroll_index()?];
         let sc = device
@@ -434,6 +528,111 @@ impl EisSession {
         proto.stop_emulating(serial);
         self.flush()
     }
+}
+
+/// Sortie clavier abstraite : permet de tester l'ordre des appuis/relachements
+/// et le nettoyage sur erreur sans session EIS.
+pub(crate) trait KeySink {
+    fn key(&mut self, code: u32, press: bool);
+    fn flush(&mut self) -> Result<(), EisError>;
+}
+
+/// Sortie clavier reelle : le device clavier EIS, dans une sequence
+/// `start_emulating` ouverte par l'appelant.
+struct EiKeys {
+    device: reis::event::Device,
+    kbd: ei::Keyboard,
+    serial: u32,
+    context: ei::Context,
+}
+
+impl KeySink for EiKeys {
+    fn key(&mut self, code: u32, press: bool) {
+        let state = if press {
+            ei::keyboard::KeyState::Press
+        } else {
+            ei::keyboard::KeyState::Released
+        };
+        self.kbd.key(code, state);
+        self.device.device().frame(self.serial, monotonic_us());
+    }
+
+    fn flush(&mut self) -> Result<(), EisError> {
+        self.context
+            .flush()
+            .map_err(|e| EisError::Eis(format!("flush émission : {e}")))
+    }
+}
+
+/// Codes evdev des modificateurs, dans l'ordre demande, doublons ecartes.
+pub(crate) fn modifier_codes(modifiers: &[Modifier]) -> Vec<u32> {
+    let mut codes: Vec<u32> = Vec::with_capacity(modifiers.len());
+    for modifier in modifiers {
+        let code = match modifier {
+            Modifier::Ctrl => KEY_LEFTCTRL,
+            Modifier::Shift => KEY_LEFTSHIFT,
+            Modifier::Alt => KEY_LEFTALT,
+            Modifier::Meta => KEY_LEFTMETA,
+            // `Modifier` est `#[non_exhaustive]` : un modificateur futur sans
+            // traduction EIS n'ajoute aucune touche.
+            _ => continue,
+        };
+        if !codes.contains(&code) {
+            codes.push(code);
+        }
+    }
+    codes
+}
+
+/// Appuie `codes` dans l'ordre, execute `body`, puis relache TOUJOURS en ordre
+/// inverse, que `body` ait reussi ou non : un modificateur n'est jamais laisse
+/// enfonce par une erreur du geste. Si `body` echoue, son erreur prime sur celle
+/// d'un eventuel flush final.
+pub(crate) fn run_with_held_keys<S: KeySink, T>(
+    sink: &mut S,
+    codes: &[u32],
+    body: impl FnOnce() -> Result<T, EisError>,
+) -> Result<T, EisError> {
+    for code in codes {
+        sink.key(*code, true);
+    }
+    let result = body();
+    for code in codes.iter().rev() {
+        sink.key(*code, false);
+    }
+    let flushed = sink.flush();
+    match result {
+        Ok(value) => flushed.map(|()| value),
+        Err(e) => Err(e),
+    }
+}
+
+/// Appui maintenu de `code` pendant `duration` : appui, attente (en tranches,
+/// `pump` repond aux pings du compositeur pendant ce temps), relachement. Le
+/// relachement est emis meme si l'attente echoue (deconnexion detectee).
+pub(crate) async fn hold_key<S: KeySink>(
+    sink: &mut S,
+    code: u32,
+    duration: Duration,
+    mut pump: impl FnMut() -> Result<(), EisError>,
+) -> Result<(), EisError> {
+    sink.key(code, true);
+    let waited = async {
+        sink.flush()?;
+        let deadline = tokio::time::Instant::now() + duration;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Ok(());
+            }
+            tokio::time::sleep((deadline - now).min(HOLD_SLICE)).await;
+            pump()?;
+        }
+    };
+    let result: Result<(), EisError> = waited.await;
+    sink.key(code, false);
+    let flushed = sink.flush();
+    result.and(flushed)
 }
 
 /// Nom de modificateur (insensible a la casse) -> code evdev de la touche
@@ -647,5 +846,124 @@ mod tests {
     fn xkb_name_to_evdev_unknown_name_returns_none() {
         let keymap = us_keymap();
         assert_eq!(xkb_name_to_evdev(&keymap, "PasUneVraieTouche"), None);
+    }
+
+    // --- modificateurs et appui maintenu : ordre et nettoyage (sans session) ---
+
+    #[derive(Default)]
+    struct FakeSink {
+        log: Vec<(u32, bool)>,
+        flushes: usize,
+        fail_flush: bool,
+    }
+
+    impl KeySink for FakeSink {
+        fn key(&mut self, code: u32, press: bool) {
+            self.log.push((code, press));
+        }
+        fn flush(&mut self) -> Result<(), EisError> {
+            self.flushes += 1;
+            if self.fail_flush {
+                Err(EisError::Eis("coupe".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn modifier_codes_keep_order_and_drop_duplicates() {
+        assert_eq!(
+            modifier_codes(&[Modifier::Shift, Modifier::Ctrl, Modifier::Shift]),
+            vec![KEY_LEFTSHIFT, KEY_LEFTCTRL]
+        );
+        assert_eq!(
+            modifier_codes(&[Modifier::Alt, Modifier::Meta]),
+            vec![KEY_LEFTALT, KEY_LEFTMETA]
+        );
+        assert!(modifier_codes(&[]).is_empty());
+    }
+
+    #[test]
+    fn held_modifiers_wrap_the_gesture_and_release_in_reverse() {
+        let mut sink = FakeSink::default();
+        let codes = [KEY_LEFTCTRL, KEY_LEFTSHIFT];
+        let mut inside = 0;
+        run_with_held_keys(&mut sink, &codes, || {
+            inside += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(inside, 1);
+        assert_eq!(
+            sink.log,
+            vec![
+                (KEY_LEFTCTRL, true),
+                (KEY_LEFTSHIFT, true),
+                (KEY_LEFTSHIFT, false),
+                (KEY_LEFTCTRL, false),
+            ]
+        );
+        assert_eq!(sink.flushes, 1);
+    }
+
+    #[test]
+    fn a_failing_gesture_still_releases_every_modifier() {
+        let mut sink = FakeSink::default();
+        let codes = [KEY_LEFTCTRL, KEY_LEFTALT, KEY_LEFTSHIFT];
+        let err = run_with_held_keys::<_, ()>(&mut sink, &codes, || {
+            Err(EisError::Eis("écriture impossible".into()))
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("écriture impossible"));
+        let presses = sink.log.iter().filter(|(_, p)| *p).count();
+        let releases: Vec<u32> = sink
+            .log
+            .iter()
+            .filter(|(_, p)| !*p)
+            .map(|(c, _)| *c)
+            .collect();
+        assert_eq!(presses, 3);
+        assert_eq!(releases, vec![KEY_LEFTSHIFT, KEY_LEFTALT, KEY_LEFTCTRL]);
+        // Les relachements sont flushes meme apres l'erreur du geste.
+        assert_eq!(sink.flushes, 1);
+    }
+
+    #[test]
+    fn a_flush_failure_is_reported_after_the_release() {
+        let mut sink = FakeSink {
+            fail_flush: true,
+            ..FakeSink::default()
+        };
+        let r = run_with_held_keys(&mut sink, &[KEY_LEFTSHIFT], || Ok(()));
+        assert!(r.is_err());
+        assert_eq!(sink.log.last(), Some(&(KEY_LEFTSHIFT, false)));
+    }
+
+    #[tokio::test]
+    async fn key_hold_presses_waits_then_releases() {
+        let mut sink = FakeSink::default();
+        let started = tokio::time::Instant::now();
+        hold_key(&mut sink, KEY_LEFTSHIFT, Duration::from_millis(250), || {
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(250));
+        assert_eq!(
+            sink.log,
+            vec![(KEY_LEFTSHIFT, true), (KEY_LEFTSHIFT, false)]
+        );
+    }
+
+    #[tokio::test]
+    async fn key_hold_releases_the_key_when_the_connection_drops() {
+        let mut sink = FakeSink::default();
+        let r = hold_key(&mut sink, KEY_LEFTCTRL, Duration::from_secs(5), || {
+            Err(EisError::Eis("flux fermé".into()))
+        })
+        .await;
+        assert!(r.is_err());
+        assert_eq!(sink.log, vec![(KEY_LEFTCTRL, true), (KEY_LEFTCTRL, false)]);
     }
 }
